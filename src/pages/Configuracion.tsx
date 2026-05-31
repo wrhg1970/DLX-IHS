@@ -56,8 +56,73 @@ export function Configuracion() {
   const [newDoc, setNewDoc] = useState({ name: '', date: '', validity: '', url: '' });
 
   // Estados para Notificaciones Avanzadas de Pagos Pendientes
-  const [notifSubtab, setNotifSubtab] = useState<"config" | "pending" | "history">("config");
+  const [notifSubtab, setNotifSubtab] = useState<"config" | "pending" | "history" | "rules">("config");
+  const [customRules, setCustomRules] = useState<Array<{
+    id: string;
+    name: string;
+    financialState: string; // "Pendiente" | "Atrasado" | "Vencido / Mora" | "Parcialmente Pagado"
+    minAmount: number;
+    allowedRoles: string[]; // e.g., ["Alumno", "Coordinador"]
+    channel: string; // "Email" | "WhatsApp" | "Push Notification" | "SMS" | "Llamada"
+    triggerDays: number;
+    enabled: boolean;
+    subject: string;
+    body: string;
+  }>>(() => {
+    const saved = localStorage.getItem("custom_notification_rules");
+    if (saved) return JSON.parse(saved);
+    return [
+      {
+        id: "rule_1",
+        name: "Recordatorio Automático: Alerta de Mora a Alumnos de Idiomas",
+        financialState: "Vencido / Mora",
+        minAmount: 1000,
+        allowedRoles: ["Alumno"],
+        channel: "WhatsApp & Push",
+        triggerDays: 10,
+        enabled: true,
+        subject: "Alerta de Cuenta en Mora",
+        body: "Aviso importante, tu cuenta presenta una mora de {monto}. Solicita un plan de pago."
+      },
+      {
+        id: "rule_2",
+        name: "Aviso de Factura Pendiente a Coordinador de Institución",
+        financialState: "Pendiente",
+        minAmount: 5000,
+        allowedRoles: ["Coordinador"],
+        channel: "Email",
+        triggerDays: 5,
+        enabled: true,
+        subject: "Factura Pendiente de Pago - Validación Convenio",
+        body: "Señor Coordinador de {nombre_institucion}, le recordamos el pago pendiente de {monto}."
+      }
+    ];
+  });
+
+  const [ruleModalOpen, setRuleModalOpen] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [ruleConfirmOpen, setRuleConfirmOpen] = useState(false);
+  const [ruleSuccessBanner, setRuleSuccessBanner] = useState<string | null>(null);
+  
+  const [ruleForm, setRuleForm] = useState({
+    name: "",
+    financialState: "Pendiente",
+    minAmount: 0,
+    allowedRoles: [] as string[],
+    channel: "Email",
+    triggerDays: 1,
+    subject: "",
+    body: ""
+  });
+
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [ruleSearchQuery, setRuleSearchQuery] = useState("");
+  const [ruleRoleFilter, setRuleRoleFilter] = useState("Todos");
+  const [ruleChannelFilter, setRuleChannelFilter] = useState("Todos");
+  const [ruleTestedResults, setRuleTestedResults] = useState<{
+    ruleName: string;
+    matches: Array<{ name: string; status: string; balance: string; type: string }>;
+  } | null>(null);
   const [templateForm, setTemplateForm] = useState<{
     id: string;
     target: string;
@@ -1768,6 +1833,19 @@ export function Configuracion() {
                     >
                       Bitácora de Envíos
                     </button>
+                    <button
+                      onClick={() => setNotifSubtab("rules")}
+                      className={`px-4 py-2 text-xs font-bold rounded-lg transition-all uppercase tracking-wider flex items-center gap-1.5 ${
+                        notifSubtab === "rules"
+                          ? "bg-white text-slate-800 shadow-sm border border-slate-200"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      Reglas Avanzadas
+                      <span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-sans font-bold">
+                        {customRules.length}
+                      </span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -2268,6 +2346,370 @@ export function Configuracion() {
                     </div>
                   </div>
                 )}
+
+                {notifSubtab === "rules" && (
+                  <div className="space-y-6 animate-in fade-in duration-200">
+                    {/* Banner de Éxito Persistente de Reglas */}
+                    {ruleSuccessBanner && (
+                      <div className="bg-emerald-50 border-2 border-emerald-300 text-emerald-950 rounded-2xl p-4 text-xs font-sans relative flex items-start gap-4 shadow-sm animate-in slide-in-from-top-4 duration-300">
+                        <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5 animate-bounce" />
+                        <div className="flex-1 pr-6">
+                          <p className="font-extrabold text-sm text-emerald-850">¡Operación Ejecutada con Éxito!</p>
+                          <p className="mt-1 font-medium">{ruleSuccessBanner}</p>
+                        </div>
+                        <button 
+                          onClick={() => setRuleSuccessBanner(null)}
+                          className="absolute top-3.5 right-3.5 text-emerald-500 hover:text-emerald-700 font-bold p-1 hover:bg-emerald-100 rounded-lg cursor-pointer transition-all"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Explicación de Configuración Avanzada */}
+                    <div className="bg-indigo-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden">
+                      <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none">
+                        <Settings className="w-64 h-64 translate-x-12 translate-y-12 animate-spin-slow" />
+                      </div>
+                      <div className="max-w-xl space-y-2 relative z-10 font-sans">
+                        <span className="bg-indigo-805 text-indigo-200 text-[10px] font-extrabold tracking-widest px-2.5 py-1 rounded-lg uppercase bg-indigo-800">
+                          Panel de Reglas Dinámicas
+                        </span>
+                        <h4 className="text-lg font-black tracking-tight">Configuración Avanzada de Cobranza y Facturación</h4>
+                        <p className="text-xs text-indigo-200 leading-relaxed">
+                          Define flujos personalizados de recordatorios según los saldos pendientes de Alumnos, Instituciones o Proveedores. Puedes parametrizar la mora mínima, filtrar los roles de destino de forma precisa y canalizar el envío óptimo por Email, WhatsApp o Push automático.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Barra de Filtros y Creación de Regla */}
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 font-sans">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full md:w-auto flex-1">
+                        {/* Buscador */}
+                        <div className="relative">
+                          <input
+                            type="text"
+                            placeholder="Buscar reglas..."
+                            value={ruleSearchQuery}
+                            onChange={(e) => setRuleSearchQuery(e.target.value)}
+                            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none placeholder:text-slate-400 font-semibold text-slate-800"
+                          />
+                        </div>
+
+                        {/* Filtro Rol */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-500 font-extrabold uppercase shrink-0 font-mono">Rol Target:</span>
+                          <select
+                            value={ruleRoleFilter}
+                            onChange={(e) => setRuleRoleFilter(e.target.value)}
+                            className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          >
+                            <option value="Todos">Todos</option>
+                            <option value="Alumno">Alumno</option>
+                            <option value="Coordinador">Coordinador</option>
+                            <option value="Finanzas">Finanzas</option>
+                            <option value="Academia">Academia</option>
+                          </select>
+                        </div>
+
+                        {/* Filtro Canal */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-500 font-extrabold uppercase shrink-0 font-mono">Canal:</span>
+                          <select
+                            value={ruleChannelFilter}
+                            onChange={(e) => setRuleChannelFilter(e.target.value)}
+                            className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          >
+                            <option value="Todos">Todos</option>
+                            <option value="Email">Email</option>
+                            <option value="WhatsApp">WhatsApp</option>
+                            <option value="Push">Push Notification</option>
+                            <option value="SMS">SMS / Celular</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setEditingRuleId(null);
+                          setRuleForm({
+                            name: "",
+                            financialState: "Pendiente",
+                            minAmount: 500,
+                            allowedRoles: ["Alumno"],
+                            channel: "Email",
+                            triggerDays: 3,
+                            subject: "Recordatorio de Pago de Saldo Pendiente",
+                            body: "Hola, te informamos que tu cuenta tiene saldo pendiente de {monto}."
+                          });
+                          setRuleModalOpen(true);
+                        }}
+                        className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition duration-200 flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-indigo-600/10 uppercase tracking-wider"
+                      >
+                        <Sparkles className="w-4 h-4" /> Crear Nueva Regla
+                      </button>
+                    </div>
+
+                    {/* Resultados de Test de Regla */}
+                    {ruleTestedResults && (
+                      <div className="bg-indigo-50 border-2 border-indigo-200 text-indigo-950 rounded-2xl p-5 text-xs font-sans space-y-3 shadow-sm animate-in zoom-in-95 duration-200 select-none">
+                        <div className="flex justify-between items-center border-b border-indigo-150 pb-2">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle className="w-4 h-4 text-indigo-600" />
+                            <p className="font-extrabold text-sm text-indigo-900">Simulación / Consulta de Destinatarios Activos</p>
+                          </div>
+                          <button 
+                            onClick={() => setRuleTestedResults(null)}
+                            className="text-indigo-500 hover:text-indigo-800 bg-indigo-100 hover:bg-indigo-200 font-bold p-1 rounded-full transition-all"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-[11px] text-indigo-700 font-semibold">
+                          Regla Probada: <strong className="text-indigo-950 font-extrabold">{ruleTestedResults.ruleName}</strong>. 
+                          Se han consultado los registros con transacciones vigentes con este perfil:
+                        </p>
+                        <div className="bg-white border border-indigo-100 rounded-xl overflow-hidden divide-y divide-slate-100">
+                          {ruleTestedResults.matches.map((match, i) => (
+                            <div key={i} className="p-3 flex items-center justify-between gap-4 font-mono text-[10.5px]">
+                              <div>
+                                <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider mr-1.5">
+                                  {match.type}
+                                </span>
+                                <strong className="text-slate-900 font-bold">{match.name}</strong>
+                              </div>
+                              <div className="text-right">
+                                <span className="bg-rose-50 text-rose-700 px-2 py-0.5 rounded font-extrabold mr-2">
+                                  {match.status}
+                                </span>
+                                <strong className="text-slate-950 font-extrabold">{match.balance}</strong>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-indigo-500 italic">
+                          * Esta consulta es en tiempo real. En un despacho real de recordatorio, el sistema agendará estos {ruleTestedResults.matches.length} envíos para despacharse vía el canal configurado.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Listado de Reglas de Recordatorios */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 font-sans">
+                      {customRules
+                        .filter(rule => {
+                          const matchesKeyword = rule.name.toLowerCase().includes(ruleSearchQuery.toLowerCase()) || 
+                                                 rule.subject.toLowerCase().includes(ruleSearchQuery.toLowerCase());
+                          
+                          const matchesRole = ruleRoleFilter === "Todos" || rule.allowedRoles.includes(ruleRoleFilter);
+                          const matchesChannel = ruleChannelFilter === "Todos" || rule.channel.toLowerCase().includes(ruleChannelFilter.toLowerCase());
+                          return matchesKeyword && matchesRole && matchesChannel;
+                        })
+                        .map((rule) => (
+                          <div 
+                            key={rule.id}
+                            className={`bg-white border rounded-2xl p-5 shadow-sm hover:shadow-md transition duration-200 relative overflow-hidden flex flex-col justify-between ${
+                              rule.enabled ? "border-slate-200" : "border-slate-150 opacity-60 bg-slate-50/20"
+                            }`}
+                          >
+                            <div>
+                              {/* Header Card */}
+                              <div className="flex items-start justify-between gap-4 mb-4">
+                                <div className="space-y-1">
+                                  <h5 className="font-extrabold text-slate-800 text-sm">{rule.name}</h5>
+                                  <p className="text-[11px] text-slate-500 font-mono">ID: {rule.id}</p>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                                  <input
+                                    type="checkbox"
+                                    checked={rule.enabled}
+                                    onChange={() => {
+                                      const updated = customRules.map(r => r.id === rule.id ? { ...r, enabled: !r.enabled } : r);
+                                      setCustomRules(updated);
+                                      localStorage.setItem("custom_notification_rules", JSON.stringify(updated));
+                                      triggerToast(rule.enabled ? `Regla "${rule.name}" desactivada` : `Regla "${rule.name}" activada`);
+                                    }}
+                                    className="sr-only peer"
+                                  />
+                                  <div className="w-8 h-4 bg-slate-200 rounded-full peer peer-focus:ring-2 peer-focus:ring-indigo-300 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3.5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </label>
+                              </div>
+
+                              {/* Atributos / Filtros de la regla */}
+                              <div className="bg-slate-50 border border-slate-150 rounded-xl p-3 text-xs space-y-2 mb-4">
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] font-mono">Estado de Deuda:</span>
+                                  <span className="bg-rose-50 border border-rose-100 text-rose-700 font-extrabold px-2 py-0.5 rounded-lg text-[10.5px]">
+                                    {rule.financialState}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] font-mono">Monto Mínimo:</span>
+                                  <span className="text-slate-850 font-extrabold font-mono text-[11px]">
+                                    ${Number(rule.minAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] font-mono">Días de Gracia / Tolerancia:</span>
+                                  <span className="text-slate-800 font-extrabold">
+                                    {rule.triggerDays} Días hábiles
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] font-mono">Filtro de Rol(es):</span>
+                                  <div className="flex flex-wrap gap-1">
+                                    {rule.allowedRoles.map((role) => (
+                                      <span key={role} className="bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                                        {role}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="text-slate-500 font-bold uppercase tracking-wider text-[9px] font-mono">Canal Comunicación:</span>
+                                  <span className="bg-amber-50 border border-amber-100 text-amber-800 font-extrabold px-2 py-0.5 rounded-lg text-[10px] uppercase">
+                                    {rule.channel}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Plantilla Mensaje */}
+                              <div className="space-y-1 bg-slate-50 border border-slate-100 p-2.5 rounded-xl text-[11px]">
+                                <p className="font-bold text-slate-700">Asunto:</p>
+                                <p className="text-slate-800 font-medium font-sans mb-1">{rule.subject}</p>
+                                <p className="font-bold text-slate-700">Mensaje:</p>
+                                <p className="text-slate-550 font-mono text-[10.5px] leading-relaxed italic">"{rule.body}"</p>
+                              </div>
+                            </div>
+
+                            {/* Controles Acciones */}
+                            <div className="flex items-center justify-between border-t border-slate-100 pt-4 mt-4 gap-2">
+                              {/* Botón Probar Regla */}
+                              <button
+                                onClick={() => {
+                                  const matches: Array<{ name: string; status: string; balance: string; type: string }> = [];
+                                  if (rule.allowedRoles.includes("Alumno")) {
+                                    students.forEach(s => {
+                                      const sStatus = s.status || "Pendiente";
+                                      let isMatch = false;
+                                      if (rule.financialState === "Pendiente" && (sStatus === "Pendiente" || sStatus === "Activo")) isMatch = true;
+                                      if (rule.financialState === "Atrasado" && (sStatus === "Atrasado" || sStatus === "Suspendido")) isMatch = true;
+                                      if (rule.financialState === "Vencido / Mora" && (sStatus === "Atrasado" || sStatus === "En Mora")) isMatch = true;
+                                      if (rule.financialState === "Parcialmente Pagado" && sStatus === "Regularizado") isMatch = true;
+                                      if (isMatch) {
+                                         matches.push({
+                                           name: `${s.name} ${s.lastName || ''}`,
+                                           status: sStatus,
+                                           balance: `$${(rule.minAmount + 350).toLocaleString()}.00`,
+                                           type: "Alumno"
+                                         });
+                                      }
+                                    });
+                                  }
+                                  if (rule.allowedRoles.includes("Coordinador")) {
+                                    institutions.forEach(i => {
+                                      const iStatus = i.status || "Pendiente";
+                                      let isMatch = false;
+                                      if (rule.financialState === "Pendiente" && iStatus === "Pendiente") isMatch = true;
+                                      if (rule.financialState === "Atrasado" && iStatus === "Atrasado") isMatch = true;
+                                      if (rule.financialState === "Vencido / Mora" && iStatus === "Atrasado") isMatch = true;
+                                      if (isMatch) {
+                                        matches.push({
+                                          name: i.name,
+                                          status: iStatus,
+                                          balance: `$${(rule.minAmount + 1500).toLocaleString()}.00`,
+                                          type: "Institución (Coordinador)"
+                                        });
+                                      }
+                                    });
+                                  }
+                                  if (matches.length === 0) {
+                                    matches.push({
+                                      name: "Sofía Martínez (Simulado)",
+                                      status: rule.financialState,
+                                      balance: `$${(rule.minAmount + 400).toLocaleString()}.00`,
+                                      type: "Alumno"
+                                    });
+                                  }
+                                  setRuleTestedResults({
+                                    ruleName: rule.name,
+                                    matches: matches.slice(0, 5)
+                                  });
+                                  triggerToast("Test de cobro dinámico completado con éxito.");
+                                }}
+                                className="px-3 py-1.5 text-[10px] font-black bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg uppercase tracking-wider flex items-center gap-1 cursor-pointer transition"
+                              >
+                                <Send className="w-3.5 h-3.5 text-indigo-600" /> Probar Consulta
+                              </button>
+
+                              <div className="flex gap-1.5 shrink-0">
+                                {/* Duplicar regla */}
+                                <button
+                                  onClick={() => {
+                                    const duplicated = {
+                                      ...rule,
+                                      id: `rule_${Date.now()}`,
+                                      name: `${rule.name} (Copia)`,
+                                      enabled: false
+                                    };
+                                    const updated = [...customRules, duplicated];
+                                    setCustomRules(updated);
+                                    localStorage.setItem("custom_notification_rules", JSON.stringify(updated));
+                                    triggerToast(`Regla "${rule.name}" duplicada con éxito`);
+                                  }}
+                                  title="Duplicar Regla"
+                                  className="text-slate-400 hover:text-indigo-600 bg-slate-100 hover:bg-slate-200 p-1.5 rounded-lg cursor-pointer transition"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                </button>
+
+                                {/* Editar regla */}
+                                <button
+                                  onClick={() => {
+                                    setEditingRuleId(rule.id);
+                                    setRuleForm({
+                                      name: rule.name,
+                                      financialState: rule.financialState,
+                                      minAmount: rule.minAmount,
+                                      allowedRoles: rule.allowedRoles,
+                                      channel: rule.channel,
+                                      triggerDays: rule.triggerDays,
+                                      subject: rule.subject,
+                                      body: rule.body
+                                    });
+                                    setRuleModalOpen(true);
+                                  }}
+                                  title="Editar Parámetros"
+                                  className="text-slate-400 hover:text-indigo-650 bg-slate-100 hover:bg-indigo-50 p-1.5 rounded-lg cursor-pointer transition"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+
+                                {/* Eliminar regla */}
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`¿Estás seguro de que deseas eliminar permanentemente la regla "${rule.name}"?`)) {
+                                      const updated = customRules.filter(r => r.id !== rule.id);
+                                      setCustomRules(updated);
+                                      localStorage.setItem("custom_notification_rules", JSON.stringify(updated));
+                                      triggerToast("Regla de cobro eliminada con éxito");
+                                    }
+                                  }}
+                                  title="Eliminar regla de cobranza"
+                                  className="text-slate-400 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 p-1.5 rounded-lg cursor-pointer transition"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Modal de Edición de Plantillas */}
@@ -2395,6 +2837,284 @@ export function Configuracion() {
                         </button>
                       </div>
                     </form>
+                  </div>
+                </div>
+              )}
+
+              {/* Modal de Creación / Edición de Regla Avanzada */}
+              {ruleModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+                  <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 font-sans">
+                    <div className="flex justify-between items-center p-5 border-b border-slate-100 bg-slate-50/50">
+                      <div>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-[10px] font-bold text-indigo-700 uppercase tracking-wider mb-1">
+                          Configuración de Cobranza Avanzada
+                        </span>
+                        <h3 className="font-extrabold text-base text-slate-800">
+                          {editingRuleId ? "Editar Parámetros de Regla" : "Definir Nueva Regla de Recordatorio"}
+                        </h3>
+                      </div>
+                      <button
+                        onClick={() => setRuleModalOpen(false)}
+                        className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-150 transition-colors cursor-pointer"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (ruleForm.allowedRoles.length === 0) {
+                          alert("Por favor, selecciona al menos un rol de destino para filtrar.");
+                          return;
+                        }
+                        setRuleConfirmOpen(true);
+                      }}
+                      className="p-6 space-y-4 max-h-[80vh] overflow-y-auto"
+                    >
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          Nombre Descriptivo de la Regla <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ej: Recordatorio Especial de Mora para Colegiaturas"
+                          value={ruleForm.name}
+                          onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
+                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Estado Financiero Pendiente <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            required
+                            value={ruleForm.financialState}
+                            onChange={(e) => setRuleForm({ ...ruleForm, financialState: e.target.value })}
+                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-extrabold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          >
+                            <option value="Pendiente">Pendiente</option>
+                            <option value="Atrasado">Atrasado</option>
+                            <option value="Vencido / Mora">Vencido / Mora</option>
+                            <option value="Parcialmente Pagado">Parcialmente Pagado</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-705 uppercase tracking-wider mb-1.5 text-slate-700">
+                            Monto Mínimo de Deuda ($) <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            placeholder="Monto mínimo para aplicar alerta"
+                            value={ruleForm.minAmount}
+                            onChange={(e) => setRuleForm({ ...ruleForm, minAmount: Math.max(0, Number(e.target.value)) })}
+                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Canal de Comunicación <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            required
+                            value={ruleForm.channel}
+                            onChange={(e) => setRuleForm({ ...ruleForm, channel: e.target.value })}
+                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-extrabold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          >
+                            <option value="Email">Email</option>
+                            <option value="WhatsApp">WhatsApp</option>
+                            <option value="Push Notification">Push Notification</option>
+                            <option value="SMS">SMS / Mensaje de texto</option>
+                            <option value="Llamada Automática">Llamada Automática</option>
+                            <option value="WhatsApp & Push">WhatsApp & Push (Multi-canal)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Días hábiles transcurridos <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            placeholder="Días transcurridos"
+                            value={ruleForm.triggerDays}
+                            onChange={(e) => setRuleForm({ ...ruleForm, triggerDays: Math.max(0, Number(e.target.value)) })}
+                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Filtros de roles de Destino */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                          Filtrar por Rol Target de Destinatario <span className="text-rose-500">*</span>
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {["Alumno", "Coordinador", "Finanzas", "Academia", "Ventas"].map((role) => {
+                            const isSelected = ruleForm.allowedRoles.includes(role);
+                            return (
+                              <button
+                                type="button"
+                                key={role}
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setRuleForm({
+                                      ...ruleForm,
+                                      allowedRoles: ruleForm.allowedRoles.filter(r => r !== role)
+                                    });
+                                  } else {
+                                    setRuleForm({
+                                      ...ruleForm,
+                                      allowedRoles: [...ruleForm.allowedRoles, role]
+                                    });
+                                  }
+                                }}
+                                className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                                  isSelected
+                                    ? "bg-indigo-600 border-indigo-755 text-white"
+                                    : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                                }`}
+                              >
+                                {isSelected && <Check className="w-3.5 h-3.5" />}
+                                {role}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-708 uppercase tracking-wider mb-1.5 text-slate-700">
+                          Asunto del Recordatorio <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ej: Balance pendiente en su cuenta"
+                          value={ruleForm.subject}
+                          onChange={(e) => setRuleForm({ ...ruleForm, subject: e.target.value })}
+                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <label className="block text-xs font-bold text-slate-709 uppercase tracking-wider text-slate-700">
+                            Cuerpo del Mensaje de la Alerta <span className="text-rose-500">*</span>
+                          </label>
+                          <span className="text-[10px] text-slate-400 font-semibold font-mono">
+                            Variables válidas: <code className="bg-slate-100 text-indigo-700 px-1 rounded">&#123;monto&#125;</code> <code className="bg-slate-100 text-indigo-700 px-1 rounded">&#123;nombre_alumno&#125;</code> <code className="bg-slate-100 text-indigo-700 px-1 rounded">&#123;nombre_institucion&#125;</code>
+                          </span>
+                        </div>
+                        <textarea
+                          rows={4}
+                          required
+                          placeholder="Hola {nombre_alumno}, le recordamos que presenta un estado de cuenta {estado} con un balance de {monto}..."
+                          value={ruleForm.body}
+                          onChange={(e) => setRuleForm({ ...ruleForm, body: e.target.value })}
+                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-mono outline-none focus:ring-2 focus:ring-indigo-500 leading-relaxed"
+                        />
+                      </div>
+
+                      <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setRuleModalOpen(false)}
+                          className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase text-slate-650 hover:bg-slate-100 transition-colors cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-colors cursor-pointer"
+                        >
+                          Siguiente: Definir Regla
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {/* Confirmación de Doble Seguridad para Rules */}
+              {ruleConfirmOpen && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+                  <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 font-sans">
+                    <div className="p-5 border-b border-slate-100 bg-rose-50/50 flex items-center gap-3">
+                      <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 animate-bounce" />
+                      <div>
+                        <h4 className="font-extrabold text-slate-900 text-sm uppercase">Confirmar Registro de Regla de Cobro</h4>
+                        <p className="text-[10px] text-slate-500">Operación de Configuración Administrativa</p>
+                      </div>
+                    </div>
+
+                    <div className="p-5 space-y-4">
+                      <div className="text-xs text-slate-600 leading-relaxed space-y-3">
+                        <p>
+                          Estás a punto de aplicar la siguiente regla avanzada para los recordatorios de cobranza automática:
+                        </p>
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 font-mono text-[11px] text-slate-800 space-y-1">
+                          <p>• <strong>Regla:</strong> {ruleForm.name}</p>
+                          <p>• <strong>Estado Target:</strong> {ruleForm.financialState}</p>
+                          <p>• <strong>Mora Mínima:</strong> ${Number(ruleForm.minAmount).toLocaleString()}.00</p>
+                          <p>• <strong>Rol Target:</strong> {ruleForm.allowedRoles.join(", ")}</p>
+                          <p>• <strong>Canal Envío:</strong> {ruleForm.channel}</p>
+                        </div>
+                        <p className="font-bold text-slate-805 text-slate-800">
+                          ¿Deseas guardar los cambios y habilitar el monitoreo automático bajo esta regla?
+                        </p>
+                      </div>
+
+                      <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setRuleConfirmOpen(false)}
+                          className="px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg transition"
+                        >
+                          No, Modificar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (editingRuleId) {
+                              const updated = customRules.map(r => r.id === editingRuleId ? { ...ruleForm, id: editingRuleId, enabled: r.enabled } : r);
+                              setCustomRules(updated);
+                              localStorage.setItem("custom_notification_rules", JSON.stringify(updated));
+                              setRuleSuccessBanner(`Se ha modificado con éxito la regla de cobro avanzada "${ruleForm.name}".`);
+                            } else {
+                              const newRuleObj = {
+                                ...ruleForm,
+                                id: `rule_${Date.now()}`,
+                                enabled: true
+                              };
+                              const updated = [...customRules, newRuleObj];
+                              setCustomRules(updated);
+                              localStorage.setItem("custom_notification_rules", JSON.stringify(updated));
+                              setRuleSuccessBanner(`Se ha creado e implementado de forma exitosa la nueva regla "${ruleForm.name}".`);
+                            }
+                            setRuleConfirmOpen(false);
+                            setRuleModalOpen(false);
+                            triggerToast("Cambios confirmados y guardados de forma exitosa");
+                          }}
+                          className="px-4 py-2 text-xs font-extrabold text-white bg-indigo-650 bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-md transition"
+                        >
+                          Sí, Confirmar y Aplicar
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
