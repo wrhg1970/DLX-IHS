@@ -745,7 +745,7 @@ export function CRM() {
         .map(h => h.replace(/^"|"$/g, '').trim().toLowerCase());
 
       const idxTipo = headers.findIndex(h => h.includes("tipo"));
-      const idxNombre = headers.findIndex(h => h === "nombre" || h.includes("nombre del prospecto") || h.includes("institucion") || h.includes("institución") || h.includes("particular"));
+      const idxNombre = headers.findIndex(h => !h.includes("tipo") && (h === "nombre" || h.includes("nombre del prospecto") || h.includes("institucion") || h.includes("institución") || h.includes("particular")));
       const idxContacto = headers.findIndex(h => h.includes("contacto")); 
       const idxEmail = headers.findIndex(h => h === "email" || h === "correo" || h.includes("correo") || h.includes("mail"));
       const idxTelefono = headers.findIndex(h => h === "telefono" || h.includes("teléfono") || h.includes("tel") || h.includes("móvil"));
@@ -1305,18 +1305,16 @@ export function CRM() {
 
           {/* TAB 2: DETAILED LIST (TABULAR) */}
           {activeTab === "Tabla" && (
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead className="bg-[#0f172a] text-slate-300 text-[10px] font-bold uppercase tracking-wider">
+                <table className="w-full text-left border-collapse text-xs table-fixed">
+                  <thead className="bg-[#0f172a] text-slate-300 text-[9px] font-bold uppercase tracking-wider">
                     <tr>
-                      <th className="px-5 py-3">Prospecto / Cliente</th>
-                      <th className="px-5 py-3">Contacto Principal</th>
-                      <th className="px-5 py-3">Estatus</th>
-                      <th className="px-5 py-3 text-right">Valor Estimado</th>
-                      <th className="px-5 py-3">Origen</th>
-                      <th className="px-5 py-3">Agente Responsable</th>
-                      <th className="px-5 py-3 text-center">Acciones</th>
+                      <th className="px-2 py-2 w-[35%]">Prospecto / Cliente / Origen</th>
+                      <th className="px-2 py-2 w-[35%]">Contacto & Responsable</th>
+                      <th className="px-2 py-2 text-center w-[10%]">Estatus</th>
+                      <th className="px-2 py-2 text-right w-[10%]">Valor Estimado</th>
+                      <th className="px-2 py-2 text-center w-[10%]">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -1335,100 +1333,101 @@ export function CRM() {
 
                         return (
                           <tr key={lead.id} className={`hover:bg-indigo-50/15 transition-all text-slate-705 ${isInactive ? 'bg-rose-50/25 border-l-2 border-l-rose-500' : ''}`}>
-                            <td className="px-5 py-4">
-                              <div className="space-y-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditLead(lead)}
-                                  className="font-bold text-indigo-600 hover:text-indigo-800 text-xs flex items-center flex-wrap gap-1 cursor-pointer text-left focus:outline-none group/name"
-                                >
-                                  {lead.type === "Institución Potencial" ? (
-                                    <Building2 className="w-3.5 h-3.5 mr-0.5 text-indigo-550 shrink-0 group-hover/name:scale-115 transition-transform" />
-                                  ) : (
-                                    <Users className="w-3.5 h-3.5 mr-0.5 text-slate-500 shrink-0 group-hover/name:scale-115 transition-transform" />
-                                  )}
-                                  <span className="underline decoration-indigo-200 group-hover/name:decoration-indigo-600 decoration-2 underline-offset-2">{lead.name}</span>
+                            <td className="px-2 py-2 leading-tight">
+                              <div className="space-y-0.5 max-w-full overflow-hidden">
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditLead(lead)}
+                                    className="font-bold text-indigo-600 hover:text-indigo-800 text-xs flex items-center flex-wrap gap-0.5 cursor-pointer text-left focus:outline-none group/name truncate"
+                                  >
+                                    {lead.type === "Institución Potencial" ? (
+                                      <Building2 className="w-3 h-3 text-indigo-550 shrink-0 group-hover/name:scale-110 transition-transform" />
+                                    ) : (
+                                      <Users className="w-3 h-3 text-slate-500 shrink-0 group-hover/name:scale-110 transition-transform" />
+                                    )}
+                                    <span className="underline decoration-indigo-200 group-hover/name:decoration-indigo-600 decoration-1.5 underline-offset-1 truncate">{lead.name}</span>
+                                  </button>
                                   {isInactive && (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase bg-rose-50 text-rose-700 border border-rose-200 gap-1 animate-pulse">
-                                      <AlertCircle className="w-2 h-2" /> Sin Actividad
+                                    <span className="inline-flex items-center px-1 py-0.5 rounded text-[7px] font-extrabold uppercase bg-rose-50 text-rose-700 border border-rose-150 gap-0.5 shrink-0 animate-pulse">
+                                      <AlertCircle className="w-1.5 h-1.5" /> Sin Actividad
                                     </span>
                                   )}
-                                </button>
-                                <p className="text-[10px] text-slate-450 font-medium font-mono">
-                                  {lead.type} • {lead.country}{lead.state ? `, ${lead.state}` : ""}{lead.city ? ` (${lead.city})` : ""}
+                                </div>
+                                <p className="text-[9px] text-slate-400 font-medium font-mono truncate">
+                                  {lead.type} • {lead.country}{lead.state ? `, ${lead.state}` : ""}
                                 </p>
-                                {lead.website && (
-                                  <a 
-                                    href={lead.website.startsWith("http") ? lead.website : `https://${lead.website}`} 
-                                    target="_blank" 
-                                    rel="noopener noreferrer" 
-                                    className="text-[10px] text-indigo-600 hover:underline hover:text-indigo-800 inline-flex items-center gap-0.5 mt-0.5 font-semibold"
-                                  >
-                                    🌐 {lead.website.replace(/^https?:\/\/(www\.)?/, "")}
-                                  </a>
-                                )}
+                                <div className="flex items-center gap-1 flex-wrap text-[9px] text-slate-500">
+                                  {lead.website && (
+                                    <a 
+                                      href={lead.website.startsWith("http") ? lead.website : `https://${lead.website}`} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer" 
+                                      className="text-indigo-650 hover:underline hover:text-indigo-850 inline-flex items-center gap-0.5 font-semibold truncate"
+                                    >
+                                      🌐 {lead.website.replace(/^https?:\/\/(www\.)?/, "")}
+                                    </a>
+                                  )}
+                                  {lead.website && <span className="text-slate-300">•</span>}
+                                  <span className="truncate">Origen: <strong>{lead.source}</strong></span>
+                                </div>
                               </div>
                             </td>
-                            <td className="px-5 py-4">
-                              <div className="space-y-0.5">
-                                <p className="font-semibold text-slate-850">{lead.contactName}</p>
-                                <p className="text-[10px] text-slate-400 font-mono leading-relaxed">{lead.email}</p>
-                                {lead.address && (
-                                  <p className="text-[10px] text-slate-500 italic mt-0.5" title={lead.address}>
-                                    📍 {lead.address}
-                                  </p>
-                                )}
+                            <td className="px-2 py-2 leading-tight">
+                              <div className="space-y-0.5 max-w-full overflow-hidden">
+                                <p className="font-bold text-slate-800 text-[11px] truncate">{lead.contactName}</p>
+                                <p className="text-[9px] text-slate-400 font-mono truncate">{lead.email}</p>
+                                <div className="flex items-center gap-1 flex-wrap text-[9px] text-slate-500">
+                                  <span className="truncate">Agente: <strong className="text-slate-700">{lead.assignedTo || "Sin asignar"}</strong></span>
+                                  {lead.address && <span className="text-slate-350">•</span>}
+                                  {lead.address && (
+                                    <span className="italic truncate" title={lead.address}>📍 {lead.address}</span>
+                                  )}
+                                </div>
                                 {lead.contacts && lead.contacts.length > 0 && (
-                                  <div className="mt-2 pt-1.5 border-t border-slate-100 space-y-1.5">
-                                    <p className="text-[9px] text-indigo-650 font-black uppercase tracking-wider">Contactos Adicionales ({lead.contacts.length})</p>
-                                    <div className="space-y-1 max-h-[120px] overflow-y-auto pr-1">
-                                      {lead.contacts.map((c, idx) => (
-                                        <div key={idx} className="bg-slate-50/70 border border-slate-100 rounded p-1.5 text-[8.5px] text-slate-600 leading-relaxed font-sans">
-                                          <p className="font-extrabold text-slate-800">{c.name} <span className="font-medium text-slate-450 text-[8px] italic">({c.role})</span></p>
-                                          {c.phone && <p className="font-mono text-slate-400 text-[8px] mt-0.5">📞 {c.phone}</p>}
-                                          {c.email && <p className="font-mono text-slate-400 text-[8px] break-all">📧 {c.email}</p>}
-                                        </div>
+                                  <div className="mt-0.5 pt-0.5 border-t border-slate-100">
+                                    <span className="text-[7.5px] text-indigo-600 font-bold uppercase tracking-wider block">Contactos ({lead.contacts.length}):</span>
+                                    <div className="flex gap-1 flex-wrap">
+                                      {lead.contacts.slice(0, 2).map((c, idx) => (
+                                        <span key={idx} className="bg-slate-50 text-slate-600 text-[7.5px] px-1 py-0.2 rounded border border-slate-100 inline-block font-sans truncate max-w-[120px]">
+                                          {c.name} ({c.role})
+                                        </span>
                                       ))}
+                                      {lead.contacts.length > 2 && (
+                                        <span className="text-slate-400 text-[7.5px] font-bold">+{lead.contacts.length - 2}</span>
+                                      )}
                                     </div>
                                   </div>
                                 )}
                               </div>
                             </td>
-                            <td className="px-5 py-4">
-                              <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${badgeColor}`}>
+                            <td className="px-2 py-2 text-center">
+                              <span className={`inline-flex px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider ${badgeColor}`}>
                                 {lead.status}
                               </span>
                             </td>
-                            <td className="px-5 py-4 text-right">
-                              <p className="font-bold text-indigo-650 text-xs font-mono">${lead.value.toLocaleString("en-US")} USD</p>
+                            <td className="px-2 py-2 text-right">
+                              <p className="font-bold text-indigo-650 text-[10.5px] font-mono">${lead.value.toLocaleString("en-US")}</p>
                             </td>
-                            <td className="px-5 py-4">
-                              <span className="text-slate-500 font-semibold">{lead.source}</span>
-                            </td>
-                            <td className="px-5 py-4">
-                              <span className="text-slate-700 font-bold bg-slate-50 border border-slate-150 rounded px-2 py-1 text-[11px] leading-none inline-block">
-                                🧑‍💼 {lead.assignedTo || "Sin asignar"}
-                              </span>
-                            </td>
-                            <td className="px-5 py-4 text-center">
-                              <div className="flex items-center justify-center space-x-1.5">
+                            <td className="px-2 py-2 text-center">
+                              <div className="flex items-center justify-center gap-1 shrink-0">
                                 <button 
                                   onClick={() => handleOpenNewActivity(lead.id)}
-                                  className="text-indigo-600 hover:bg-indigo-50 border border-indigo-100 hover:border-indigo-200 px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider transition"
+                                  className="text-indigo-600 hover:bg-indigo-50 border border-indigo-100 hover:border-indigo-200 px-1 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wide transition shrink-0"
                                 >
                                   Agenda
                                 </button>
                                 <button 
                                   onClick={() => handleOpenEditLead(lead)}
-                                  className="text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-1.5 rounded-lg transition"
+                                  className="text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 p-0.5 rounded transition shrink-0"
                                 >
-                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <Edit3 className="w-3 h-3" />
                                 </button>
                                 <button
                                   onClick={() => handleDeleteLead(lead.id)}
-                                  className="text-rose-650 hover:text-white hover:bg-rose-600 border border-rose-100 hover:border-rose-300 p-1.5 rounded-lg transition"
+                                  className="text-rose-650 hover:text-white hover:bg-rose-600 border border-rose-100 hover:border-rose-300 p-0.5 rounded transition shrink-0"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <Trash2 className="w-3 h-3" />
                                 </button>
                               </div>
                             </td>
@@ -1437,7 +1436,7 @@ export function CRM() {
                       })
                     ) : (
                       <tr>
-                        <td colSpan={7} className="text-center py-12 text-slate-400 font-medium italic">
+                        <td colSpan={5} className="text-center py-12 text-slate-400 font-medium italic">
                           No se encontraron prospectos que coincidan con los filtros seleccionados.
                         </td>
                       </tr>
