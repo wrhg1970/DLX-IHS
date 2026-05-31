@@ -1,0 +1,152 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Pillar 3: Path Variable Hardening (Id Poisoning Guard)
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Pillar 2: Validation Blueprint
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Entity Validations (Pillar 2: Validation Blueprints with size & type guards)
+    function isValidInstitution(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+    }
+
+    function isValidStudent(data) {
+      return data.firstName is string && data.firstName.size() > 0 && data.firstName.size() <= 150;
+    }
+
+    function isValidClass(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+    }
+
+    function isValidEnrollment(data) {
+      return data.studentId is string && data.classId is string;
+    }
+
+    function isValidPayment(data) {
+      return data.amount is number && data.amount >= 0;
+    }
+
+    function isValidProvider(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+    }
+
+    // Additional validations
+    function isValidCRMLead(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+    }
+
+    function isValidContact(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+    }
+
+    function isValidTask(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() <= 300;
+    }
+
+    function isValidActivity(data) {
+      return data.description is string && data.description.size() > 0 && data.description.size() <= 500;
+    }
+
+    function isValidFinancialTransaction(data) {
+      return data.amount is number;
+    }
+
+    function isValidBankAccount(data) {
+      return data.bankName is string && data.bankName.size() > 0 && data.accountName is string && data.accountName.size() > 0;
+    }
+
+    // Match pathways configurations
+    match /institutions/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidInstitution(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /students/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidStudent(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /classes/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidClass(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /enrollments/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidEnrollment(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /payments/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidPayment(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /providers/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidProvider(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /bankAccounts/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidBankAccount(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /crmLeads/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidCRMLead(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /contacts/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidContact(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /tasks/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidTask(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /activities/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidActivity(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /financialTransactions/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidFinancialTransaction(incoming());
+      allow delete: if isValidId(id);
+    }
+  }
+}

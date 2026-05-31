@@ -1,0 +1,203 @@
+{
+  "entities": {
+    "Institution": {
+      "title": "Institution",
+      "description": "Represents an educational institution or commercial partner.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "contactName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Represents an individual student registered in programs.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "institutionId": { "type": "string" }
+      },
+      "required": ["id", "firstName", "lastName"]
+    },
+    "Class": {
+      "title": "Class",
+      "description": "Represents an educational class or program slot.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "teacher": { "type": "string" },
+        "schedule": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Represents a student enrolled in a specific class.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "classId": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "studentId", "classId"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Financial payment transaction records.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "amount", "date"]
+    },
+    "Provider": {
+      "title": "Provider",
+      "description": "An administrative service or system provider.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "serviceType": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "CRMLead": {
+      "title": "CRMLead",
+      "description": "A lead or potential educational client in the CRM pipeline.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "contactName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "Represents an institution's focal contact person.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "An administrative follow-up task or reminder.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "title"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "System audit trail and institution log.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "description"]
+    },
+    "FinancialTransaction": {
+      "title": "FinancialTransaction",
+      "description": "General system financial ledger item.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string" }
+      },
+      "required": ["id", "amount", "type"]
+    },
+    "BankAccount": {
+      "title": "BankAccount",
+      "description": "Represents a bank account associated with a provider.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "providerId": { "type": "number" },
+        "bankName": { "type": "string" },
+        "accountName": { "type": "string" },
+        "accountNumber": { "type": "string" },
+        "clabe": { "type": "string" },
+        "reference": { "type": "string" }
+      },
+      "required": ["id", "bankName", "accountName", "accountNumber"]
+    }
+  },
+  "firestore": {
+    "institutions": {
+      "schema": "Institution",
+      "description": "Educational institutions and enterprise prospects"
+    },
+    "students": {
+      "schema": "Student",
+      "description": "Registered students roster"
+    },
+    "classes": {
+      "schema": "Class",
+      "description": "Offered programs and schedules"
+    },
+    "enrollments": {
+      "schema": "Enrollment",
+      "description": "Links between students and their classes"
+    },
+    "payments": {
+      "schema": "Payment",
+      "description": "Finance and tuitions payment records"
+    },
+    "providers": {
+      "schema": "Provider",
+      "description": "Service suppliers and platform connections"
+    },
+    "bankAccounts": {
+      "schema": "BankAccount",
+      "description": "Bank account registration details associated with providers"
+    },
+    "crmLeads": {
+      "schema": "CRMLead",
+      "description": "Leads in the sales pipeline"
+    },
+    "contacts": {
+      "schema": "Contact",
+      "description": "Focal institution contact directories"
+    },
+    "tasks": {
+      "schema": "Task",
+      "description": "Action items and follow-up activities"
+    },
+    "activities": {
+      "schema": "Activity",
+      "description": "Audit trails and historical event lists"
+    },
+    "financialTransactions": {
+      "schema": "FinancialTransaction",
+      "description": "Cash ledger of incomes and expenses"
+    }
+  }
+}
