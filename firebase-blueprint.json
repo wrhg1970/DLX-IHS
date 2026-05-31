@@ -160,6 +160,20 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "code", "expiresAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "System users and authorization roles.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "password": { "type": "string" },
+        "requirePasswordChange": { "type": "boolean" }
+      },
+      "required": ["id", "name", "email", "role"]
     }
   },
   "firestore": {
@@ -214,6 +228,10 @@
     "temporary_otps": {
       "schema": "OTPRequest",
       "description": "One-time password codes for passwordless authentication"
+    },
+    "users": {
+      "schema": "User",
+      "description": "System users catalog supporting credentials, auto-passwords, and roles"
     }
   }
 }

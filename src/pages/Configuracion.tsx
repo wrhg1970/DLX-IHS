@@ -1,4 +1,4 @@
-import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check } from "lucide-react";
+import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key } from "lucide-react";
 import React, { useState } from "react";
 import { useAppContext, resolveCreditPrices } from "../context/AppContext";
 
@@ -170,6 +170,9 @@ export function Configuracion() {
 
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
+  const [autoGeneratePassword, setAutoGeneratePassword] = useState(false);
+  const [generatedPassInfo, setGeneratedPassInfo] = useState<{ email: string; pass: string } | null>(null);
+  const [copied, setCopied] = useState(false);
   const [userForm, setUserForm] = useState<{
     name: string;
     email: string;
@@ -244,13 +247,38 @@ export function Configuracion() {
 
   const handleUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingUserId) {
-      updateUser(editingUserId, userForm);
-    } else {
-      addUser(userForm);
+    
+    let userPayload: any = { ...userForm };
+    let generatedPass = '';
+
+    if (!editingUserId && autoGeneratePassword) {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let randomPart = '';
+      for (let i = 0; i < 4; i++) {
+        randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      generatedPass = `IHS-${randomPart}`;
+      userPayload = {
+        ...userPayload,
+        password: generatedPass,
+        requirePasswordChange: true
+      };
     }
-    setIsUserModalOpen(false);
+
+    if (editingUserId) {
+      updateUser(editingUserId, userPayload);
+    } else {
+      addUser(userPayload);
+    }
+
+    if (generatedPass) {
+      setGeneratedPassInfo({ email: userForm.email, pass: generatedPass });
+    } else {
+      setIsUserModalOpen(false);
+    }
+    
     setUserForm({ name: '', email: '', role: '', studentId: undefined, institutionId: undefined });
+    setAutoGeneratePassword(false);
     setEditingUserId(null);
   };
 
@@ -2470,6 +2498,28 @@ export function Configuracion() {
                     </select>
                   </div>
                 )}
+
+                {!editingUserId && (
+                  <div className="flex items-start bg-slate-50 p-3.5 rounded-xl border border-slate-100 mt-4">
+                    <div className="flex items-center h-5 mt-0.5">
+                      <input
+                        id="autoGeneratePassword"
+                        type="checkbox"
+                        checked={autoGeneratePassword}
+                        onChange={(e) => setAutoGeneratePassword(e.target.checked)}
+                        className="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                      />
+                    </div>
+                    <div className="ml-3 text-xs">
+                      <label htmlFor="autoGeneratePassword" className="font-bold text-slate-800 cursor-pointer">
+                        Generar contraseña automáticamente
+                      </label>
+                      <p className="text-slate-500 mt-0.5 leading-relaxed">
+                        El usuario podrá ingresar con su contraseña provisional y el sistema le solicitará cambiarla obligatoriamente en su primer ingreso.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
               
               <div className="mt-8 flex justify-end space-x-3">
@@ -2488,6 +2538,55 @@ export function Configuracion() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {generatedPassInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 p-6 text-center">
+            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-emerald-100 text-emerald-600 mb-4">
+              <Key className="h-6 w-6" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">¡Contraseña Inicial Generada!</h3>
+            <p className="text-xs text-slate-500 mb-6 px-1">
+              Copie la siguiente contraseña provisional para el usuario. Le será solicitado cambiarla obligatoriamente en cuanto ingrese por primera vez.
+            </p>
+            
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-6 text-left space-y-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Usuario / Correo:</span>
+                <span className="text-xs font-bold text-slate-700 block select-all font-mono break-all">{generatedPassInfo.email}</span>
+              </div>
+              <div className="relative">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Contraseña Temporal:</span>
+                <div className="flex items-center justify-between mt-1 bg-white p-2.5 rounded-lg border border-slate-200">
+                  <span className="text-sm font-black text-slate-800 font-mono tracking-wider select-all">{generatedPassInfo.pass}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(generatedPassInfo.pass);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className={`p-1.5 rounded-md transition-colors ${copied ? 'bg-emerald-50 text-emerald-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setGeneratedPassInfo(null);
+                setIsUserModalOpen(false);
+              }}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition-colors shadow-md shadow-indigo-600/10"
+            >
+              Cerrar y Continuar
+            </button>
           </div>
         </div>
       )}

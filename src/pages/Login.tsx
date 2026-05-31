@@ -19,9 +19,14 @@ import {
 } from 'lucide-react';
 
 export function Login() {
-  const { users, students, contacts, setCurrentUser } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'otp' | 'google'>('otp');
+  const { users, students, contacts, setCurrentUser, updateUser } = useAppContext();
+  const [activeTab, setActiveTab] = useState<'otp' | 'password' | 'google'>('otp');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [forceChangePasswordMode, setForceChangePasswordMode] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [otpState, setOtpState] = useState<'request' | 'verify'>('request');
   const [enteredCode, setEnteredCode] = useState('');
   const [loading, setLoading] = useState(false);
@@ -196,6 +201,112 @@ export function Login() {
     }
   };
 
+  // Credentials Authentication Handler
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    const emailTrimmed = email.trim();
+    if (!emailTrimmed || !password) {
+      setError('Por favor ingresa tu correo y contraseña.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const userObj = findSystemUser(emailTrimmed);
+      if (!userObj) {
+        setError(`El correo "${emailTrimmed}" no está registrado en el sistema. Puedes intentar otro, o solicitar un OTP.`);
+        setLoading(false);
+        return;
+      }
+
+      // Check if user has password set
+      if (!userObj.password) {
+        setError('Este usuario no tiene configurado el acceso por contraseña. Por favor solicita un código OTP.');
+        setLoading(false);
+        return;
+      }
+
+      if (userObj.password !== password) {
+        setError('Contraseña incorrecta. Por favor verifica e intenta nuevamente.');
+        setLoading(false);
+        return;
+      }
+
+      // Check force password change constraint
+      if (userObj.requirePasswordChange) {
+        setSuccess('¡Credenciales correctas! Por favor define tu nueva contraseña para continuar.');
+        setForceChangePasswordMode(true);
+      } else {
+        setSuccess('¡Ingreso exitoso!');
+        setTimeout(() => {
+          setCurrentUser(userObj);
+        }, 500);
+      }
+    } catch (err: any) {
+      console.error("Credentials Auth error:", err);
+      setError('Ocurrió un error inesperado al procesar el ingreso.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Change Password Handler for first-time login enforcement
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (newPassword.length < 6) {
+      setError('La nueva contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setError('Las contraseñas ingresadas no coinciden.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const emailTrimmed = email.trim();
+      const userObj = findSystemUser(emailTrimmed);
+      if (!userObj) {
+        setError('No se pudo localizar el registro del usuario.');
+        setLoading(false);
+        return;
+      }
+
+      // Save to global context and Firestore
+      updateUser(userObj.id, {
+        password: newPassword,
+        requirePasswordChange: false
+      });
+
+      setSuccess('¡Contraseña actualizada con éxito!');
+      setForceChangePasswordMode(false);
+      setPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      
+      // Complete login directly
+      setTimeout(() => {
+        setCurrentUser({
+          ...userObj,
+          password: newPassword,
+          requirePasswordChange: false
+        });
+      }, 500);
+    } catch (err: any) {
+      console.error("Change Password error:", err);
+      setError('Error al actualizar la contraseña en el sistema. Revisa tu conexión.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Google Login popup
   const handleGoogleLogin = async () => {
     setError('');
@@ -300,48 +411,286 @@ export function Login() {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md animate-in fade-in zoom-in-95 duration-500 delay-150">
         <div className="bg-white py-8 px-4 shadow-2xl shadow-slate-200/50 sm:rounded-2xl sm:px-10 border border-slate-100">
           
-          {/* Segment/Tab controls for Login methods */}
-          <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
-            <button
-              onClick={() => {
-                setActiveTab('otp');
-                setError('');
-                setSuccess('');
-              }}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
-                activeTab === 'otp'
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-900'
-              }`}
-            >
-              <Mail className="w-3.5 h-3.5" />
-              Código OTP
-            </button>
-            <button
-              onClick={() => {
-                setActiveTab('google');
-                setError('');
-                setSuccess('');
-              }}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
-                activeTab === 'google'
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-900'
-              }`}
-            >
-              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
-                <path d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.5 1.62l2.437-2.437C17.312 1.696 14.933 1 12.24 1 6.58 1 2 5.58 2 11.24s4.58 10.24 10.24 10.24c5.795 0 10.254-4.074 10.254-10.24 0-.695-.08-1.355-.22-1.955H12.24z" />
-              </svg>
-              Google / Demo
-            </button>
-          </div>
+          {forceChangePasswordMode ? (
+            <div className="space-y-4 animate-in fade-in duration-300">
+              <div className="text-center pb-2">
+                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-indigo-100 text-indigo-600 mb-3">
+                  <Key className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">Establecer Nueva Contraseña</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed font-sans">
+                  Esta es tu primera vez iniciando sesión. Por favor, define una contraseña segura para proteger tu acceso.
+                </p>
+              </div>
 
-          {activeTab === 'otp' && (
-            <div className="space-y-4">
-              {otpState === 'request' ? (
-                <form onSubmit={handleRequestOTP} className="space-y-4">
+              <form onSubmit={handleChangePassword} className="space-y-4">
+                <div>
+                  <label htmlFor="newPassword" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    Nueva Contraseña
+                  </label>
+                  <div className="relative mt-1">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <Key className="h-5 w-5 text-slate-400" />
+                    </div>
+                    <input
+                      id="newPassword"
+                      type={showPassword ? "text" : "password"}
+                      required
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="appearance-none block w-full pl-10 pr-10 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all text-slate-800"
+                      placeholder="Mínimo 6 caracteres"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="confirmNewPassword" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    Confirmar Nueva Contraseña
+                  </label>
+                  <div className="relative mt-1">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <Key className="h-5 w-5 text-slate-400" />
+                    </div>
+                    <input
+                      id="confirmNewPassword"
+                      type={showPassword ? "text" : "password"}
+                      required
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                      className="appearance-none block w-full pl-10 pr-10 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all text-slate-800"
+                      placeholder="Repite la contraseña"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center">
+                  <input
+                    id="show-password-force"
+                    type="checkbox"
+                    checked={showPassword}
+                    onChange={(e) => setShowPassword(e.target.checked)}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded cursor-pointer"
+                  />
+                  <label htmlFor="show-password-force" className="ml-2 block text-xs text-slate-600 font-medium cursor-pointer select-none">
+                    Mostrar contraseñas
+                  </label>
+                </div>
+
+                {error && (
+                  <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 p-3 rounded-xl font-medium flex items-start gap-2">
+                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-500" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                {success && (
+                  <div className="text-sm text-emerald-600 bg-emerald-50 border border-emerald-100 p-3 rounded-xl font-medium flex items-start gap-2">
+                    <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-500" />
+                    <span>{success}</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-md cursor-pointer text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all uppercase tracking-wider disabled:opacity-50"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Guardar y Continuar'}
+                </button>
+              </form>
+            </div>
+          ) : (
+            <>
+              {/* Segment/Tab controls for Login methods */}
+              <div className="flex bg-slate-100 p-1 rounded-xl mb-6 flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('otp');
+                    setError('');
+                    setSuccess('');
+                  }}
+                  className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 min-w-[90px] ${
+                    activeTab === 'otp'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  Código OTP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('password');
+                    setError('');
+                    setSuccess('');
+                  }}
+                  className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 min-w-[90px] ${
+                    activeTab === 'password'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  Contraseña
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('google');
+                    setError('');
+                    setSuccess('');
+                  }}
+                  className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 min-w-[90px] ${
+                    activeTab === 'google'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
+                    <path d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.5 1.62l2.437-2.437C17.312 1.696 14.933 1 12.24 1 6.58 1 2 5.58 2 11.24s4.58 10.24 10.24 10.24c5.795 0 10.254-4.074 10.254-10.24 0-.695-.08-1.355-.22-1.955H12.24z" />
+                  </svg>
+                  Google / Demo
+                </button>
+              </div>
+
+              {activeTab === 'otp' && (
+                <div className="space-y-4 animate-in fade-in duration-300">
+                  {otpState === 'request' ? (
+                    <form onSubmit={handleRequestOTP} className="space-y-4">
+                      <div>
+                        <label htmlFor="email" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                          Correo Electrónico Registrado
+                        </label>
+                        <div className="relative mt-1">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Mail className="h-5 w-5 text-slate-400" />
+                          </div>
+                          <input
+                            id="email"
+                            type="email"
+                            required
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="appearance-none block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all text-slate-800"
+                            placeholder="Ej. admin@ihs.com o tu alumno/coordinador correo"
+                          />
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500 leading-relaxed font-sans">
+                          Te enviaremos un código numérico único de un solo uso para verificar tu identidad de forma segura.
+                        </p>
+                      </div>
+
+                      {error && (
+                        <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 p-3 rounded-xl font-medium flex items-start gap-2">
+                          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-500" />
+                          <span>{error}</span>
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={loading}
+                        className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-md cursor-pointer text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all uppercase tracking-wider disabled:opacity-50"
+                      >
+                        {loading ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            Solicitar Código OTP <ChevronRight className="w-4 h-4" />
+                          </span>
+                        )}
+                      </button>
+                    </form>
+                  ) : (
+                    <form onSubmit={handleVerifyOTP} className="space-y-4">
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+                        <p className="text-xs text-slate-600 font-sans">
+                          Enviamos el código OTP de 6 dígitos a:
+                        </p>
+                        <p className="text-sm font-bold text-slate-800 break-all mt-0.5 flex items-center gap-1.5">
+                          <Mail className="w-4 h-4 text-slate-500" /> {email}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOtpState('request');
+                            setError('');
+                            setSuccess('');
+                          }}
+                          className="text-xs text-indigo-600 hover:text-indigo-500 font-bold mt-1.5 flex items-center gap-1 hover:underline"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" /> Cambiar correo electrónico
+                        </button>
+                      </div>
+
+                      <div>
+                        <label htmlFor="code" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                          Código de Acceso
+                        </label>
+                        <div className="relative mt-1">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Key className="h-5 w-5 text-slate-400" />
+                          </div>
+                          <input
+                            id="code"
+                            type="text"
+                            maxLength={6}
+                            required
+                            value={enteredCode}
+                            onChange={(e) => setEnteredCode(e.target.value.replace(/\D/g, ''))}
+                            className="appearance-none block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl shadow-sm tracking-[0.25em] text-center font-black placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-lg transition-all text-slate-800"
+                            placeholder="••••••"
+                          />
+                        </div>
+                      </div>
+
+                      {success && (
+                        <div className="text-sm text-emerald-600 bg-emerald-50 border border-emerald-100 p-3 rounded-xl font-medium flex items-start gap-2">
+                          <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-500" />
+                          <span>{success}</span>
+                        </div>
+                      )}
+
+                      {error && (
+                        <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 p-3 rounded-xl font-medium flex items-start gap-2">
+                          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-500" />
+                          <span>{error}</span>
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={loading}
+                        className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-md cursor-pointer text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all uppercase tracking-wider disabled:opacity-50"
+                      >
+                        {loading ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          'Verificar Código OTP'
+                        )}
+                      </button>
+                      
+                      <div className="text-center">
+                        <button
+                          type="button"
+                          onClick={handleRequestOTP}
+                          className="text-xs font-bold text-slate-500 hover:text-indigo-600 hover:underline"
+                        >
+                          ¿No recibiste el correo? Reenviar código
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'password' && (
+                <form onSubmit={handlePasswordLogin} className="space-y-4 animate-in fade-in duration-300">
                   <div>
-                    <label htmlFor="email" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    <label htmlFor="password-email" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                       Correo Electrónico Registrado
                     </label>
                     <div className="relative mt-1">
@@ -349,18 +698,48 @@ export function Login() {
                         <Mail className="h-5 w-5 text-slate-400" />
                       </div>
                       <input
-                        id="email"
+                        id="password-email"
                         type="email"
                         required
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        className="appearance-none block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all"
-                        placeholder="Ej. admin@ihs.com o tu alumno/coordinador correo"
+                        className="appearance-none block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all text-slate-800"
+                        placeholder="correo@ejemplo.com"
                       />
                     </div>
-                    <p className="mt-2 text-xs text-slate-500">
-                      Te enviaremos un código numérico único de un solo uso para verificar tu identidad de forma segura.
-                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="password-field" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      Contraseña
+                    </label>
+                    <div className="relative mt-1">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Key className="h-5 w-5 text-slate-400" />
+                      </div>
+                      <input
+                        id="password-field"
+                        type={showPassword ? "text" : "password"}
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="appearance-none block w-full pl-10 pr-10 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all text-slate-800"
+                        placeholder="Contraseña del usuario"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center">
+                    <input
+                      id="show-password"
+                      type="checkbox"
+                      checked={showPassword}
+                      onChange={(e) => setShowPassword(e.target.checked)}
+                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded cursor-pointer"
+                    />
+                    <label htmlFor="show-password" className="ml-2 block text-xs text-slate-600 font-medium cursor-pointer select-none">
+                      Mostrar contraseña
+                    </label>
                   </div>
 
                   {error && (
@@ -369,63 +748,6 @@ export function Login() {
                       <span>{error}</span>
                     </div>
                   )}
-
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-md cursor-pointer text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all uppercase tracking-wider disabled:opacity-50"
-                  >
-                    {loading ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <span className="flex items-center gap-1">
-                        Solicitar Código OTP <ChevronRight className="w-4 h-4" />
-                      </span>
-                    )}
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleVerifyOTP} className="space-y-4">
-                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
-                    <p className="text-xs text-slate-600">
-                      Enviamos el código OTP de 6 dígitos a:
-                    </p>
-                    <p className="text-sm font-bold text-slate-800 break-all mt-0.5 flex items-center gap-1.5">
-                      <Mail className="w-4 h-4 text-slate-500" /> {email}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOtpState('request');
-                        setError('');
-                        setSuccess('');
-                      }}
-                      className="text-xs text-indigo-600 hover:text-indigo-500 font-bold mt-1.5 flex items-center gap-1 hover:underline"
-                    >
-                      <ArrowLeft className="w-3.5 h-3.5" /> Cambiar correo electrónico
-                    </button>
-                  </div>
-
-                  <div>
-                    <label htmlFor="code" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                      Código de Acceso
-                    </label>
-                    <div className="relative mt-1">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Key className="h-5 w-5 text-slate-400" />
-                      </div>
-                      <input
-                        id="code"
-                        type="text"
-                        maxLength={6}
-                        required
-                        value={enteredCode}
-                        onChange={(e) => setEnteredCode(e.target.value.replace(/\D/g, ''))}
-                        className="appearance-none block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl shadow-sm tracking-[0.25em] text-center font-black placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-lg transition-all"
-                        placeholder="••••••"
-                      />
-                    </div>
-                  </div>
 
                   {success && (
                     <div className="text-sm text-emerald-600 bg-emerald-50 border border-emerald-100 p-3 rounded-xl font-medium flex items-start gap-2">
@@ -434,13 +756,6 @@ export function Login() {
                     </div>
                   )}
 
-                  {error && (
-                    <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 p-3 rounded-xl font-medium flex items-start gap-2">
-                      <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-500" />
-                      <span>{error}</span>
-                    </div>
-                  )}
-
                   <button
                     type="submit"
                     disabled={loading}
@@ -449,112 +764,101 @@ export function Login() {
                     {loading ? (
                       <Loader2 className="w-5 h-5 animate-spin" />
                     ) : (
-                      'Verificar Código OTP'
+                      'Ingresar con Contraseña'
                     )}
                   </button>
-                  
-                  <div className="text-center">
-                    <button
-                      type="button"
-                      onClick={handleRequestOTP}
-                      className="text-xs font-bold text-slate-500 hover:text-indigo-600 hover:underline"
-                    >
-                      ¿No recibiste el correo? Reenviar código
-                    </button>
-                  </div>
                 </form>
               )}
-            </div>
-          )}
 
-          {activeTab === 'google' && (
-            <div className="space-y-6">
-              <div className="text-center">
-                <p className="text-xs text-slate-500 mb-4">
-                  Inicia sesión instantáneamente con tu cuenta corporativa o educativa de Google.
-                </p>
+              {activeTab === 'google' && (
+                <div className="space-y-6">
+                  <div className="text-center">
+                    <p className="text-xs text-slate-500 mb-4 leading-relaxed font-sans">
+                      Inicia sesión instantáneamente con tu cuenta corporativa o educativa de Google.
+                    </p>
 
-                <button
-                  type="button"
-                  onClick={handleGoogleLogin}
-                  disabled={loading}
-                  className="w-full flex items-center justify-center gap-3 py-3 px-4 border border-slate-300 rounded-xl shadow-sm text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all cursor-pointer border-solid"
-                >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24">
-                    <path fill="#EA4335" d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.5 1.62l2.437-2.437C17.312 1.696 14.933 1 12.24 1 6.58 1 2 5.58 2 11.24s4.58 10.24 10.24 10.24c5.795 0 10.254-4.074 10.254-10.24 0-.695-.08-1.355-.22-1.955H12.24z" />
-                  </svg>
-                  Iniciar Sesión con Google
-                </button>
-              </div>
+                    <button
+                      type="button"
+                      onClick={handleGoogleLogin}
+                      disabled={loading}
+                      className="w-full flex items-center justify-center gap-3 py-3 px-4 border border-slate-300 rounded-xl shadow-sm text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all cursor-pointer border-solid"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 24 24">
+                        <path fill="#EA4335" d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.5 1.62l2.437-2.437C17.312 1.696 14.933 1 12.24 1 6.58 1 2 5.58 2 11.24s4.58 10.24 10.24 10.24c5.795 0 10.254-4.074 10.254-10.24 0-.695-.08-1.355-.22-1.955H12.24z" />
+                      </svg>
+                      Iniciar Sesión con Google
+                    </button>
+                  </div>
 
-              {error && (
-                <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 p-3 rounded-xl font-medium flex items-start gap-2">
-                  <ShieldAlert className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-500" />
-                  <span className="text-left select-text">{error}</span>
+                  {error && (
+                    <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 p-3 rounded-xl font-medium flex items-start gap-2">
+                      <ShieldAlert className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-500" />
+                      <span className="text-left select-text">{error}</span>
+                    </div>
+                  )}
+
+                  {success && (
+                    <div className="text-sm text-emerald-600 bg-emerald-50 border border-emerald-100 p-3 rounded-xl font-medium flex items-start gap-2">
+                      <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-500" />
+                      <span>{success}</span>
+                    </div>
+                  )}
+
+                  {/* Quick Simulator Credentials for developers to test different roles */}
+                  <div className="pt-4 border-t border-slate-100">
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 text-center flex items-center justify-center gap-1.5">
+                      <HelpCircle className="w-3.5 h-3.5" /> Acceso directo de Demostración
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <button
+                        onClick={() => {
+                          setEmail('admin@ihs.com');
+                          setActiveTab('otp');
+                          setOtpState('request');
+                        }}
+                        className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all text-slate-800"
+                      >
+                        <span className="font-bold text-slate-700 block">Superadmin</span>
+                        <span className="text-[10px] text-slate-500 font-mono">admin@ihs.com</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEmail('coordinador@ihs.com');
+                          setActiveTab('otp');
+                          setOtpState('request');
+                        }}
+                        className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all text-slate-800"
+                      >
+                        <span className="font-bold text-slate-700 block">Coordinador</span>
+                        <span className="text-[10px] text-slate-500 font-mono">coordinador@ihs.com</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEmail('alumno@ihs.com');
+                          setActiveTab('otp');
+                          setOtpState('request');
+                        }}
+                        className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all text-slate-800"
+                      >
+                        <span className="font-bold text-slate-700 block">Alumno Demo</span>
+                        <span className="text-[10px] text-slate-500 font-mono">alumno@ihs.com</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEmail('wrhg1970@gmail.com');
+                          setActiveTab('otp');
+                          setOtpState('request');
+                        }}
+                        className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all font-semibold text-slate-800"
+                      >
+                        <span className="font-bold text-indigo-700 block">Google Admin</span>
+                        <span className="text-[10px] text-indigo-500 font-mono">wrhg1970@gmail.com</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
-
-              {success && (
-                <div className="text-sm text-emerald-600 bg-emerald-50 border border-emerald-100 p-3 rounded-xl font-medium flex items-start gap-2">
-                  <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-500" />
-                  <span>{success}</span>
-                </div>
-              )}
-
-              {/* Quick Simulator Credentials for developers to test different roles */}
-              <div className="pt-4 border-t border-slate-100">
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 text-center flex items-center justify-center gap-1.5">
-                  <HelpCircle className="w-3.5 h-3.5" /> Acceso directo de Demostración
-                </p>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <button
-                    onClick={() => {
-                      setEmail('admin@ihs.com');
-                      setActiveTab('otp');
-                      setOtpState('request');
-                    }}
-                    className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all"
-                  >
-                    <span className="font-bold text-slate-700 block">Superadmin</span>
-                    <span className="text-[10px] text-slate-500 font-mono">admin@ihs.com</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEmail('coordinador@ihs.com');
-                      setActiveTab('otp');
-                      setOtpState('request');
-                    }}
-                    className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all"
-                  >
-                    <span className="font-bold text-slate-700 block">Coordinador</span>
-                    <span className="text-[10px] text-slate-500 font-mono">coordinador@ihs.com</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEmail('alumno@ihs.com');
-                      setActiveTab('otp');
-                      setOtpState('request');
-                    }}
-                    className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all"
-                  >
-                    <span className="font-bold text-slate-700 block">Alumno Demo</span>
-                    <span className="text-[10px] text-slate-500 font-mono">alumno@ihs.com</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      // Set administrator email directly
-                      setEmail('wrhg1970@gmail.com');
-                      setActiveTab('otp');
-                      setOtpState('request');
-                    }}
-                    className="p-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-left cursor-pointer transition-all font-semibold"
-                  >
-                    <span className="font-bold text-indigo-700 block">Google Admin</span>
-                    <span className="text-[10px] text-indigo-500 font-mono">wrhg1970@gmail.com</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            </>
           )}
 
         </div>

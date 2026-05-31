@@ -401,6 +401,8 @@ export interface User {
   institutionIds?: number[];
   studentId?: number;
   institutionId?: number;
+  password?: string;
+  requirePasswordChange?: boolean;
 }
 
 interface AppContextType {
@@ -941,6 +943,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         };
 
         // Sync main collections
+        await syncCollection('users', users, setUsers);
         await syncCollection('institutions', institutions, setInstitutions);
         await syncCollection('students', students, setStudents);
         await syncCollection('classes', classes, setClasses);
@@ -1005,6 +1008,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   // Instantiate sync hooks for all lists
+  useIncrementalFirebaseSync(users, 'users');
   useIncrementalFirebaseSync(institutions, 'institutions');
   useIncrementalFirebaseSync(students, 'students');
   useIncrementalFirebaseSync(classes, 'classes');
@@ -1631,6 +1635,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const deleteProviderSpecificProduct = (id: number) => {
     setProviderSpecificProducts(prev => prev.filter(p => p.id !== id));
   };
+
+  // Ensure 'wrhg1970@gmail.com' is registered as a Superadministrador on initialization
+  useEffect(() => {
+    const adminEmail = 'wrhg1970@gmail.com';
+    const existingIndex = users.findIndex(u => u.email?.trim().toLowerCase() === adminEmail);
+    if (existingIndex === -1) {
+      setUsers(prev => {
+        const checkAgain = prev.some(u => u.email?.trim().toLowerCase() === adminEmail);
+        if (!checkAgain) {
+          return [...prev, {
+            id: 6,
+            name: 'Administrador (Google)',
+            role: 'Superadministrador',
+            email: adminEmail
+          }];
+        }
+        return prev;
+      });
+    } else {
+      const existingUser = users[existingIndex];
+      if (existingUser.role !== 'Superadministrador') {
+        setUsers(prev => prev.map(u => u.email?.trim().toLowerCase() === adminEmail ? { ...u, role: 'Superadministrador' } : u));
+      }
+    }
+  }, [users]);
 
   return (
     <AppContext.Provider value={{
