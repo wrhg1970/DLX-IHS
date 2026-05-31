@@ -148,6 +148,18 @@
         "reference": { "type": "string" }
       },
       "required": ["id", "bankName", "accountName", "accountNumber"]
+    },
+    "OTPRequest": {
+      "title": "OTPRequest",
+      "description": "Information about a requested OTP verification code.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "expiresAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "code", "expiresAt"]
     }
   },
   "firestore": {
@@ -198,6 +210,10 @@
     "financialTransactions": {
       "schema": "FinancialTransaction",
       "description": "Cash ledger of incomes and expenses"
+    },
+    "temporary_otps": {
+      "schema": "OTPRequest",
+      "description": "One-time password codes for passwordless authentication"
     }
   }
 }

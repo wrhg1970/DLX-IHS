@@ -652,7 +652,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     { id: 2, name: 'Director Financiero', role: 'Finanzas', email: 'finanzas@ihs.com' },
     { id: 3, name: 'Coordinador Académico', role: 'Academia', email: 'academico@ihs.com' },
     { id: 4, name: 'Usuario Alumno (Demo)', role: 'Alumno', email: 'alumno@ihs.com', studentId: 1 },
-    { id: 5, name: 'Coordinador Institución (Demo)', role: 'Coordinador', email: 'coordinador@ihs.com', institutionId: 1 }
+    { id: 5, name: 'Coordinador Institución (Demo)', role: 'Coordinador', email: 'coordinador@ihs.com', institutionId: 1 },
+    { id: 6, name: 'Administrador (Google)', role: 'Superadministrador', email: 'wrhg1970@gmail.com' }
   ]));
   
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
