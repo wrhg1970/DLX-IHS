@@ -326,6 +326,115 @@ export function CRM() {
   const [logNotes, setLogNotes] = useState("");
   const [activityFilter, setActivityFilter] = useState<"Todas" | "Pendiente" | "Completada">("Todas");
 
+  // States for bulk selection/updates
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [bulkUpdateForm, setBulkUpdateForm] = useState({
+    assignedTo: "",
+    status: "",
+    source: "",
+    city: "",
+    state: "",
+    country: ""
+  });
+  const [showBulkConfirmModal, setShowBulkConfirmModal] = useState(false);
+  const [showBulkSuccessBanner, setShowBulkSuccessBanner] = useState(false);
+  const [bulkAppliedSummary, setBulkAppliedSummary] = useState<{
+    count: number;
+    fields: { field: string; value: string }[];
+    leadNames: string[];
+  } | null>(null);
+
+  const toggleSelectLead = (id: string) => {
+    setSelectedLeadIds(prev =>
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllLeads = () => {
+    const filteredIds = filteredLeads.map(l => l.id);
+    const allSelectedInFiltered = filteredLeads.length > 0 && filteredIds.every(id => selectedLeadIds.includes(id));
+    if (allSelectedInFiltered) {
+      setSelectedLeadIds(prev => prev.filter(id => !filteredIds.includes(id)));
+    } else {
+      setSelectedLeadIds(prev => {
+        const otherSelected = prev.filter(id => !filteredIds.includes(id));
+        return [...otherSelected, ...filteredIds];
+      });
+    }
+  };
+
+  const initiateBulkUpdateConfirm = () => {
+    if (selectedLeadIds.length === 0) return;
+    
+    const { assignedTo, status, source, city, state, country } = bulkUpdateForm;
+    if (!assignedTo && !status && !source && !city && !state && !country) {
+      alert("Por favor selecciona al menos un campo para actualizar de forma masiva.");
+      return;
+    }
+
+    const fieldsToChange: { field: string; value: string }[] = [];
+    if (assignedTo) fieldsToChange.push({ field: "Agente Responsable", value: assignedTo });
+    if (status) fieldsToChange.push({ field: "Estatus de Pipeline", value: status });
+    if (source) fieldsToChange.push({ field: "Origen", value: source });
+    if (city.trim()) fieldsToChange.push({ field: "Ciudad", value: city.trim() });
+    if (state.trim()) fieldsToChange.push({ field: "Estado", value: state.trim() });
+    if (country.trim()) fieldsToChange.push({ field: "País", value: country.trim() });
+
+    const selectedLeadsList = leads.filter(l => selectedLeadIds.includes(l.id));
+    const leadNames = selectedLeadsList.map(l => l.name);
+
+    setBulkAppliedSummary({
+      count: selectedLeadIds.length,
+      fields: fieldsToChange,
+      leadNames
+    });
+
+    setShowBulkConfirmModal(true);
+    setShowBulkSuccessBanner(false);
+  };
+
+  const executeBulkUpdate = () => {
+    if (!bulkAppliedSummary) return;
+
+    const { assignedTo, status, source, city, state, country } = bulkUpdateForm;
+
+    setLeads(prev =>
+      prev.map(lead => {
+        if (selectedLeadIds.includes(lead.id)) {
+          const updated = { ...lead };
+          if (assignedTo) updated.assignedTo = assignedTo;
+          if (status) updated.status = status;
+          if (source) updated.source = source;
+          if (city !== undefined && city.trim() !== "") updated.city = city.trim();
+          if (state !== undefined && state.trim() !== "") updated.state = state.trim();
+          if (country !== undefined && country.trim() !== "") updated.country = country.trim();
+          return updated;
+        }
+        return lead;
+      })
+    );
+
+    // Save summary logic flag state
+    setShowBulkConfirmModal(false);
+    setShowBulkSuccessBanner(true);
+
+    // Keep the core summary details but clear form & selection
+    setSelectedLeadIds([]);
+    setBulkUpdateForm({
+      assignedTo: "",
+      status: "",
+      source: "",
+      city: "",
+      state: "",
+      country: ""
+    });
+  };
+
+  // Reset selection when tab or filters change
+  useEffect(() => {
+    setSelectedLeadIds([]);
+  }, [activeTab, searchTerm, typeFilter, statusFilter, sourceFilter]);
+
   const handleLogContact = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLead || !logTitle.trim() || !logDate) return;
@@ -1305,35 +1414,306 @@ export function CRM() {
 
           {/* TAB 2: DETAILED LIST (TABULAR) */}
           {activeTab === "Tabla" && (
-            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs table-fixed">
-                  <thead className="bg-[#0f172a] text-slate-300 text-[9px] font-bold uppercase tracking-wider">
-                    <tr>
-                      <th className="px-2 py-2 w-[35%]">Prospecto / Cliente / Origen</th>
-                      <th className="px-2 py-2 w-[35%]">Contacto & Responsable</th>
-                      <th className="px-2 py-2 text-center w-[10%]">Estatus</th>
-                      <th className="px-2 py-2 text-right w-[10%]">Valor Estimado</th>
-                      <th className="px-2 py-2 text-center w-[10%]">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {filteredLeads.length > 0 ? (
-                      filteredLeads.map((lead) => {
-                        let badgeColor = "bg-slate-100 text-slate-600";
-                        if (lead.status === "Nuevo") badgeColor = "bg-sky-50 text-sky-700 border border-sky-100";
-                        if (lead.status === "Contactado") badgeColor = "bg-blue-50 text-blue-700 border border-blue-100";
-                        if (lead.status === "Propuesta") badgeColor = "bg-amber-50 text-amber-700 border border-amber-100";
-                        if (lead.status === "Negociación") badgeColor = "bg-indigo-50 text-indigo-700 border border-indigo-100";
-                        if (lead.status === "Ganado") badgeColor = "bg-emerald-50 text-emerald-700 border border-emerald-100";
-                        if (lead.status === "Perdido") badgeColor = "bg-rose-50 text-rose-700 border border-rose-100";
+            <>
+              {/* BANNER DE ÉXITO MASIVO */}
+              {showBulkSuccessBanner && bulkAppliedSummary && (
+                <div className="bg-emerald-50 border border-emerald-150 rounded-xl p-4 mb-4 animate-in fade-in slide-in-from-top-4 duration-350 shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <div className="p-1.5 bg-emerald-500 rounded-lg text-white shrink-0">
+                      <CheckCircle2 className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-emerald-950 font-bold text-sm">¡Cambios Masivos Aplicados Exitosamente!</h4>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowBulkSuccessBanner(false);
+                            setBulkAppliedSummary(null);
+                          }}
+                          className="text-emerald-700 hover:text-emerald-950 p-1 rounded-lg hover:bg-emerald-100/50 transition cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <p className="text-emerald-800 text-[11.5px] mt-1 leading-relaxed">
+                        Se han actualizado correctamente los datos clave de <strong>{bulkAppliedSummary.count}</strong> instituciones/prospectos seleccionados.
+                      </p>
+                      
+                      <div className="mt-3 bg-white/70 p-2.5 rounded-lg border border-emerald-100/50 max-w-2xl">
+                        <p className="text-[9px] font-bold text-emerald-900 uppercase tracking-widest mb-1.5 font-mono">Detalle de los cambios:</p>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                          {bulkAppliedSummary.fields.map((f, i) => (
+                            <div key={i} className="text-xs text-emerald-800">
+                              <span className="font-semibold text-emerald-950">{f.field}:</span> {f.value}
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-emerald-600 italic mt-2 border-t border-emerald-100/30 pt-1.5 font-sans">
+                          Afectados: {bulkAppliedSummary.leadNames.slice(0, 5).join(", ")}
+                          {bulkAppliedSummary.leadNames.length > 5 ? ` y ${bulkAppliedSummary.leadNames.length - 5} instituciones más.` : "."}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
-                        const leadTasks = tasks.filter(t => t.leadId?.toString() === lead.id.toString());
-                        const isInactive = isLeadInactive(lead, leadTasks);
+              {/* MODAL DE CONFIRMACIÓN MASIVA */}
+              {showBulkConfirmModal && bulkAppliedSummary && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+                  <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg shadow-2xl p-6 overflow-hidden animate-in zoom-in-95 duration-200">
+                    <div className="flex items-start justify-between pb-3.5 border-b border-rose-100/10">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 bg-amber-50 text-amber-600 rounded-xl">
+                          <AlertCircle className="w-5 h-5 animate-pulse" />
+                        </div>
+                        <div>
+                          <h3 className="text-slate-900 font-black text-sm uppercase tracking-wide">Confirmar Edición Masiva</h3>
+                          <p className="text-slate-500 text-[10.5px] font-medium mt-0.5">Revisa cuidadosamente los valores antes de aplicar los cambios.</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowBulkConfirmModal(false)}
+                        className="text-slate-400 hover:text-slate-600 p-1.5 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
 
-                        return (
-                          <tr key={lead.id} className={`hover:bg-indigo-50/15 transition-all text-slate-705 ${isInactive ? 'bg-rose-50/25 border-l-2 border-l-rose-500' : ''}`}>
-                            <td className="px-2 py-2 leading-tight">
+                    <div className="py-4 space-y-3.5">
+                      <div className="bg-amber-50/50 border border-amber-100/60 p-3 rounded-xl text-slate-705 text-xs leading-relaxed">
+                        Estás a punto de modificar un total de <strong className="text-amber-900 font-extrabold">{bulkAppliedSummary.count}</strong> registros seleccionados. Esta operación reemplazará los valores actuales.
+                      </div>
+
+                      <div className="bg-slate-50 border border-slate-150 rounded-xl p-3">
+                        <h5 className="text-[9px] font-black text-slate-400 uppercase tracking-widest font-mono mb-2">CAMPOS QUE SE ACTUALIZARÁN:</h5>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-left text-[8.5px] text-slate-400 font-bold uppercase">
+                              <th className="pb-1 w-[40%]">Campo de CRM</th>
+                              <th className="pb-1 w-[60%]">Nuevo Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {bulkAppliedSummary.fields.map((f, i) => (
+                              <tr key={i} className="py-1">
+                                <td className="py-1.5 font-bold text-slate-500">{f.field}</td>
+                                <td className="py-1.5 text-indigo-700 font-bold font-mono text-[11.5px]">{f.value}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div>
+                        <h5 className="text-[9px] font-black text-slate-400 uppercase tracking-widest font-mono mb-1.5">
+                          INSTITUCIONES SELECCIONADAS ({bulkAppliedSummary.count})
+                        </h5>
+                        <div className="max-h-[110px] overflow-y-auto border border-slate-150 rounded-xl p-2 bg-slate-50/30 text-[10.5px] text-slate-600 space-y-1 divide-y divide-slate-100 font-mono">
+                          {bulkAppliedSummary.leadNames.map((name, index) => (
+                            <div key={index} className="pt-1.5 first:pt-0 pb-1.5 flex items-center justify-between">
+                              <span className="font-semibold text-slate-700">
+                                {index + 1}. {name}
+                              </span>
+                              <span className="bg-amber-50 text-amber-700 text-[7.5px] font-extrabold px-1.5 rounded uppercase shrink-0">Cambiar</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => setShowBulkConfirmModal(false)}
+                        className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={executeBulkUpdate}
+                        className="px-4.5 py-2 bg-indigo-600 hover:bg-indigo-750 text-white font-black rounded-xl text-xs uppercase tracking-wider transition flex items-center gap-1.5 shadow-md shadow-indigo-600/10 hover:shadow-indigo-600/20 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Confirmar y Aplicar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedLeadIds.length > 0 && (
+                <div className="bg-indigo-50/80 border border-indigo-150 rounded-xl p-4 mb-4 animate-in fade-in slide-in-from-top-4 duration-300 shadow-sm">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-indigo-600 text-white font-black text-xs h-6 w-6 rounded-full flex items-center justify-center shadow-sm">
+                        {selectedLeadIds.length}
+                      </div>
+                      <div>
+                        <h4 className="text-slate-850 font-bold text-sm">Cambios Masivos Seleccionados</h4>
+                        <p className="text-slate-500 text-[10px] font-medium font-sans">
+                          Aplica cambios a todos los registros seleccionados en una sola acción. Deja en blanco los campos que no deseas modificar.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedLeadIds([])}
+                        className="px-2.5 py-1.5 text-slate-650 hover:text-slate-800 font-bold text-xs bg-white border border-slate-200 rounded-lg hover:shadow-sm transition cursor-pointer"
+                      >
+                        Desmarcar Todos
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Advanced inline Form Grid for quick entry */}
+                  <div className="grid grid-cols-2 lg:grid-cols-6 gap-2.5 mt-4 pt-4 border-t border-indigo-100">
+                    {/* 1. Agente Responsable */}
+                    <div>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">Agente Responsable</label>
+                      <select
+                        value={bulkUpdateForm.assignedTo}
+                        onChange={e => setBulkUpdateForm(prev => ({ ...prev, assignedTo: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-lg p-1.5 text-xs text-slate-700 outline-none focus:border-indigo-500 font-semibold shadow-inner-sm"
+                      >
+                        <option value="">-- Sin cambios --</option>
+                        <option value="Admin Global">Admin Global</option>
+                        {users.map(u => (
+                          <option key={u.id} value={u.name}>{u.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* 2. Estatus del Pipeline */}
+                    <div>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">Estatus Pipeline</label>
+                      <select
+                        value={bulkUpdateForm.status}
+                        onChange={e => setBulkUpdateForm(prev => ({ ...prev, status: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-lg p-1.5 text-xs text-slate-700 outline-none focus:border-indigo-500 font-semibold shadow-inner-sm"
+                      >
+                        <option value="">-- Sin cambios --</option>
+                        {pipelineStages.map(stage => (
+                          <option key={stage} value={stage}>{stage}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* 3. Origen */}
+                    <div>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">Origen</label>
+                      <select
+                        value={bulkUpdateForm.source}
+                        onChange={e => setBulkUpdateForm(prev => ({ ...prev, source: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-lg p-1.5 text-xs text-slate-700 outline-none focus:border-indigo-500 font-semibold shadow-inner-sm"
+                      >
+                        <option value="">-- Sin cambios --</option>
+                        <option value="Recomendación">Recomendación</option>
+                        <option value="Feria Educativa">Feria Educativa</option>
+                        <option value="Campaña Digital">Campaña Digital</option>
+                        <option value="Llamada Fría">Llamada Fría</option>
+                        <option value="LinkedIn">LinkedIn Sales</option>
+                      </select>
+                    </div>
+
+                    {/* 4. Ciudad */}
+                    <div>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">Ciudad</label>
+                      <input
+                        type="text"
+                        placeholder="Ej. Guadalajara"
+                        value={bulkUpdateForm.city}
+                        onChange={e => setBulkUpdateForm(prev => ({ ...prev, city: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-lg p-1.5 text-xs text-slate-700 outline-none focus:border-indigo-500 font-semibold shadow-inner-sm"
+                      />
+                    </div>
+
+                    {/* 5. Estado */}
+                    <div>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">Estado</label>
+                      <input
+                        type="text"
+                        placeholder="Ej. Jalisco"
+                        value={bulkUpdateForm.state}
+                        onChange={e => setBulkUpdateForm(prev => ({ ...prev, state: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-lg p-1.5 text-xs text-slate-700 outline-none focus:border-indigo-500 font-semibold shadow-inner-sm"
+                      />
+                    </div>
+
+                    {/* 6. País */}
+                    <div>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">País</label>
+                      <input
+                        type="text"
+                        placeholder="Ej. México"
+                        value={bulkUpdateForm.country}
+                        onChange={e => setBulkUpdateForm(prev => ({ ...prev, country: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-lg p-1.5 text-xs text-slate-700 outline-none focus:border-indigo-500 font-semibold shadow-inner-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 mt-4 pt-3.5 border-t border-indigo-100">
+                    <button
+                      type="button"
+                      onClick={initiateBulkUpdateConfirm}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition shadow-sm hover:shadow-indigo-600/10 cursor-pointer"
+                    >
+                      Confirmar y Aplicar Cambios
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs table-fixed">
+                    <thead className="bg-[#0f172a] text-slate-300 text-[9px] font-bold uppercase tracking-wider">
+                      <tr>
+                        <th className="px-2 py-2 text-center w-[5%]">
+                          <input
+                            type="checkbox"
+                            checked={filteredLeads.length > 0 && filteredLeads.every(l => selectedLeadIds.includes(l.id))}
+                            onChange={toggleSelectAllLeads}
+                            className="h-3.5 w-3.5 text-indigo-100 border-slate-500 bg-slate-800 rounded cursor-pointer focus:ring-indigo-500"
+                          />
+                        </th>
+                        <th className="px-2 py-2 w-[32%]">Prospecto / Cliente / Origen</th>
+                        <th className="px-2 py-2 w-[33%]">Contacto & Responsable</th>
+                        <th className="px-2 py-2 text-center w-[10%]">Estatus</th>
+                        <th className="px-2 py-2 text-right w-[10%]">Valor Estimado</th>
+                        <th className="px-2 py-2 text-center w-[10%]">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {filteredLeads.length > 0 ? (
+                        filteredLeads.map((lead) => {
+                          let badgeColor = "bg-slate-100 text-slate-600";
+                          if (lead.status === "Nuevo") badgeColor = "bg-sky-50 text-sky-700 border border-sky-100";
+                          if (lead.status === "Contactado") badgeColor = "bg-blue-50 text-blue-700 border border-blue-100";
+                          if (lead.status === "Propuesta") badgeColor = "bg-amber-50 text-amber-700 border border-amber-100";
+                          if (lead.status === "Negociación") badgeColor = "bg-indigo-50 text-indigo-700 border border-indigo-100";
+                          if (lead.status === "Ganado") badgeColor = "bg-emerald-50 text-emerald-700 border border-emerald-100";
+                          if (lead.status === "Perdido") badgeColor = "bg-rose-50 text-rose-700 border border-rose-100";
+
+                          const leadTasks = tasks.filter(t => t.leadId?.toString() === lead.id.toString());
+                          const isInactive = isLeadInactive(lead, leadTasks);
+
+                          return (
+                            <tr key={lead.id} className={`hover:bg-indigo-50/15 transition-all text-slate-705 ${isInactive ? 'bg-rose-50/25 border-l-2 border-l-rose-500' : ''}`}>
+                              <td className="px-2 py-2 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedLeadIds.includes(lead.id)}
+                                  onChange={() => toggleSelectLead(lead.id)}
+                                  className="h-3.5 w-3.5 text-indigo-600 border-slate-300 rounded cursor-pointer focus:ring-indigo-500"
+                                />
+                              </td>
+                              <td className="px-2 py-2 leading-tight">
                               <div className="space-y-0.5 max-w-full overflow-hidden">
                                 <div className="flex items-center gap-1 flex-wrap">
                                   <button
@@ -1436,7 +1816,7 @@ export function CRM() {
                       })
                     ) : (
                       <tr>
-                        <td colSpan={5} className="text-center py-12 text-slate-400 font-medium italic">
+                        <td colSpan={6} className="text-center py-12 text-slate-400 font-medium italic">
                           No se encontraron prospectos que coincidan con los filtros seleccionados.
                         </td>
                       </tr>
@@ -1445,6 +1825,7 @@ export function CRM() {
                 </table>
               </div>
             </div>
+            </>
           )}
 
           {/* TAB 3: CSV IMPORT MASIVO */}

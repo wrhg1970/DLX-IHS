@@ -459,6 +459,7 @@ interface AppContextType {
   updateInstitution: (id: number, data: Partial<Institution>) => void;
   deleteInstitution: (id: number) => void;
   clearAllInstitutions: () => void;
+  clearAllClasses: () => void;
   addStudent: (student: Omit<Student, "id">) => void;
   updateStudent: (id: number | number[], data: Partial<Student>) => void;
   deleteStudent: (id: number) => void;
@@ -1438,6 +1439,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addActivity({ institutionId: 0, date: new Date().toISOString(), description: `Se eliminaron todas las instituciones de la base de datos.` });
   };
 
+  const clearAllClasses = () => {
+    setClasses([]);
+    setEnrollments([]);
+    addActivity({ institutionId: 0, date: new Date().toISOString(), description: `Se eliminaron todas las clases y créditos académicos de la base de datos.` });
+  };
+
   const addStudent = (student: Omit<Student, "id">) => {
     setStudents(prev => [...prev, { ...student, id: Date.now() + Math.floor(Math.random() * 100000) }]);
   };
@@ -1670,7 +1677,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       financeCategories, addFinanceCategory, updateFinanceCategory, deleteFinanceCategory,
       financialTransactions, addFinancialTransaction, updateFinancialTransaction, deleteFinancialTransaction,
       accountStatements, statementTransactions, addAccountStatement, deleteAccountStatement, updateStatementTransaction, deleteStatementTransaction,
-      addInstitution, updateInstitution, deleteInstitution, clearAllInstitutions, addStudent, updateStudent, deleteStudent, addClass, updateClass, deleteClass, addProvider, updateProvider, addBankAccount, updateBankAccount, addPayment, updatePayment, deletePayment, addEnrollment, updateEnrollment, deleteEnrollment,
+      addInstitution, updateInstitution, deleteInstitution, clearAllInstitutions, clearAllClasses, addStudent, updateStudent, deleteStudent, addClass, updateClass, deleteClass, addProvider, updateProvider, addBankAccount, updateBankAccount, addPayment, updatePayment, deletePayment, addEnrollment, updateEnrollment, deleteEnrollment,
       addContact, updateContact, deleteContact, addTask, updateTask, deleteTask, addActivity, addCatalogItem, updateCatalogItem, deleteCatalogItem, addUser, updateUser, deleteUser
     }}>
       {children}

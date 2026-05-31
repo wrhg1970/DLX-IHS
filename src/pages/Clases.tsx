@@ -5,10 +5,12 @@ import { Modal } from "../components/ui/Modal";
 import { useNavigate } from "react-router-dom";
 
 export function Clases() {
-  const { classes, addClass, updateClass, deleteClass, providers, enrollments, providerProductServices, currentUser } = useAppContext();
+  const { classes, addClass, updateClass, deleteClass, clearAllClasses, providers, enrollments, providerProductServices, currentUser } = useAppContext();
   const navigate = useNavigate();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [classToDelete, setClassToDelete] = useState<{ id: number; name: string; numEnrolled: number } | null>(null);
+  const [showClearAllModal, setShowClearAllModal] = useState(false);
+  const [confirmClearText, setConfirmClearText] = useState("");
   
   // View mode state (default to list mode as requested)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
@@ -268,6 +270,15 @@ export function Clases() {
               <LayoutGrid className="w-4 h-4" />
             </button>
           </div>
+
+          {isSuperAdmin && (
+            <button 
+              onClick={() => setShowClearAllModal(true)}
+              className="bg-rose-50 text-rose-700 border border-rose-200 px-4 py-2 rounded-lg text-xs font-extrabold shadow-sm hover:bg-rose-100 transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4 text-rose-500" /> Borrar Todo
+            </button>
+          )}
 
           <button 
             onClick={handleOpenNewModal}
@@ -657,6 +668,78 @@ export function Clases() {
                 className="px-4 py-2 text-xs font-bold text-white bg-rose-600 rounded-lg hover:bg-rose-700 transition-colors uppercase tracking-wider"
               >
                 Eliminar Clase
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Clear All Confirmation Modal */}
+      {showClearAllModal && (
+        <Modal 
+          isOpen={true} 
+          onClose={() => {
+            setShowClearAllModal(false);
+            setConfirmClearText("");
+          }} 
+          title="⚠️ ATENCIÓN: BORRAR TODAS LAS CLASES Y CRÉDITOS"
+        >
+          <div className="space-y-4">
+            <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-4 text-xs leading-relaxed space-y-2">
+              <p className="font-extrabold text-sm flex items-center gap-1.5 uppercase text-rose-700">
+                🚨 Acción Crítica y Destructiva 🚨
+              </p>
+              <p>
+                Estás a punto de eliminar <strong>TODAS las clases</strong> del catálogo y <strong>TODOS sus correspondientes créditos académicos, tarifas e inscripciones asociadas</strong> del sistema.
+              </p>
+              <p className="font-semibold">
+                Esta acción NO se puede deshacer y afectará la información de los alumnos inscritos.
+              </p>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 space-y-1.5">
+              <p className="font-bold text-slate-800 uppercase tracking-widest text-[9px] font-mono">Resumen de registros a vaciar:</p>
+              <ul className="list-disc list-inside space-y-1 font-mono text-[10.5px]">
+                <li>Clases registradas: <strong className="text-slate-950 font-bold">{classes.length}</strong></li>
+                <li>Inscripciones de Alumnos: <strong className="text-slate-950 font-bold">{enrollments.length}</strong></li>
+              </ul>
+            </div>
+
+            <p className="text-xs text-slate-500 italic">
+              Por favor, escribe <strong className="font-bold text-rose-600 select-none font-mono">"ELIMINAR TODO"</strong> a continuación para confirmar que realmente deseas proceder con el borrado completo.
+            </p>
+
+            <input
+              type="text"
+              placeholder="Escribe ELIMINAR TODO para confirmar"
+              value={confirmClearText}
+              onChange={(e) => setConfirmClearText(e.target.value)}
+              className="w-full border border-rose-300 rounded p-2 text-sm focus:ring-2 focus:ring-rose-500 outline-none text-rose-900 font-bold font-mono placeholder:font-sans placeholder:font-normal placeholder:text-slate-400"
+            />
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowClearAllModal(false);
+                  setConfirmClearText("");
+                }}
+                className="px-4 py-2 text-xs font-bold text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors uppercase tracking-wider"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={confirmClearText !== "ELIMINAR TODO"}
+                onClick={() => {
+                  clearAllClasses();
+                  setShowClearAllModal(false);
+                  setConfirmClearText("");
+                  alert("Se han eliminado todas las clases, créditos académicos e inscripciones de manera exitosa.");
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 rounded-lg hover:bg-rose-700 transition-colors uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg disabled:hover:shadow-none font-sans"
+              >
+                Sí, Borrar Todo Permanentemente
               </button>
             </div>
           </div>
