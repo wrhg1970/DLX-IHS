@@ -20,7 +20,7 @@ import {
 
 export function Login() {
   const { users, students, contacts, setCurrentUser, updateUser } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'otp' | 'password' | 'google'>('otp');
+  const [activeTab, setActiveTab] = useState<'otp' | 'password' | 'google'>('google');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [forceChangePasswordMode, setForceChangePasswordMode] = useState(false);
@@ -507,6 +507,24 @@ export function Login() {
                 <button
                   type="button"
                   onClick={() => {
+                    setActiveTab('google');
+                    setError('');
+                    setSuccess('');
+                  }}
+                  className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 min-w-[90px] ${
+                    activeTab === 'google'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
+                    <path d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.5 1.62l2.437-2.437C17.312 1.696 14.933 1 12.24 1 6.58 1 2 5.58 2 11.24s4.58 10.24 10.24 10.24c5.795 0 10.254-4.074 10.254-10.24 0-.695-.08-1.355-.22-1.955H12.24z" />
+                  </svg>
+                  Google / Demo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setActiveTab('otp');
                     setError('');
                     setSuccess('');
@@ -535,24 +553,6 @@ export function Login() {
                 >
                   <Key className="w-3.5 h-3.5" />
                   Contraseña
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('google');
-                    setError('');
-                    setSuccess('');
-                  }}
-                  className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 min-w-[90px] ${
-                    activeTab === 'google'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-900'
-                  }`}
-                >
-                  <svg className="w-3 h-3 fill-current" viewBox="0 0 24 24">
-                    <path d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.5 1.62l2.437-2.437C17.312 1.696 14.933 1 12.24 1 6.58 1 2 5.58 2 11.24s4.58 10.24 10.24 10.24c5.795 0 10.254-4.074 10.254-10.24 0-.695-.08-1.355-.22-1.955H12.24z" />
-                  </svg>
-                  Google / Demo
                 </button>
               </div>
 

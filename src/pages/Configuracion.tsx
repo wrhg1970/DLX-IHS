@@ -217,6 +217,54 @@ export function Configuracion() {
     }
   ]);
 
+  const [smtpConfig, setSmtpConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem("smtp_credentials");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error(e);
+    }
+    return {
+      host: "smtp.gmail.com",
+      port: "587",
+      user: "ejemplo@gmail.com",
+      pass: "",
+      fromEmail: "ejemplo@gmail.com",
+      fromName: "Instituto de Humanidades y Ciencias"
+    };
+  });
+
+  const [testEmail, setTestEmail] = useState("");
+  const [isTestingSmtp, setIsTestingSmtp] = useState(false);
+
+  const sendRealNotificationEmail = async (toEmail: string, toName: string, subject: string, body: string) => {
+    try {
+      const res = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          smtpHost: smtpConfig.host,
+          smtpPort: smtpConfig.port,
+          smtpUser: smtpConfig.user,
+          smtpPass: smtpConfig.pass,
+          smtpFromEmail: smtpConfig.fromEmail,
+          smtpFromName: smtpConfig.fromName,
+          to: toEmail,
+          subject: subject,
+          body: body
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Error de red");
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error("Real email dispatch error: ", err);
+      return { success: false, error: err.message };
+    }
+  };
+
   const handleCompanySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     updateCompanyInfo(companyForm);
@@ -1853,14 +1901,151 @@ export function Configuracion() {
               {/* Contenido según Selección */}
               <div className="p-6 flex-1">
                 {notifSubtab === "config" && (
-                  <div className="space-y-6">
-                    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-xs text-blue-800 flex items-start gap-3">
-                      <Sparkles className="w-5 h-5 text-blue-500 shrink-0 mt-0.5 animate-pulse" />
+                  <div className="space-y-6 animate-in fade-in duration-300">
+                    <div className="bg-indigo-50 border border-indigo-150 rounded-2xl p-4 text-xs text-indigo-900 flex items-start gap-3">
+                      <Sparkles className="w-5 h-5 text-indigo-500 shrink-0 mt-0.5 animate-pulse" />
                       <div>
                         <p className="font-bold mb-1">Automatización Inteligente de Cobranza</p>
                         <p className="leading-relaxed opacity-90">
-                          Las notificaciones se programan para enviarse de forma automática vía Correo Electrónico y Push de la App. Utiliza las variables dinámicas en las plantillas para personalizar cada mensaje con los datos reales de facturación de cada destinatario.
+                          Las notificaciones se programan para enviarse de forma automática vía Correo Electrónico y Push de la App. Utiliza las variables dinámicas en las plantillas para personalizar cada de mensaje con los datos reales de facturación de cada destinatario.
                         </p>
+                      </div>
+                    </div>
+
+                    {/* Tarjeta de Configuración de Credenciales de Correo (SMTP) */}
+                    <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+                      <div className="flex items-center gap-2.5 mb-2.5">
+                        <div className="p-1.5 bg-indigo-50 rounded-lg text-indigo-600">
+                          <Send className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-slate-800 text-sm">Controles de Envío y Credenciales de Correo (SMTP)</h3>
+                          <p className="text-[10px] text-slate-500">Configura de forma persistente tu proveedor de correos para despachar los recordatorios de pago.</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Servidor SMTP (Host)</label>
+                          <input
+                            type="text"
+                            placeholder="smtp.example.com"
+                            value={smtpConfig.host}
+                            onChange={(e) => setSmtpConfig({ ...smtpConfig, host: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Puerto</label>
+                          <input
+                            type="text"
+                            placeholder="587"
+                            value={smtpConfig.port}
+                            onChange={(e) => setSmtpConfig({ ...smtpConfig, port: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre Remitente</label>
+                          <input
+                            type="text"
+                            placeholder="IHS Notificaciones"
+                            value={smtpConfig.fromName}
+                            onChange={(e) => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Correo Remitente</label>
+                          <input
+                            type="email"
+                            placeholder="colegio@dominio.com"
+                            value={smtpConfig.fromEmail}
+                            onChange={(e) => setSmtpConfig({ ...smtpConfig, fromEmail: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario SMTP</label>
+                          <input
+                            type="text"
+                            placeholder="colegio@dominio.com"
+                            value={smtpConfig.user}
+                            onChange={(e) => setSmtpConfig({ ...smtpConfig, user: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña / Token</label>
+                          <input
+                            type="password"
+                            placeholder="Contraseña del servidor de correo"
+                            value={smtpConfig.pass}
+                            onChange={(e) => setSmtpConfig({ ...smtpConfig, pass: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-4 mt-6 pt-4 border-t border-slate-100">
+                        <div className="flex items-center gap-2 max-w-md">
+                          <input
+                            type="email"
+                            placeholder="correo-prueba@ejemplo.com"
+                            value={testEmail}
+                            onChange={(e) => setTestEmail(e.target.value)}
+                            className="px-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 text-slate-800 w-48 font-sans"
+                          />
+                          <button
+                            type="button"
+                            disabled={isTestingSmtp}
+                            onClick={async () => {
+                              if (!testEmail.trim()) {
+                                triggerToast("Ingresa un correo de prueba.");
+                                return;
+                              }
+                              setIsTestingSmtp(true);
+                              try {
+                                const res = await fetch("/api/send-email", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    smtpHost: smtpConfig.host,
+                                    smtpPort: smtpConfig.port,
+                                    smtpUser: smtpConfig.user,
+                                    smtpPass: smtpConfig.pass,
+                                    smtpFromEmail: smtpConfig.fromEmail,
+                                    smtpFromName: smtpConfig.fromName,
+                                    to: testEmail,
+                                    subject: "Prueba de Servidor de Correo SMTP - Sistema IHS",
+                                    body: "Este es un correo electrónico de prueba enviado para verificar la correcta integración de tus credenciales de correo (SMTP) en el sistema. ¡Felicidades, la configuración funciona perfectamente!"
+                                  })
+                                });
+                                const data = await res.json();
+                                if (!res.ok) throw new Error(data.error || "Error de red");
+                                triggerToast("¡Correo de prueba despachado con éxito!");
+                              } catch (err: any) {
+                                alert("Error al enviar prueba: " + err.message);
+                              } finally {
+                                setIsTestingSmtp(false);
+                              }
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 transition-all cursor-pointer disabled:opacity-50"
+                          >
+                            {isTestingSmtp ? "Enviando..." : "Enviar Correo de Prueba"}
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            localStorage.setItem("smtp_credentials", JSON.stringify(smtpConfig));
+                            triggerToast("¡Credenciales de SMTP guardadas exitosamente!");
+                          }}
+                          className="px-4 py-1.5 bg-indigo-650 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer bg-indigo-600"
+                        >
+                          Guardar Credenciales
+                        </button>
                       </div>
                     </div>
 
@@ -2060,6 +2245,17 @@ export function Configuracion() {
                                     );
                                     
                                     if(confirmSend) {
+                                      const actualStudentObj = students.find(s => s.id === (students[0]?.id || 0)) || students[0];
+                                      const emailTarget = actualStudentObj?.email || "colegio-prueba@ejemplo.com";
+                                      
+                                      sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
+                                        if (res.success) {
+                                          triggerToast("¡Recordatorio preventivo enviado vía SMTP real con éxito!");
+                                        } else {
+                                          triggerToast("¡Recordatorio registrado en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                        }
+                                      });
+
                                       addActivity({
                                         date: new Date().toISOString(),
                                         description: `Recordatorio preventivo enviado por correo a Alumno: ${studentName} por ${amount}.`
@@ -2079,8 +2275,6 @@ export function Configuracion() {
                                         },
                                         ...notifHistory
                                       ]);
-                                      
-                                      triggerToast("¡Recordatorio preventivo de Alumno despachado!");
                                     }
                                   }}
                                   className="px-3.5 py-1.5 bg-indigo-600 font-bold text-white rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-1 ml-auto text-[11px]"
@@ -2158,6 +2352,16 @@ export function Configuracion() {
                                       );
                                       
                                       if(confirmSend) {
+                                        const emailTarget = students[1]?.email || "colegio-prueba@ejemplo.com";
+                                        
+                                        sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
+                                          if (res.success) {
+                                            triggerToast("¡Reclamación de Alumno enviada vía SMTP real con éxito!");
+                                          } else {
+                                            triggerToast("¡Reclamación registrada en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                          }
+                                        });
+
                                         addActivity({
                                           date: new Date().toISOString(),
                                           description: `Notificación de adeudo atrasado despachada a Alumno: ${studentName} por ${amount}.`
@@ -2177,8 +2381,6 @@ export function Configuracion() {
                                           },
                                           ...notifHistory
                                         ]);
-                                        
-                                        triggerToast("¡Reclamación de Alumno despachada con éxito!");
                                       }
                                     }}
                                     className="px-3.5 py-1.5 bg-rose-600 font-bold text-white rounded-lg hover:bg-rose-750 transition flex items-center justify-center gap-1 ml-auto text-[11px]"
@@ -2233,6 +2435,16 @@ export function Configuracion() {
                                         );
                                         
                                         if(confirmSend) {
+                                          const emailTarget = (inst as any).email || "coordinador@ejemplo.com";
+                                          
+                                          sendRealNotificationEmail(emailTarget, inst.name, subject, body).then((res) => {
+                                            if (res.success) {
+                                              triggerToast("¡Reclamación de Institución enviada vía SMTP real con éxito!");
+                                            } else {
+                                              triggerToast("¡Reclamación registrada en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                            }
+                                          });
+
                                           addActivity({
                                             institutionId: inst.id,
                                             date: new Date().toISOString(),
@@ -2253,9 +2465,6 @@ export function Configuracion() {
                                             },
                                             ...notifHistory
                                           ]);
-                                          
-                                          // Update status dynamically locally so user visualizes the change
-                                          triggerToast("¡Reclamación de Institución enviada por Correo!");
                                         }
                                       }}
                                       className="px-3.5 py-1.5 bg-rose-600 font-bold text-white rounded-lg hover:bg-rose-750 transition flex items-center justify-center gap-1 ml-auto text-[11px]"

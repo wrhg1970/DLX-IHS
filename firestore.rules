@@ -32,7 +32,7 @@ service cloud.firestore {
     }
 
     function isValidStudent(data) {
-      return data.firstName is string && data.firstName.size() > 0 && data.firstName.size() <= 150;
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
     }
 
     function isValidClass(data) {
@@ -40,7 +40,7 @@ service cloud.firestore {
     }
 
     function isValidEnrollment(data) {
-      return data.studentId is string && data.classId is string;
+      return data.studentId is number && data.classId is number;
     }
 
     function isValidPayment(data) {
@@ -48,7 +48,7 @@ service cloud.firestore {
     }
 
     function isValidProvider(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+      return data.legalName is string && data.legalName.size() > 0 && data.legalName.size() <= 200;
     }
 
     // Additional validations

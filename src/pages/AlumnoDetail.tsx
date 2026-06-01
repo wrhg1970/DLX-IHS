@@ -2482,34 +2482,41 @@ export function AlumnoDetail() {
                 {activities.filter((a) => a.studentId === student.id).length >
                 0 ? (
                   <div className="relative border-l border-slate-200 ml-4 pl-6 space-y-4">
-                    {activities
-                      .filter((a) => a.studentId === student.id)
-                      .slice()
-                      .reverse() // Newest first
-                      .map((act) => (
-                        <div
-                          key={act.id}
-                          className="relative animate-in slide-in-from-left-4 duration-300"
-                        >
-                          {/* Circle indicator bullet */}
-                          <span className="absolute -left-[30px] top-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-white border-2 border-indigo-500 text-indigo-600 shadow-sm">
-                            <Clock className="w-2 h-2" />
-                          </span>
-                          <div className="bg-white border border-slate-150 rounded-xl p-4 shadow-sm hover:border-indigo-100 hover:shadow-md transition">
-                            <div className="flex justify-between items-center mb-1.5">
-                              <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
-                                {act.userName || "Sistema"}
-                              </span>
-                              <span className="text-[10px] font-mono text-slate-400 font-semibold">
-                                {act.date}
-                              </span>
+                    <AnimatePresence initial={false}>
+                      {activities
+                        .filter((a) => a.studentId === student.id)
+                        .slice()
+                        .reverse() // Newest first
+                        .map((act) => (
+                          <motion.div
+                            key={act.id}
+                            initial={{ opacity: 0, x: -30 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            transition={{ type: "spring", stiffness: 350, damping: 26 }}
+                            layout
+                            className="relative"
+                          >
+                            {/* Circle indicator bullet */}
+                            <span className="absolute -left-[30px] top-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-white border-2 border-indigo-500 text-indigo-600 shadow-sm animate-pulse-once">
+                              <Clock className="w-2 h-2" />
+                            </span>
+                            <div className="bg-white border border-slate-150 rounded-xl p-4 shadow-sm hover:border-indigo-100 hover:shadow-md transition">
+                              <div className="flex justify-between items-center mb-1.5">
+                                <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
+                                  {act.userName || "Sistema"}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400 font-semibold">
+                                  {act.date}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap font-sans">
+                                {act.description}
+                              </p>
                             </div>
-                            <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap font-sans">
-                              {act.description}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
+                          </motion.div>
+                        ))}
+                    </AnimatePresence>
                   </div>
                 ) : (
                   <div className="py-16 border-2 border-dashed border-slate-200 rounded-xl text-center bg-slate-50/50 flex flex-col items-center justify-center">
@@ -2551,34 +2558,41 @@ export function AlumnoDetail() {
                 {activities.filter((a) => a.studentId === student.id).length >
                 0 ? (
                   <div className="relative border-l border-slate-200 ml-4 pl-6 space-y-4">
-                    {activities
-                      .filter((a) => a.studentId === student.id)
-                      .slice()
-                      .reverse() // Newest first
-                      .map((act) => (
-                        <div
-                          key={act.id}
-                          className="relative animate-in slide-in-from-left-4 duration-300"
-                        >
-                          {/* Circle indicator bullet */}
-                          <span className="absolute -left-[30px] top-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-slate-50 border-2 border-slate-305 text-slate-400 shadow-sm">
-                            <Clock className="w-2 h-2" />
-                          </span>
-                          <div className="bg-slate-50/50 border border-slate-100 rounded-xl p-4 shadow-sm">
-                            <div className="flex justify-between items-center mb-1.5">
-                              <span className="text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-150 px-2 py-0.5 rounded-md">
-                                {act.userName || "Sistema"}
-                              </span>
-                              <span className="text-[10px] font-mono text-slate-400 font-semibold">
-                                {act.date}
-                              </span>
+                    <AnimatePresence initial={false}>
+                      {activities
+                        .filter((a) => a.studentId === student.id)
+                        .slice()
+                        .reverse() // Newest first
+                        .map((act) => (
+                          <motion.div
+                            key={act.id}
+                            initial={{ opacity: 0, x: -30 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            transition={{ type: "spring", stiffness: 350, damping: 26 }}
+                            layout
+                            className="relative"
+                          >
+                            {/* Circle indicator bullet */}
+                            <span className="absolute -left-[30px] top-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-slate-50 border-2 border-slate-305 text-slate-400 shadow-sm animate-pulse-once">
+                              <Clock className="w-2 h-2" />
+                            </span>
+                            <div className="bg-slate-50/50 border border-slate-100 rounded-xl p-4 shadow-sm">
+                              <div className="flex justify-between items-center mb-1.5">
+                                <span className="text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-150 px-2 py-0.5 rounded-md">
+                                  {act.userName || "Sistema"}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400 font-semibold">
+                                  {act.date}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap font-sans">
+                                {act.description}
+                              </p>
                             </div>
-                            <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap font-sans">
-                              {act.description}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
+                          </motion.div>
+                        ))}
+                    </AnimatePresence>
                   </div>
                 ) : (
                   <div className="py-16 border-2 border-dashed border-slate-200 rounded-xl text-center bg-slate-50/50 flex flex-col items-center justify-center">
