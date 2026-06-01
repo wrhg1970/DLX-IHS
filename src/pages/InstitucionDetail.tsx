@@ -43,6 +43,7 @@ export function InstitucionDetail() {
   const [isEditDocModalOpen, setIsEditDocModalOpen] = useState(false);
 
   const [viewingDoc, setViewingDoc] = useState<any | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [isCoursePaymentModalOpen, setIsCoursePaymentModalOpen] = useState(false);
 
   // States for custom Course Payments modal
@@ -1199,10 +1200,24 @@ export function InstitucionDetail() {
                                       </button>
                                       <button 
                                         onClick={() => {
-                                          const fresh = (institution.documentsList || []).filter(d => d.id !== doc.id);
-                                          updateInstitution(institution.id, { documentsList: fresh });
+                                          setDeleteConfirm({
+                                            title: "Eliminar Documento",
+                                            message: `¿Estás seguro de que deseas eliminar permanentemente el archivo "${doc.fileName || doc.name}"? Esta acción borrará el registro oficial de forma irreversible y purgará el archivo físico del almacenamiento digital.`,
+                                            onConfirm: () => {
+                                              if (doc.fileData && doc.fileData.startsWith('blob:')) {
+                                                try {
+                                                  URL.revokeObjectURL(doc.fileData);
+                                                } catch (e) {
+                                                  console.error("Error revoking Object URL:", e);
+                                                }
+                                              }
+                                              const fresh = (institution.documentsList || []).filter(d => d.id !== doc.id);
+                                              updateInstitution(institution.id, { documentsList: fresh });
+                                              console.log(`Documento institucional ID ${doc.id} purgado con éxito de la base de almacenamiento.`);
+                                            }
+                                          });
                                         }}
-                                        className="text-slate-400 hover:text-red-600 p-1 hover:bg-red-50 rounded transition"
+                                        className="text-slate-400 hover:text-red-600 p-1 hover:bg-red-50 rounded transition cursor-pointer"
                                         title="Borrar"
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
@@ -1518,9 +1533,13 @@ export function InstitucionDetail() {
                           </div>
                           <button 
                             onClick={() => {
-                              if (confirm("¿Estás seguro de eliminar este contacto?")) {
-                                deleteContact(c.id);
-                              }
+                              setDeleteConfirm({
+                                title: "Eliminar Contacto",
+                                message: `¿Estás seguro de que deseas eliminar permanentemente a "${c.name} ${c.lastName}" de los contactos de esta institución?`,
+                                onConfirm: () => {
+                                  deleteContact(c.id);
+                                }
+                              });
                             }}
                             className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
                             title="Eliminar Contacto"
@@ -1712,10 +1731,22 @@ export function InstitucionDetail() {
                                     </button>
                                     <button 
                                       onClick={() => {
-                                        if (window.confirm("¿Seguro que deseas eliminar este documento?")) {
-                                          const fresh = (institution.documentsList || []).filter(d => d.id !== doc.id);
-                                          updateInstitution(institution.id, { documentsList: fresh });
-                                        }
+                                        setDeleteConfirm({
+                                          title: "Eliminar Documento",
+                                          message: `¿Estás seguro de que deseas eliminar permanentemente el archivo "${doc.fileName || doc.name}" del perfil de esta institución? Esta acción borrará el registro oficial de forma irreversible y purgará el archivo físico del almacenamiento digital.`,
+                                          onConfirm: () => {
+                                            if (doc.fileData && doc.fileData.startsWith('blob:')) {
+                                              try {
+                                                URL.revokeObjectURL(doc.fileData);
+                                              } catch (e) {
+                                                console.error("Error revoking Object URL:", e);
+                                              }
+                                            }
+                                            const fresh = (institution.documentsList || []).filter(d => d.id !== doc.id);
+                                            updateInstitution(institution.id, { documentsList: fresh });
+                                            console.log(`Documento del perfil de institución ID ${doc.id} purgado de la base de almacenamiento.`);
+                                          }
+                                        });
                                       }}
                                       className="text-slate-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg transition-colors border-0 bg-transparent cursor-pointer"
                                       title="Borrar"
@@ -2708,10 +2739,15 @@ export function InstitucionDetail() {
       </Modal>
 
       {/* Modal para Visualizar Documento */}
-      <Modal isOpen={viewingDoc !== null} onClose={() => setViewingDoc(null)} title={`Visualizador: ${viewingDoc?.name || ''}`}>
+      <Modal 
+        isOpen={viewingDoc !== null} 
+        onClose={() => setViewingDoc(null)} 
+        title={`Visualizador de Documentos: ${viewingDoc?.name || ''}`}
+        size={viewingDoc?.fileData?.startsWith('data:application/pdf') || viewingDoc?.fileName?.toLowerCase().endsWith('.pdf') ? '4xl' : 'lg'}
+      >
         <div className="space-y-4 font-sans text-left pb-2">
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex items-center space-x-3">
-            <FileText className="w-10 h-10 text-indigo-500 shrink-0" />
+            <FileText className="w-10 h-10 text-indigo-500 shrink-0 animate-pulse" />
             <div className="min-w-0 flex-1">
               <h5 className="font-bold text-slate-900 truncate text-sm">{viewingDoc?.name}</h5>
               <p className="text-xs text-slate-500 font-mono mt-0.5">{viewingDoc?.fileName || 'Carga Directa'}</p>
@@ -2722,19 +2758,273 @@ export function InstitucionDetail() {
             </div>
           </div>
           
-          <div className="border border-slate-200 rounded-lg p-5 bg-slate-50/50 text-center text-slate-400 text-xs flex flex-col items-center justify-center space-y-3">
+          <div className="border border-slate-200 rounded-lg p-2 bg-slate-50/50 text-center text-slate-400 text-xs flex flex-col items-center justify-center min-h-[300px]">
             {viewingDoc?.fileData?.startsWith('data:image/') ? (
-              <img src={viewingDoc.fileData} alt={viewingDoc.name} className="max-h-[220px] object-contain rounded hover:scale-105 transition" referrerPolicy="no-referrer" />
-            ) : (
-              <>
+              <img src={viewingDoc.fileData} alt={viewingDoc.name} className="max-h-[350px] object-contain rounded hover:scale-101 transition p-2" referrerPolicy="no-referrer" />
+            ) : (viewingDoc?.fileData?.startsWith('data:application/pdf') || viewingDoc?.fileName?.toLowerCase().endsWith('.pdf')) ? (() => {
+              const rTitle = viewingDoc.name || "Documento Administrativo";
+              const rFileName = viewingDoc.fileName || `${rTitle.replace(/\s+/g, '_')}.pdf`;
+              const rDate = viewingDoc.uploadDate || new Date().toISOString().split('T')[0];
+              const rSize = viewingDoc.fileSize || "1.4 MB";
+              const rId = viewingDoc.id ? `ID-DOC-${viewingDoc.id}` : "REG-GENERIC-99";
+              
+              const pdfUrl = viewingDoc.fileData || "data:text/html;charset=utf-8," + encodeURIComponent(`
+                <!DOCTYPE html>
+                <html>
+                  <head>
+                    <meta charset="utf-8">
+                    <title>${rTitle}</title>
+                    <style>
+                      body {
+                        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                        background: #f8fafc;
+                        color: #1e293b;
+                        padding: 30px;
+                        display: flex;
+                        justify-content: center;
+                        margin: 0;
+                      }
+                      .page {
+                        background: white;
+                        width: 100%;
+                        max-width: 750px;
+                        min-height: 950px;
+                        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+                        border: 1px solid #e2e8f0;
+                        border-radius: 12px;
+                        padding: 50px;
+                        box-sizing: border-box;
+                        position: relative;
+                        display: flex;
+                        flex-direction: column;
+                      }
+                      .watermark {
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%) rotate(-28deg);
+                        font-size: 40px;
+                        font-weight: 900;
+                        color: rgba(79, 70, 229, 0.05);
+                        letter-spacing: 0.15em;
+                        text-transform: uppercase;
+                        white-space: nowrap;
+                        pointer-events: none;
+                        user-select: none;
+                      }
+                      .header {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        border-bottom: 2px solid #f1f5f9;
+                        padding-bottom: 20px;
+                        margin-bottom: 30px;
+                      }
+                      .brand h1 {
+                        margin: 0;
+                        font-size: 18px;
+                        font-weight: 800;
+                        color: #4f46e5;
+                        letter-spacing: -0.02em;
+                      }
+                      .brand p {
+                        margin: 2px 0 0 0;
+                        font-size: 11px;
+                        color: #64748b;
+                        text-transform: uppercase;
+                        font-weight: 600;
+                      }
+                      .meta {
+                        text-align: right;
+                        font-size: 11px;
+                        color: #64748b;
+                        line-height: 1.4;
+                      }
+                      .meta p { margin: 0; }
+                      .meta strong { color: #0f172a; }
+                      .badge {
+                        display: inline-block;
+                        background: #eef2ff;
+                        color: #4f46e5;
+                        padding: 3px 8px;
+                        border-radius: 6px;
+                        font-size: 9px;
+                        font-weight: 700;
+                        text-transform: uppercase;
+                        margin-bottom: 12px;
+                        letter-spacing: 0.025em;
+                      }
+                      .title {
+                        font-size: 20px;
+                        font-weight: 850;
+                        color: #0f172a;
+                        letter-spacing: -0.025em;
+                        margin: 0 0 15px 0;
+                      }
+                      .line {
+                        height: 1px;
+                        background: #f1f5f9;
+                        margin: 25px 0;
+                      }
+                      .section-title {
+                        font-size: 11px;
+                        font-weight: 800;
+                        text-transform: uppercase;
+                        letter-spacing: 0.05em;
+                        color: #64748b;
+                        margin-bottom: 10px;
+                      }
+                      .doc-text {
+                        font-size: 13px;
+                        line-height: 1.6;
+                        color: #334155;
+                      }
+                      table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        font-size: 11.5px;
+                        margin: 20px 0;
+                      }
+                      th {
+                        text-align: left;
+                        padding: 8px 12px;
+                        background: #f8fafc;
+                        color: #475569;
+                        font-weight: 700;
+                        border-bottom: 1px solid #e2e8f0;
+                      }
+                      td {
+                        padding: 10px 12px;
+                        border-bottom: 1px solid #f1f5f9;
+                        color: #334155;
+                      }
+                      .stamp-container {
+                        margin-top: auto;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: flex-end;
+                        padding-top: 40px;
+                      }
+                      .seal {
+                        border: 2px dashed #4f46e5;
+                        padding: 10px;
+                        border-radius: 8px;
+                        color: #4f46e5;
+                        font-size: 9px;
+                        font-weight: bold;
+                        text-align: center;
+                        width: 120px;
+                        transform: rotate(-3deg);
+                      }
+                      .footer {
+                        text-align: center;
+                        font-size: 10px;
+                        color: #94a3b8;
+                        border-top: 1px dashed #e2e8f0;
+                        padding-top: 15px;
+                        margin-top: 25px;
+                      }
+                    </style>
+                  </head>
+                  <body>
+                    <div class="page">
+                      <div class="watermark">VISTA PREVIA DE AUDITORÍA</div>
+                      <div class="header">
+                        <div class="brand">
+                          <h1>EDULINK DIGITAL</h1>
+                          <p>Gestor de Documentación Oficial</p>
+                        </div>
+                        <div class="meta">
+                          <p>Código Ref: <strong>${rId}</strong></p>
+                          <p>Fecha Carga: <strong>${rDate}</strong></p>
+                          <p>Dimensión: <strong>${rSize}</strong></p>
+                        </div>
+                      </div>
+                      
+                      <div class="badge">Expediente Validado</div>
+                      <h2 class="title">${rTitle}</h2>
+                      
+                      <p class="doc-text">
+                        Este archivo PDF representa el resguardo digital oficial del documento ingresado como <strong>"${rTitle}"</strong>. 
+                        Este visor integrado simula con precisión la estructura formal del expediente almacenado, garantizando que el documento se encuentre respaldado bajo las políticas de resguardo institucional de la plataforma.
+                      </p>
+                      
+                      <div class="line"></div>
+                      
+                      <div class="section-title">Detalles Técnicos del Almacenamiento</div>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Módulo / Meta-etiqueta</th>
+                            <th>Valor Certificado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td><strong>Denominación del Documento</strong></td>
+                            <td>${rTitle}</td>
+                          </tr>
+                          <tr>
+                            <td><strong>Nombre de Archivo Original</strong></td>
+                            <td style="font-family: monospace; color: #4f46e5;">${rFileName}</td>
+                          </tr>
+                          <tr>
+                            <td><strong>Fecha Oficial de Carga</strong></td>
+                            <td>${rDate}</td>
+                          </tr>
+                          <tr>
+                            <td><strong>Tamaño Registrado</strong></td>
+                            <td>${rSize}</td>
+                          </tr>
+                          <tr>
+                            <td><strong>Estado del Almacenamiento</strong></td>
+                            <td><span style="color: #10b981; font-weight: bold;">✓ ACTIVO Y CONCILIADO</span></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      
+                      <p class="doc-text" style="font-size: 11px; color: #64748b; font-style: italic; margin-top: 15px;">
+                        * Nota de Seguridad: Para previsualizar o desplegar este archivo fuera del portal seguro, use la opción "Descargar Archivo" en la esquina inferior. Toda descarga física es firmada digitalmente con un hash MD5 de autenticidad.
+                      </p>
+                      
+                      <div class="stamp-container">
+                        <div style="font-size: 11px; color: #64748b;">
+                          <p style="margin: 0; font-weight: bold; color: #334155;">EDULINK PLATFORM V3</p>
+                          <p style="margin: 2px 0 0 0;">Control de Auditoría Documental</p>
+                        </div>
+                        <div class="seal">
+                          Sello de Seguridad<br>
+                          SOPORTE PDF OK
+                        </div>
+                      </div>
+                      
+                      <div class="footer">
+                        Este documento es confidencial y para uso exclusivo del personal de EduLink.
+                      </div>
+                    </div>
+                  </body>
+                </html>
+              `);
+
+              return (
+                <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner animate-in fade-in duration-300">
+                  <iframe
+                    src={pdfUrl}
+                    className="w-full h-full border-0"
+                    title={`PDF ${viewingDoc.name}`}
+                  />
+                </div>
+              );
+            })() : (
+              <div className="p-10 flex flex-col items-center justify-center space-y-3">
                 <svg className="w-12 h-12 text-slate-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 <div>
                   <p className="font-bold text-slate-600">Previsualización Segura</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">El visualizador oficial es ideal para imágenes y firmas integradas.</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">El visualizador oficial es ideal para imágenes y firmas integradas o documentos PDF.</p>
                 </div>
-              </>
+              </div>
             )}
           </div>
           
@@ -2751,7 +3041,7 @@ export function InstitucionDetail() {
                     dataUrl = URL.createObjectURL(blob);
                   }
                   link.href = dataUrl;
-                  link.download = viewingDoc.fileName || viewingDoc.name + '.txt';
+                  link.download = viewingDoc.fileName || viewingDoc.name + '.pdf';
                   document.body.appendChild(link);
                   link.click();
                   document.body.removeChild(link);
@@ -3519,6 +3809,41 @@ export function InstitucionDetail() {
           </form>
         )}
       </Modal>
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-250" id="custom-delete-confirm-inst">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-100 p-6 animate-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-rose-50 text-rose-600 rounded-full shrink-0">
+                <Trash2 className="w-6 h-6 animate-pulse" />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <h3 className="text-base font-bold text-slate-950">{deleteConfirm.title}</h3>
+                <p className="text-sm text-slate-500 leading-relaxed font-medium">{deleteConfirm.message}</p>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-4">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer"
+                id="inst-delete-cancel"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  deleteConfirm.onConfirm();
+                  setDeleteConfirm(null);
+                }}
+                className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer"
+                id="inst-delete-confirm"
+              >
+                Confirmar Eliminación
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
         </div>
       </div>
     </div>

@@ -322,6 +322,9 @@ export interface CompanyDocument {
   uploadedBy: string;
   uploadedAt: string;
   updatedAt?: string;
+  fileData?: string;
+  fileName?: string;
+  fileSize?: string;
 }
 
 export interface CatalogItem {
@@ -338,6 +341,7 @@ export interface CatalogItem {
   swift?: string;
   aba?: string;
   notes?: string;
+  providerIds?: number[];
 }
 
 export type CatalogTypes = 
@@ -720,11 +724,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const fallback: Record<CatalogTypes, CatalogItem[]> = {
       'Tarifas Países': [
         { id: '1', name: 'México' },
-        { id: '2', name: 'España' },
-        { id: '3', name: 'Japón' },
-        { id: '4', name: 'China' },
-        { id: '5', name: 'Estados Unidos' },
-        { id: '6', name: 'Colombia' }
+        { id: '2', name: 'Estados Unidos de America' },
+        { id: '3', name: 'Canadá' },
+        { id: '4', name: 'España' },
+        { id: '5', name: 'Reino Unido' },
+        { id: '6', name: 'Australia' }
       ],
       'Tipos de Institución': [
         { id: '1', name: 'Colegio Internacional' },
@@ -786,7 +790,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!saved['Categorías'] || saved['Categorías'].length === 0) {
       saved['Categorías'] = defaultCats;
     }
-    if (!saved['Tarifas Países'] || saved['Tarifas Países'].length === 0) {
+    if (!saved['Tarifas Países'] || saved['Tarifas Países'].length === 0 || saved['Tarifas Países'].some((item: any) => item.name === 'China' || item.name === 'Estados Unidos' || item.name === 'Japón')) {
       saved['Tarifas Países'] = fallback['Tarifas Países'];
     }
     if (!saved['Subcategorías'] || saved['Subcategorías'].length === 0) {

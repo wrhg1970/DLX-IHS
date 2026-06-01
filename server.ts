@@ -82,6 +82,149 @@ async function startServer() {
     }
   });
 
+  app.post('/api/send-whatsapp', async (req, res) => {
+    try {
+      const {
+        provider,
+        apiUrl,
+        phoneNumberId,
+        accessToken,
+        to,
+        message
+      } = req.body;
+
+      if (!to || !message) {
+        return res.status(400).json({ error: 'Faltan parámetros requeridos: to o message.' });
+      }
+
+      // Clean the phone number (remove spaces, plus, hyphens, parenthesis)
+      const cleanPhone = to.replace(/[\s+\-()]/g, '');
+
+      const chosenProvider = provider || process.env.WHATSAPP_PROVIDER || "meta";
+      const token = accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
+      const phoneId = phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+      const url = apiUrl || process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
+
+      // If no credentials and no env vars, fallback to Simulation mode so it works immediately and beautifully
+      if (!token && !phoneId) {
+        console.log(`[WhatsApp Simulator] Sending message to ${cleanPhone}: "${message}"`);
+        return res.json({
+          success: true,
+          simulated: true,
+          message: `[Simulación] WhatsApp enviado con éxito a +${cleanPhone}. Mensaje: "${message.substring(0, 60)}..."`,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      if (chosenProvider === "meta") {
+        if (!phoneId) {
+          return res.status(400).json({ error: 'Falta el ID del Teléfono (Phone Number ID) para WhatsApp Cloud API.' });
+        }
+        if (!token) {
+          return res.status(400).json({ error: 'Falta el Token de Acceso para WhatsApp Cloud API.' });
+        }
+
+        const requestUrl = `${url}/${phoneId}/messages`;
+        const response = await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            recipient_type: "individual",
+            to: cleanPhone,
+            type: "text",
+            text: {
+              preview_url: false,
+              body: message
+            }
+          })
+        });
+
+        const data = await response.json() as any;
+
+        if (!response.ok) {
+          throw new Error(data.error?.message || JSON.stringify(data));
+        }
+
+        return res.json({
+          success: true,
+          simulated: false,
+          messageId: data.messages?.[0]?.id || "meta-ok",
+          data
+        });
+      } else if (chosenProvider === "twilio") {
+        const twilioSid = phoneId; // mapping phoneId to Twilio SID for convenience
+        const twilioToken = token;
+        if (!twilioSid || !twilioToken) {
+          return res.status(400).json({ error: 'Para Twilio WhatsApp se requiere Account SID y Auth Token.' });
+        }
+
+        const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
+        
+        // Basic auth for Twilio
+        const authHeader = Buffer.from(`${twilioSid}:${twilioToken}`).toString('base64');
+        
+        // Form urlencoded request body
+        const twilioParams = new URLSearchParams();
+        twilioParams.append('To', `whatsapp:+${cleanPhone}`);
+        twilioParams.append('From', url || 'whatsapp:+14155238886'); // Twilio Sandbox or number
+        twilioParams.append('Body', message);
+
+        const response = await fetch(twilioUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${authHeader}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: twilioParams
+        });
+
+        const data = await response.json() as any;
+
+        if (!response.ok) {
+          throw new Error(data.message || JSON.stringify(data));
+        }
+
+        return res.json({
+          success: true,
+          simulated: false,
+          messageId: data.sid,
+          data
+        });
+      } else {
+        // Custom Hook/Gateway
+        console.log(`[WhatsApp Custom Gateway] Sending to +${cleanPhone} via POST to ${url}`);
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { "Authorization": `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            to: cleanPhone,
+            message: message
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Custom gateway returned status ${response.status}`);
+        }
+
+        return res.json({
+          success: true,
+          simulated: false,
+          message: "Mensaje despachado mediante gateway personalizado."
+        });
+      }
+    } catch (error: any) {
+      console.error("Error sending WhatsApp: ", error);
+      res.status(500).json({ error: error.message || 'Error de servidor al despachar el mensaje de WhatsApp' });
+    }
+  });
+
   app.post('/api/parse-statement', upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {

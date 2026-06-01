@@ -4,7 +4,7 @@ import { useAppContext, CatalogTypes, CatalogItem } from "../context/AppContext"
 import { Modal } from "../components/ui/Modal";
 
 export function Catalogos() {
-  const { catalogs, addCatalogItem, updateCatalogItem, deleteCatalogItem } = useAppContext();
+  const { catalogs, addCatalogItem, updateCatalogItem, deleteCatalogItem, providers } = useAppContext();
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogTypes | null>(null);
   
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -16,6 +16,7 @@ export function Catalogos() {
   const [formAmount, setFormAmount] = useState<number | "">("");
   const [formCurrency, setFormCurrency] = useState("");
   const [formParentId, setFormParentId] = useState("");
+  const [formProviderIds, setFormProviderIds] = useState<number[]>([]);
 
   // Bank accounts specific states
   const [formCompanyName, setFormCompanyName] = useState("");
@@ -55,6 +56,7 @@ export function Catalogos() {
       setFormSwift(item.swift || "");
       setFormAba(item.aba || "");
       setFormNotes(item.notes || "");
+      setFormProviderIds(item.providerIds || []);
     } else {
       setEditingItem(null);
       setFormName("");
@@ -69,6 +71,7 @@ export function Catalogos() {
       setFormSwift("");
       setFormAba("");
       setFormNotes("");
+      setFormProviderIds([]);
     }
     setIsModalOpen(true);
   };
@@ -88,6 +91,7 @@ export function Catalogos() {
     setFormSwift("");
     setFormAba("");
     setFormNotes("");
+    setFormProviderIds([]);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -116,6 +120,10 @@ export function Catalogos() {
       data.swift = formSwift;
       data.aba = formAba;
       data.notes = formNotes;
+    }
+
+    if (selectedCatalog === 'Tipo de Producto') {
+      data.providerIds = formProviderIds;
     }
 
     if (editingItem) {
@@ -258,6 +266,29 @@ export function Catalogos() {
                             <span className="text-slate-600 font-medium leading-normal">{item.notes}</span>
                           </div>
                         )}
+                      </div>
+                    )}
+                    {selectedCatalog === 'Tipo de Producto' && (
+                      <div className="mt-3 flex flex-col space-y-1">
+                        <div className="text-xs">
+                          <span className="font-bold text-slate-500 block mb-1">Proveedores donde se vende:</span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {!item.providerIds || item.providerIds.length === 0 ? (
+                              <span className="text-rose-500 italic bg-rose-50 border border-rose-100 rounded px-1.5 py-0.5 text-[10px]">
+                                Ninguno (No se mostrará)
+                              </span>
+                            ) : (
+                              item.providerIds.map(pid => {
+                                const prov = providers?.find(p => p.id === pid);
+                                return (
+                                  <span key={pid} className="bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-md px-1.5 py-0.5 text-[10px] uppercase font-bold">
+                                    {prov ? prov.commercialName : `ID: ${pid}`}
+                                  </span>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
                       </div>
                     )}
                     {item.description && selectedCatalog !== 'Cuentas bancarias' && (
@@ -454,6 +485,46 @@ export function Catalogos() {
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
+                  </div>
+                )}
+
+                {selectedCatalog === 'Tipo de Producto' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      Proveedores Autorizados para Venta <span className="text-rose-550 text-rose-500">*</span>
+                    </label>
+                    <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1.5 bg-slate-50/50">
+                      {providers && providers.length > 0 ? (
+                        providers.map((p) => {
+                          const isChecked = formProviderIds.includes(p.id);
+                          return (
+                            <label 
+                              key={p.id} 
+                              className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-all cursor-pointer text-xs font-semibold text-slate-700 select-none"
+                            >
+                              <input 
+                                type="checkbox" 
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setFormProviderIds([...formProviderIds, p.id]);
+                                  } else {
+                                    setFormProviderIds(formProviderIds.filter(id => id !== p.id));
+                                  }
+                                }}
+                                className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 w-4 h-4 cursor-pointer"
+                              />
+                              <span>{p.commercialName}</span>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <p className="text-xs text-slate-400 italic p-2 text-center">No hay proveedores registrados en el sistema</p>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1.5 italic leading-relaxed">
+                      Selecciona los proveedores que ofrecen este tipo de producto. Solo se visualizará en las fichas de los proveedores seleccionados.
+                    </p>
                   </div>
                 )}
 

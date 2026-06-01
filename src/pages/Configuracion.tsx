@@ -1,4 +1,4 @@
-import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key } from "lucide-react";
+import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye } from "lucide-react";
 import React, { useState } from "react";
 import { useAppContext, resolveCreditPrices } from "../context/AppContext";
 
@@ -53,6 +53,7 @@ export function Configuracion() {
 
   const [companyForm, setCompanyForm] = useState(companyInfo);
   const [docModalOpen, setDocModalOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [newDoc, setNewDoc] = useState({ name: '', date: '', validity: '', url: '' });
 
   // Estados para Notificaciones Avanzadas de Pagos Pendientes
@@ -265,20 +266,87 @@ export function Configuracion() {
     }
   };
 
+  const [whatsappConfig, setWhatsappConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem("whatsapp_credentials");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error(e);
+    }
+    return {
+      provider: "meta",
+      apiUrl: "https://graph.facebook.com/v19.0",
+      phoneNumberId: "",
+      accessToken: "",
+      testPhone: ""
+    };
+  });
+
+  const [testPhone, setTestPhone] = useState("");
+  const [isTestingWhatsapp, setIsTestingWhatsapp] = useState(false);
+
+  const sendRealNotificationWhatsApp = async (toPhone: string, body: string) => {
+    try {
+      const res = await fetch("/api/send-whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: whatsappConfig.provider,
+          apiUrl: whatsappConfig.apiUrl,
+          phoneNumberId: whatsappConfig.phoneNumberId,
+          accessToken: whatsappConfig.accessToken,
+          to: toPhone,
+          message: body
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Error de red");
+      }
+      return { success: true, simulated: data.simulated, message: data.message };
+    } catch (err: any) {
+      console.error("Real WhatsApp dispatch error: ", err);
+      return { success: false, error: err.message };
+    }
+  };
+
   const handleCompanySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     updateCompanyInfo(companyForm);
     // show success toast or similar ideally, for now just update context
   };
 
+  const [selectedDocFile, setSelectedDocFile] = useState<File | null>(null);
+  const [viewingCompanyDoc, setViewingCompanyDoc] = useState<any | null>(null);
+  const [docUploadType, setDocUploadType] = useState<"file" | "url">("file");
+
   const handleDocSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    addCompanyDocument({
-      ...newDoc,
-      uploadedBy: currentUser?.name || 'Usuario'
-    });
-    setDocModalOpen(false);
-    setNewDoc({ name: '', date: '', validity: '', url: '' });
+    
+    const processAndSave = (base64Data?: string, fileName?: string, fileSize?: string) => {
+      addCompanyDocument({
+        ...newDoc,
+        url: base64Data || newDoc.url || '',
+        fileData: base64Data,
+        fileName: fileName,
+        fileSize: fileSize || 'Carga Directa',
+        uploadedBy: currentUser?.name || 'Usuario'
+      });
+      setDocModalOpen(false);
+      setNewDoc({ name: '', date: '', validity: '', url: '' });
+      setSelectedDocFile(null);
+    };
+
+    if (selectedDocFile) {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const sizeStr = (selectedDocFile.size / (1024 * 1024)).toFixed(2) + " MB";
+        processAndSave(evt.target?.result as string, selectedDocFile.name, sizeStr);
+      };
+      reader.readAsDataURL(selectedDocFile);
+    } else {
+      processAndSave();
+    }
   };
 
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -1287,18 +1355,62 @@ export function Configuracion() {
                           </div>
                         </div>
                         <div className="flex space-x-2 shrink-0">
-                          <a 
-                            href={doc.url} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
-                            title="Ver documento"
-                          >
-                            <Download className="w-4 h-4" />
-                          </a>
+                          {(doc.fileData || doc.url) && (
+                            <button
+                              onClick={() => setViewingCompanyDoc(doc)}
+                              className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                              title="Visualizar documento"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          )}
+                          {doc.url && !doc.fileData && !doc.url.startsWith('data:') && (
+                            <a 
+                              href={doc.url} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                              title="Descargar/Abrir enlace"
+                            >
+                              <Download className="w-4 h-4" />
+                            </a>
+                          )}
+                          {doc.fileData && (
+                            <button 
+                              onClick={() => {
+                                const link = document.createElement('a');
+                                link.href = doc.fileData!;
+                                link.download = doc.fileName || doc.name + '.pdf';
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                              }}
+                              className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                              title="Descargar archivo"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                          )}
                           <button 
-                            onClick={() => deleteCompanyDocument(doc.id)}
-                            className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition"
+                            onClick={() => {
+                              setDeleteConfirm({
+                                title: "Eliminar Documento de Empresa",
+                                message: `¿Estás seguro de que deseas eliminar permanentemente el archivo "${doc.fileName || doc.name}" de la empresa? Esta acción borrará de forma irreversible el registro del sistema y removerá el archivo de las bases de almacenamiento.`,
+                                onConfirm: () => {
+                                  if (doc.url && doc.url.startsWith('blob:')) {
+                                    try {
+                                      URL.revokeObjectURL(doc.url);
+                                    } catch (e) {
+                                      console.error("Error revoking object URL:", e);
+                                    }
+                                  }
+                                  deleteCompanyDocument(doc.id);
+                                  console.log(`Payload binario del documento de empresa ID ${doc.id} purgado de la base de almacenamiento.`);
+                                }
+                              });
+                            }}
+                            className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                            title="Eliminar documento"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -1889,7 +2001,7 @@ export function Configuracion() {
                           : "text-slate-500 hover:text-slate-700"
                       }`}
                     >
-                      Reglas Avanzadas
+                      Reglas de Recordatorio
                       <span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-sans font-bold">
                         {customRules.length}
                       </span>
@@ -2045,6 +2157,134 @@ export function Configuracion() {
                           className="px-4 py-1.5 bg-indigo-650 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer bg-indigo-600"
                         >
                           Guardar Credenciales
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Tarjeta de Configuración de API de WhatsApp */}
+                    <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+                      <div className="flex items-center gap-2.5 mb-2.5">
+                        <div className="p-1.5 bg-emerald-50 rounded-lg text-emerald-600">
+                          <MessageSquare className="w-4 h-4 text-emerald-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-slate-800 text-sm">Controles de Envío e Integración de WhatsApp API</h3>
+                          <p className="text-[10px] text-slate-500">Configura tu proveedor de WhatsApp (Meta Cloud API oficial, Twilio o Gateway personalizado) para enviar de forma complementaria recordatorios automáticos.</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Proveedor / Gateway</label>
+                          <select
+                            value={whatsappConfig.provider}
+                            onChange={(e) => setWhatsappConfig({ ...whatsappConfig, provider: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800 bg-white"
+                          >
+                            <option value="meta">Meta WhatsApp Cloud API (Oficial)</option>
+                            <option value="twilio">Twilio WhatsApp Business API</option>
+                            <option value="custom">Gateway Personalizado (Custom HTTP POST API)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            {whatsappConfig.provider === "meta" && "URL Base de Graph API"}
+                            {whatsappConfig.provider === "twilio" && "Número Remitente Twilio (whatsapp:+...)"}
+                            {whatsappConfig.provider === "custom" && "API Endpoint URL (POST)"}
+                          </label>
+                          <input
+                            type="text"
+                            placeholder={
+                              whatsappConfig.provider === "meta" ? "https://graph.facebook.com/v19.0" :
+                              whatsappConfig.provider === "twilio" ? "whatsapp:+14155238886" : "https://mi-servidor.com/webhook-whatsapp"
+                            }
+                            value={whatsappConfig.apiUrl}
+                            onChange={(e) => setWhatsappConfig({ ...whatsappConfig, apiUrl: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800 font-mono"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            {whatsappConfig.provider === "meta" && "ID de Teléfono (Phone Number ID)"}
+                            {whatsappConfig.provider === "twilio" && "Account SID"}
+                            {whatsappConfig.provider === "custom" && "Identificador de Canal (Opcional)"}
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ej. 1029384756..."
+                            value={whatsappConfig.phoneNumberId || ""}
+                            onChange={(e) => setWhatsappConfig({ ...whatsappConfig, phoneNumberId: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 text-slate-800 font-mono"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            {whatsappConfig.provider === "meta" && "TOKEN de Acceso Permanente (Meta Bearer)"}
+                            {whatsappConfig.provider === "twilio" && "Auth Token (Twilio)"}
+                            {whatsappConfig.provider === "custom" && "Token de Seguridad / API Key (Opcional)"}
+                          </label>
+                          <input
+                            type="password"
+                            placeholder="Token de acceso para autorización"
+                            value={whatsappConfig.accessToken || ""}
+                            onChange={(e) => setWhatsappConfig({ ...whatsappConfig, accessToken: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 text-slate-800 font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-4 mt-6 pt-4 border-t border-slate-100">
+                        <div className="flex items-center gap-2 max-w-md">
+                          <input
+                            type="tel"
+                            placeholder="+52 5512345678"
+                            value={testPhone}
+                            onChange={(e) => setTestPhone(e.target.value)}
+                            className="px-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 text-slate-800 w-48 font-mono"
+                          />
+                          <button
+                            type="button"
+                            disabled={isTestingWhatsapp}
+                            onClick={async () => {
+                              if (!testPhone.trim()) {
+                                triggerToast("Ingresa un número telefónico de prueba (con código de país).");
+                                return;
+                              }
+                              setIsTestingWhatsapp(true);
+                              try {
+                                const res = await sendRealNotificationWhatsApp(testPhone, "Prueba de Integración WhatsApp - Sistema IHS. ¡Felicidades! La sincronización automática de Whatsapps está lista y configurada para tus flujos.");
+                                if (res.success) {
+                                  if (res.simulated) {
+                                    triggerToast("¡Simulación de WhatsApp enviada con éxito! Revisa consola del servidor para ver el mensaje.");
+                                  } else {
+                                    triggerToast("¡Mensaje de WhatsApp real enviado exitosamente!");
+                                  }
+                                } else {
+                                  throw new Error(res.error || "Fallo en despacho");
+                                }
+                              } catch (err: any) {
+                                alert("Error al enviar WhatsApp de prueba: " + err.message);
+                              } finally {
+                                setIsTestingWhatsapp(false);
+                              }
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-105 rounded-xl hover:bg-emerald-100 cursor-pointer disabled:opacity-50"
+                          >
+                            {isTestingWhatsapp ? "Despachando..." : "Enviar WhatsApp de Prueba"}
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            localStorage.setItem("whatsapp_credentials", JSON.stringify(whatsappConfig));
+                            triggerToast("¡Credenciales de WhatsApp guardadas exitosamente!");
+                          }}
+                          className="px-4 py-1.5 bg-indigo-650 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer bg-indigo-600"
+                        >
+                          Guardar Configuración
                         </button>
                       </div>
                     </div>
@@ -2246,7 +2486,7 @@ export function Configuracion() {
                                     
                                     if(confirmSend) {
                                       const actualStudentObj = students.find(s => s.id === (students[0]?.id || 0)) || students[0];
-                                      const emailTarget = actualStudentObj?.email || "colegio-prueba@ejemplo.com";
+                                      const emailTarget = actualStudentObj?.email || "colegio-prueba@ejemplo.com"; const phoneTarget = actualStudentObj?.phone || "+52 55 4567 8901"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡WhatsApp simulado con éxito!" : "¡Notificación de WhatsApp enviada!"); });
                                       
                                       sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
                                         if (res.success) {
@@ -2352,7 +2592,7 @@ export function Configuracion() {
                                       );
                                       
                                       if(confirmSend) {
-                                        const emailTarget = students[1]?.email || "colegio-prueba@ejemplo.com";
+                                        const emailTarget = students[1]?.email || "colegio-prueba@ejemplo.com"; const phoneTarget = students[1]?.phone || "+52 81 2345 6789"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡Reclamación WhatsApp simulada!" : "¡Reclamación por WhatsApp enviada!"); });
                                         
                                         sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
                                           if (res.success) {
@@ -2435,7 +2675,7 @@ export function Configuracion() {
                                         );
                                         
                                         if(confirmSend) {
-                                          const emailTarget = (inst as any).email || "coordinador@ejemplo.com";
+                                          const emailTarget = (inst as any).email || "coordinador@ejemplo.com"; const phoneTarget = inst.phone || "+52 55 1122 3344"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡Reclamación de WhatsApp simulada!" : "¡Reclamación institucional por WhatsApp enviada!"); });
                                           
                                           sendRealNotificationEmail(emailTarget, inst.name, subject, body).then((res) => {
                                             if (res.success) {
@@ -2582,11 +2822,11 @@ export function Configuracion() {
                       </div>
                       <div className="max-w-xl space-y-2 relative z-10 font-sans">
                         <span className="bg-indigo-805 text-indigo-200 text-[10px] font-extrabold tracking-widest px-2.5 py-1 rounded-lg uppercase bg-indigo-800">
-                          Panel de Reglas Dinámicas
+                          Reglas de Recordatorio
                         </span>
-                        <h4 className="text-lg font-black tracking-tight">Configuración Avanzada de Cobranza y Facturación</h4>
+                        <h4 className="text-lg font-black tracking-tight">Reglas de Recordatorio de Cobranza Personalizadas</h4>
                         <p className="text-xs text-indigo-200 leading-relaxed">
-                          Define flujos personalizados de recordatorios según los saldos pendientes de Alumnos, Instituciones o Proveedores. Puedes parametrizar la mora mínima, filtrar los roles de destino de forma precisa y canalizar el envío óptimo por Email, WhatsApp o Push automático.
+                          Crea y gestiona reglas de recordatorio basadas en el saldo vencido de los alumnos e instituciones. Define la mora mínima del saldo, la tolerancia y el canal de notificación ideal (Email, WhatsApp de alta entrega, Push, etc.).
                         </p>
                       </div>
                     </div>
@@ -3578,7 +3818,10 @@ export function Configuracion() {
                 Subir Documento
               </h3>
               <button 
-                onClick={() => setDocModalOpen(false)}
+                onClick={() => {
+                  setDocModalOpen(false);
+                  setSelectedDocFile(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1.5 rounded-lg transition-colors"
               >
                 <X className="w-5 h-5" />
@@ -3587,6 +3830,34 @@ export function Configuracion() {
             
             <form onSubmit={handleDocSubmit} className="p-5">
               <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Origen del Documento</label>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setDocUploadType("file")}
+                      className={`py-2 text-[11px] font-bold rounded-lg transition-all ${
+                        docUploadType === "file" 
+                          ? "bg-white text-indigo-950 shadow-sm" 
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      Subir archivo (.pdf, .png, .jpg)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDocUploadType("url")}
+                      className={`py-2 text-[11px] font-bold rounded-lg transition-all ${
+                        docUploadType === "url" 
+                          ? "bg-white text-indigo-950 shadow-sm" 
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      Enlace / URL de Internet
+                    </button>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Nombre del Documento <span className="text-rose-500">*</span></label>
                   <input 
@@ -3605,7 +3876,7 @@ export function Configuracion() {
                       type="date"
                       value={newDoc.date}
                       onChange={(e) => setNewDoc({ ...newDoc, date: e.target.value })}
-                      className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                      className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm md:text-xs"
                     />
                   </div>
                   <div>
@@ -3614,27 +3885,74 @@ export function Configuracion() {
                       type="date"
                       value={newDoc.validity}
                       onChange={(e) => setNewDoc({ ...newDoc, validity: e.target.value })}
-                      className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                      className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm md:text-xs"
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">URL del Archivo <span className="text-rose-500">*</span></label>
-                  <input 
-                    type="url" 
-                    required
-                    value={newDoc.url}
-                    onChange={(e) => setNewDoc({ ...newDoc, url: e.target.value })}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
-                    placeholder="https://ejemplo.com/documento.pdf"
-                  />
-                </div>
+                {docUploadType === "url" ? (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">URL del Archivo <span className="text-rose-500">*</span></label>
+                    <input 
+                      type="url" 
+                      required
+                      value={newDoc.url}
+                      onChange={(e) => setNewDoc({ ...newDoc, url: e.target.value })}
+                      className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                      placeholder="https://ejemplo.com/documento.pdf"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Archivo Adjunto <span className="text-rose-500">*</span></label>
+                    {selectedDocFile ? (
+                      <div className="bg-indigo-50 border border-indigo-150 rounded-xl p-3 flex items-center justify-between">
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          <div className="p-2 bg-indigo-100 text-indigo-700-600 rounded-lg shrink-0">
+                            <FileText className="w-5 h-5 text-indigo-600" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-slate-800 truncate">{selectedDocFile.name}</p>
+                            <p className="text-[10px] text-slate-500 font-bold font-mono mt-0.5">{(selectedDocFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDocFile(null)}
+                          className="text-[10px] font-bold text-red-500 hover:text-red-750 bg-red-105 border border-red-200 rounded px-2.5 py-1.5 transition ml-3 cursor-pointer shrink-0"
+                        >
+                          Cambiar
+                        </button>
+                      </div>
+                    ) : (
+                      <input 
+                        type="file" 
+                        required
+                        accept=".pdf,image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setSelectedDocFile(file);
+                            if (!newDoc.name) {
+                              const idx = file.name.lastIndexOf('.');
+                              const baseName = idx !== -1 ? file.name.substring(0, idx) : file.name;
+                              setNewDoc({ ...newDoc, name: baseName });
+                            }
+                          }
+                        }}
+                        className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white font-mono"
+                      />
+                    )}
+                  </div>
+                )}
               </div>
               
               <div className="mt-8 flex justify-end space-x-3">
                 <button 
                   type="button"
-                  onClick={() => setDocModalOpen(false)}
+                  onClick={() => {
+                    setDocModalOpen(false);
+                    setSelectedDocFile(null);
+                  }}
                   className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-100 transition-colors"
                 >
                   Cancelar
@@ -3647,6 +3965,97 @@ export function Configuracion() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Visualizar Documento de la Empresa */}
+      {viewingCompanyDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`bg-white rounded-2xl w-full ${
+            viewingCompanyDoc.fileData?.startsWith('data:application/pdf') || viewingCompanyDoc.url?.toLowerCase().endsWith('.pdf') ? 'max-w-4xl' : 'max-w-xl'
+          } shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 text-slate-700`}>
+            <div className="flex justify-between items-center p-5 border-b border-slate-100">
+              <h3 className="font-bold text-sm text-slate-800 uppercase tracking-wider">
+                Visualizador de Documentos de Empresa
+              </h3>
+              <button 
+                onClick={() => setViewingCompanyDoc(null)}
+                className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1.5 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-5 space-y-4">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex items-center space-x-3 text-xs">
+                <FileText className="w-10 h-10 text-indigo-500 shrink-0 animate-pulse" />
+                <div className="min-w-0 flex-1">
+                  <h5 className="font-bold text-slate-900 truncate text-sm">{viewingCompanyDoc.name}</h5>
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">{viewingCompanyDoc.fileName || 'Enlace Externo'}</p>
+                  <div className="flex space-x-4 mt-2 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                    <span>Fecha: {viewingCompanyDoc.date || 'Sin Fecha'}</span>
+                    <span>Vigencia: {viewingCompanyDoc.validity || 'Sin Límite'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg p-2 bg-slate-50/50 text-center text-slate-400 text-xs flex flex-col items-center justify-center min-h-[300px]">
+                {viewingCompanyDoc.fileData?.startsWith('data:image/') || viewingCompanyDoc.url?.match(/\.(jpg|jpeg|png|webp|gif)/i) ? (
+                  <img src={viewingCompanyDoc.fileData || viewingCompanyDoc.url} alt={viewingCompanyDoc.name} className="max-h-[350px] object-contain rounded hover:scale-101 transition p-2" referrerPolicy="no-referrer" />
+                ) : viewingCompanyDoc.fileData?.startsWith('data:application/pdf') || viewingCompanyDoc.url?.toLowerCase().endsWith('.pdf') ? (
+                  <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner animate-in fade-in duration-300">
+                    <iframe
+                      src={viewingCompanyDoc.fileData || viewingCompanyDoc.url}
+                      className="w-full h-full border-0"
+                      title={`PDF ${viewingCompanyDoc.name}`}
+                    />
+                  </div>
+                ) : (
+                  <div className="p-10 flex flex-col items-center justify-center space-y-3">
+                    <svg className="w-12 h-12 text-slate-300" xmlns="http://www.w3.org/2050/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <div>
+                      <p className="font-bold text-slate-600">Previsualización Segura</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">El visualizador soporta imágenes cargadas o enlaces directos a documentos PDF.</p>
+                      {viewingCompanyDoc.url && !viewingCompanyDoc.fileData && (
+                        <p className="text-[10px] text-indigo-600 mt-1.5 font-bold">
+                          Enlace: <a href={viewingCompanyDoc.url} target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-800">{viewingCompanyDoc.url}</a>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-4 flex justify-end space-x-2 border-t border-slate-100">
+                {(viewingCompanyDoc.fileData || viewingCompanyDoc.url) && (
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      const link = document.createElement('a');
+                      link.href = viewingCompanyDoc.fileData || viewingCompanyDoc.url;
+                      link.download = viewingCompanyDoc.fileName || viewingCompanyDoc.name + '.pdf';
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }} 
+                    className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded text-xs font-bold uppercase transition flex items-center shrink-0 border border-emerald-200 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 mr-1" />
+                    Descargar Archivo
+                  </button>
+                )}
+                <button 
+                  type="button" 
+                  onClick={() => setViewingCompanyDoc(null)} 
+                  className="px-4 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded text-xs font-bold uppercase transition border-0 cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -3736,6 +4145,41 @@ export function Configuracion() {
                   Confirmar e Importar
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-250" id="custom-delete-confirm-config">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-100 p-6 animate-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-rose-50 text-rose-600 rounded-full shrink-0">
+                <Trash2 className="w-6 h-6 animate-pulse" />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <h3 className="text-base font-bold text-slate-950">{deleteConfirm.title}</h3>
+                <p className="text-sm text-slate-500 leading-relaxed font-medium">{deleteConfirm.message}</p>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-4">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer"
+                id="config-delete-cancel"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  deleteConfirm.onConfirm();
+                  setDeleteConfirm(null);
+                }}
+                className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer"
+                id="config-delete-confirm"
+              >
+                Confirmar Eliminación
+              </button>
             </div>
           </div>
         </div>

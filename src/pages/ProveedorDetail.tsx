@@ -5,6 +5,16 @@ import { useAppContext, ProviderProductService } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
 
+const academicSubcats = [
+  "Syllabus Académico",
+  "Curso de Idiomas",
+  "Certificación AP",
+  "Tutorías y Consultorías",
+  "Excursión / Programa Académico",
+  "Plataforma Educativa",
+  "Materiales y Libros"
+];
+
 export function ProveedorDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -38,7 +48,9 @@ export function ProveedorDetail() {
   const cn = (...classes: any[]) => classes.filter(Boolean).join(' ');
 
   // Dynamic product type defaults from catalogs list
-  const catalogProductTypes = (catalogs['Tipo de Producto'] || []).map(item => item.name);
+  const catalogProductTypes = (catalogs['Tipo de Producto'] || [])
+    .filter(item => !item.providerIds || item.providerIds.length === 0 || item.providerIds.includes(Number(id)))
+    .map(item => item.name);
   const defaultProductType = catalogProductTypes.includes('Syllabus Académico') 
     ? 'Syllabus Académico' 
     : (catalogProductTypes[0] || 'Syllabus Académico');
@@ -207,248 +219,382 @@ export function ProveedorDetail() {
 
   return (
     <div className="animate-in fade-in zoom-in-95 duration-300 flex items-center justify-center p-4 sm:p-6 lg:p-8 min-h-full">
-      <div className="bg-white w-full max-w-5xl rounded-3xl shadow-xl flex flex-col overflow-hidden max-h-full">
+      <div className="bg-[#f8fafc] w-full max-w-5xl rounded-3xl shadow-xl flex flex-col overflow-hidden max-h-full border border-slate-200">
         
         {/* Header content */}
-        <div className="px-8 pt-8 pb-4 relative">
-          <div className="absolute top-6 right-6 flex items-center space-x-3">
-            <button onClick={() => setIsEditModalOpen(true)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+        <div className="bg-white px-8 pt-8 pb-1 relative border-b border-slate-100">
+          <div className="absolute top-6 right-6 flex items-center space-x-2">
+            <button 
+              onClick={() => setIsEditModalOpen(true)} 
+              className="p-2 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-xl transition-all duration-150 border border-indigo-100 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+              title="Editar proveedor"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+              <span>Editar</span>
             </button>
-            <button onClick={() => navigate('/proveedores')} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            <button 
+              onClick={() => navigate('/proveedores')} 
+              className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all border border-slate-200 flex items-center justify-center cursor-pointer"
+              title="Volver"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
           </div>
-
+ 
           <div className="flex items-center space-x-5">
-            <div className="w-16 h-16 bg-[#e47352] rounded-2xl flex items-center justify-center text-white text-2xl font-bold shadow-md shadow-[#e47352]/20">
+            <div className="w-16 h-16 bg-gradient-to-tr from-[#e47352] to-[#f08566] rounded-2xl flex items-center justify-center text-white text-2xl font-black shadow-lg shadow-orange-500/10">
               {providerInitials}
             </div>
             <div>
-              <h1 className="text-3xl font-serif text-[#3f2a24] font-bold tracking-tight">{provider.commercialName || (provider as any).name}</h1>
-              <p className="text-sm text-slate-500 italic mt-0.5">{provider.legalName || (provider as any).name}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight font-sans">
+                  {provider.commercialName || (provider as any).name}
+                </h1>
+                <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold tracking-widest border uppercase ${
+                  provider.status === 'Al corriente' || provider.status === 'Activo' 
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-100' 
+                    : provider.status === 'Pendiente' ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-rose-50 text-rose-700 border-rose-100'
+                }`}>
+                  {provider.status || "Activo"}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 font-medium mt-1 uppercase tracking-wider font-mono">
+                {provider.legalName || (provider as any).name}
+              </p>
             </div>
           </div>
-
+ 
           {/* Tabs */}
-          <div className="flex space-x-8 mt-10 border-b border-slate-200">
-            {mainTabs.map(tab => (
-              <button
-                key={tab.name}
-                onClick={() => setActiveTab(tab.name)}
-                className={`py-3 text-sm font-bold transition-all relative ${
-                  activeTab === tab.name 
-                    ? 'text-[#e47352]' 
-                    : 'text-slate-400 hover:text-slate-600'
-                }`}
-              >
-                <div className="flex items-center">
-                  <tab.icon className="w-4 h-4 mr-2" />
-                  {tab.name}
-                </div>
-                {activeTab === tab.name && (
-                  <div className="absolute bottom-[-1px] left-0 w-full h-[2px] bg-[#e47352]"></div>
-                )}
-              </button>
-            ))}
+          <div className="flex space-x-1 mt-8 border-b border-slate-100 overflow-x-auto scrollbar-none">
+            {mainTabs.map(tab => {
+              const TabIcon = tab.icon;
+              const isSelected = activeTab === tab.name;
+              return (
+                <button
+                  key={tab.name}
+                  onClick={() => setActiveTab(tab.name)}
+                  className={`py-3 px-4 text-xs font-bold transition-all relative flex items-center gap-2 border-b-2 whitespace-nowrap cursor-pointer ${
+                    isSelected 
+                      ? 'text-[#e47352] border-[#e47352] bg-orange-50/20' 
+                      : 'text-slate-450 border-transparent hover:text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <TabIcon className={`w-4 h-4 ${isSelected ? 'text-[#e47352]' : 'text-slate-400'}`} />
+                  <span>{tab.name}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
-
+ 
         {/* Content Area */}
-        <div className="flex-1 overflow-auto px-8 py-6 bg-white min-h-[400px]">
+        <div className="flex-1 overflow-auto px-8 py-6 bg-slate-50 min-h-[420px]">
           
           {activeTab === "Información General" && (
-            <div className="animate-in fade-in duration-300">
-              <div className="flex justify-between items-center mb-6">
-                 <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Información Registrada</h3>
-                 <button onClick={() => setIsEditModalOpen(true)} className="flex items-center text-[#e47352] bg-[#e47352]/10 px-4 py-2 rounded-lg font-bold text-xs hover:bg-[#e47352]/20 transition-colors">
-                   <svg width="14" height="14" className="mr-1.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
-                   Editar
-                 </button>
-              </div>
+            <div className="animate-in fade-in duration-300 space-y-6">
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                {/* Panel 1: Perfil y Datos Legales */}
+                <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
+                    <Building className="w-4 h-4 text-[#e47352]" />
+                    <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-widest font-sans">Identificación Legal</h3>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Nombre Comercial</h4>
+                      <p className="text-sm text-slate-800 font-bold mt-0.5">{provider.commercialName}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Razón Social Legal</h4>
+                      <p className="text-xs text-slate-600 font-semibold mt-0.5">{provider.legalName}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">RFC / Tax ID</h4>
+                      <p className="text-xs text-indigo-700 font-semibold font-mono bg-indigo-50 border border-indigo-100 rounded px-2 py-1 mt-1 inline-block uppercase">
+                        {provider.rfc || "No registrado"}
+                      </p>
+                    </div>
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Categoría de Servicios</h4>
+                      <p className="text-xs text-slate-800 font-bold mt-0.5">
+                        {provider.category || "General"}
+                        {provider.subcategory && (
+                          <span className="text-slate-400 font-normal"> ({provider.subcategory})</span>
+                        )}
+                      </p>
+                    </div>
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Tipo de Proveedor</h4>
+                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border ${
+                        provider.providerType === "Servicios Extras"
+                          ? "bg-purple-50 text-purple-700 border-purple-200"
+                          : "bg-indigo-50 text-indigo-700 border-indigo-200"
+                      }`}>
+                        {provider.providerType || "Curriculum Académico"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-10">
-                <div className="space-y-6">
-                  <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Razón Social</h4>
-                    <p className="text-sm text-slate-800 font-medium">{provider.legalName}</p>
+                {/* Panel 2: Información de Contacto */}
+                <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
+                    <Phone className="w-4 h-4 text-[#e47352]" />
+                    <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-widest font-sans">Contacto Directo</h3>
                   </div>
-                  <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">RFC</h4>
-                    <p className="text-sm text-slate-800 font-medium font-mono">{provider.rfc || "No especificado"}</p>
-                  </div>
-                  <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Contacto Principal</h4>
-                    <p className="text-sm text-slate-800 font-medium mb-1"><Phone className="w-3.5 h-3.5 inline mr-1 text-slate-400" /> {provider.phone}</p>
-                    <p className="text-sm text-slate-800 font-medium"><Mail className="w-3.5 h-3.5 inline mr-1 text-slate-400" /> {provider.email}</p>
-                  </div>
-                  <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Categoría</h4>
-                    <p className="text-sm text-slate-800 font-medium">{provider.category} {provider.subcategory && <span className="text-slate-500 font-normal">({provider.subcategory})</span>}</p>
-                  </div>
-                  <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Tipo de Proveedor</h4>
-                    <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-black uppercase tracking-wider border ${
-                      provider.providerType === "Servicios Extras"
-                        ? "bg-purple-50 text-purple-700 border-purple-200"
-                        : "bg-indigo-50 text-indigo-700 border-indigo-200"
-                    }`}>
-                      {provider.providerType || "Curriculum Académico"}
-                    </span>
+
+                  <div className="space-y-4">
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Teléfono de Enlace</h4>
+                      <p className="text-sm text-slate-800 font-bold font-mono mt-1 flex items-center">
+                        <span className="bg-emerald-50 text-emerald-700 p-1 rounded mr-2 border border-emerald-150">
+                          <Phone className="w-3.5 h-3.5" />
+                        </span>
+                        {provider.phone || "Sin teléfono registrado"}
+                      </p>
+                    </div>
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Correo Institucional</h4>
+                      <p className="text-xs text-slate-700 font-medium mt-1 flex items-center">
+                        <span className="bg-blue-50 text-blue-700 p-1 rounded mr-2 border border-blue-150">
+                          <Mail className="w-3.5 h-3.5" />
+                        </span>
+                        <a href={`mailto:${provider.email}`} className="hover:text-indigo-600 hover:underline break-all font-semibold select-all">
+                          {provider.email || "Sin correo registrado"}
+                        </a>
+                      </p>
+                    </div>
+
+                    <div className="pt-4 border-t border-slate-100 flex flex-col space-y-2">
+                      <a 
+                        href={`mailto:${provider.email}`}
+                        className="w-full text-center bg-slate-900 text-white rounded-xl py-2 px-3 hover:bg-slate-800 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        <span>Enviar Correo</span>
+                      </a>
+                      <a 
+                        href={`tel:${provider.phone}`}
+                        className="w-full text-center bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl py-2 px-3 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                      >
+                        <Phone className="w-3.5 h-3.5" />
+                        <span>Marcar Teléfono</span>
+                      </a>
+                    </div>
                   </div>
                 </div>
 
-                <div className="space-y-6">
-                  <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Dirección</h4>
-                    <p className="text-sm text-slate-800 font-medium">{provider.street}</p>
-                    <p className="text-sm text-slate-800 font-medium">{provider.neighborhood}</p>
-                    <p className="text-sm text-slate-800 font-medium">{provider.city}, {provider.state} {provider.zipCode}</p>
-                    <p className="text-sm text-slate-500 mt-1">{provider.country}</p>
+                {/* Panel 3: Dirección Fiscal */}
+                <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
+                    <MapPin className="w-4 h-4 text-[#e47352]" />
+                    <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-widest font-sans">Domicilio Fiscal</h3>
                   </div>
-                  <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Estado</h4>
-                    <span className={`inline-block px-2.5 py-1 rounded text-xs font-bold tracking-wider uppercase mt-1 ${
-                      provider.status === 'Al corriente' || provider.status === 'Activo' ? 'bg-emerald-50 text-emerald-600' : 
-                      provider.status === 'Pendiente' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'
-                    }`}>
-                      {provider.status || "Activo"}
-                    </span>
+
+                  <div className="space-y-4">
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Calle y Colonia</h4>
+                      <p className="text-xs text-slate-800 font-bold mt-1">
+                        {provider.street || "S/N"}
+                        {provider.neighborhood && <span className="block font-medium text-slate-500 mt-0.5">Col. {provider.neighborhood}</span>}
+                      </p>
+                    </div>
+
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Estado, Ciudad & CP</h4>
+                      <p className="text-xs text-slate-700 font-semibold mt-1">
+                        {provider.city ? `${provider.city}, ${provider.state || ""}` : "No provisto"}
+                        {provider.zipCode && <span className="block font-mono text-[#e47352] mt-0.5">C.P. {provider.zipCode}</span>}
+                      </p>
+                    </div>
+
+                    <div>
+                      <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">País</h4>
+                      <p className="text-xs text-slate-600 font-semibold mt-0.5">
+                        🌍 {provider.country || "México"}
+                      </p>
+                    </div>
                   </div>
                 </div>
+
               </div>
+              
             </div>
           )}
 
           {activeTab === "Contactos" && (
-            <div className="animate-in fade-in duration-300">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Contactos Registrados</h3>
-                <button onClick={() => setIsContactModalOpen(true)} className="flex items-center text-[#e47352] bg-[#e47352]/10 px-4 py-2 rounded-lg font-bold text-xs hover:bg-[#e47352]/20 transition-colors">
+            <div className="animate-in fade-in duration-300 space-y-6">
+              <div className="flex justify-between items-center bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 font-sans">Contactos de Enlace</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Gestión de personas responsables de cuentas, soporte académico o facturación</p>
+                </div>
+                <button 
+                  onClick={() => setIsContactModalOpen(true)} 
+                  className="bg-[#e47352] text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-orange-600 transition flex items-center justify-center cursor-pointer shadow-sm shadow-orange-500/10"
+                >
                   <Plus className="w-4 h-4 mr-1.5" /> Añadir Contacto
                 </button>
               </div>
               
               {provContacts.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {provContacts.map(contact => (
-                    <div key={contact.id} className="border border-slate-200 rounded-xl p-5 hover:border-slate-300 hover:shadow-sm transition-all bg-white">
-                      <div className="flex items-start space-x-4">
-                        <div className="h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-lg shrink-0">
-                          {contact.name[0]}{contact.lastName[0]}
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-900 text-base">{contact.name} {contact.lastName}</p>
-                          <p className="text-sm text-[#e47352] font-medium mb-3">{contact.position} {contact.area && <span className="text-slate-400 font-normal"> • {contact.area}</span>}</p>
-                          <div className="space-y-1.5">
-                            <div className="flex items-center text-sm text-slate-600">
-                              <Mail className="w-4 h-4 mr-2 text-slate-400" />
-                              <a href={`mailto:${contact.email}`} className="hover:text-indigo-600 hover:underline">{contact.email}</a>
-                            </div>
-                            <div className="flex items-center text-sm text-slate-600">
-                              <Phone className="w-4 h-4 mr-2 text-slate-400" />
-                              <a href={`tel:${contact.phone}`} className="hover:text-indigo-600 hover:underline">{contact.phone}</a>
+                  {provContacts.map(contact => {
+                    const initials = `${contact.name[0] || ""}${contact.lastName[0] || ""}`.toUpperCase();
+                    return (
+                      <div key={contact.id} className="border border-slate-200 bg-white rounded-2xl p-5 hover:border-slate-300 hover:shadow-md transition-all duration-200">
+                        <div className="flex items-start space-x-4">
+                          <div className="h-10 w-10 rounded-xl bg-orange-100 text-[#e47352] flex items-center justify-center font-bold text-sm shrink-0 border border-orange-200">
+                            {initials}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-bold text-slate-900 text-sm truncate">{contact.name} {contact.lastName}</p>
+                            <p className="text-xs text-[#e47352] font-semibold mt-0.5">
+                              {contact.position} 
+                              {contact.area && <span className="text-slate-400 font-normal"> • {contact.area}</span>}
+                            </p>
+                            
+                            <div className="space-y-1.5 mt-3 pt-3 border-t border-slate-100">
+                              <div className="flex items-center text-xs text-slate-650 hover:text-indigo-600">
+                                <Mail className="w-3.5 h-3.5 mr-2 text-slate-400" />
+                                <a href={`mailto:${contact.email}`} className="hover:underline font-mono truncate">{contact.email}</a>
+                              </div>
+                              <div className="flex items-center text-xs text-slate-650 hover:text-indigo-600">
+                                <Phone className="w-3.5 h-3.5 mr-2 text-slate-400" />
+                                <a href={`tel:${contact.phone}`} className="hover:underline font-mono">{contact.phone}</a>
+                              </div>
                             </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-slate-200 rounded-3xl p-16 flex flex-col items-center justify-center text-center">
-                  <Network className="w-12 h-12 text-slate-300 mb-4 stroke-1" />
-                  <p className="text-slate-500 font-medium">No hay contactos registrados</p>
+                <div className="border border-dashed border-slate-350 bg-white rounded-3xl p-16 flex flex-col items-center justify-center text-center">
+                  <div className="h-12 w-12 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 mb-4">
+                    <Users className="w-6 h-6 stroke-1.5" />
+                  </div>
+                  <p className="text-slate-700 font-bold text-sm">No hay contactos registrados</p>
+                  <p className="text-slate-400 text-xs mt-1 max-w-xs leading-relaxed">Crea contactos directos para agilizar la correspondencia o el soporte con este proveedor.</p>
                 </div>
               )}
             </div>
           )}
 
           {activeTab === "Cuentas Bancarias" && (
-            <div className="animate-in fade-in duration-300">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Cuentas Bancarias Registradas</h3>
-                <button onClick={() => setIsBankModalOpen(true)} className="flex items-center text-[#e47352] bg-[#e47352]/10 px-4 py-2 rounded-lg font-bold text-xs hover:bg-[#e47352]/20 transition-colors">
+            <div className="animate-in fade-in duration-300 space-y-6">
+              <div className="flex justify-between items-center bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 font-sans">Cuentas Bancarias</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Monitorea y configura las cuentas destinadas a egresos y transferencias</p>
+                </div>
+                <button 
+                  onClick={() => setIsBankModalOpen(true)} 
+                  className="bg-[#e47352] text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-orange-600 transition flex items-center justify-center cursor-pointer shadow-sm shadow-orange-500/10"
+                >
                   <Plus className="w-4 h-4 mr-1.5" /> Añadir Cuenta
                 </button>
               </div>
               
               {provBankAccounts.length > 0 ? (
-                <div className="grid grid-cols-1 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {provBankAccounts.map(account => (
-                    <div key={account.id} className="border border-slate-200 rounded-xl p-6 flex flex-col sm:flex-row justify-between sm:items-center hover:border-slate-300 transition-colors bg-white group">
-                      <div className="flex items-center space-x-5 mb-4 sm:mb-0">
-                        <div className="h-12 w-12 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 group-hover:bg-[#e47352]/5 group-hover:text-[#e47352] transition-colors">
-                          <Landmark className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-900 text-base">{account.bankName}</p>
-                          <p className="text-sm text-slate-500">Beneficiario: <span className="font-medium text-slate-700">{account.accountName}</span></p>
-                        </div>
-                      </div>
-                      <div className="flex gap-8">
-                        <div>
-                          <p className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1">Número de Cuenta</p>
-                          <p className="font-mono text-slate-800 font-medium">{account.accountNumber}</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1">CLABE / IBAN</p>
-                          <p className="font-mono text-slate-800 font-medium">{account.clabe}</p>
-                        </div>
-                        {account.reference && (
-                          <div>
-                            <p className="text-[10px] uppercase font-bold text-slate-400 tracking-widest mb-1">Referencia</p>
-                            <p className="text-slate-800 font-medium">{account.reference}</p>
+                    <div key={account.id} className="border border-slate-200 rounded-2xl p-5 flex flex-col justify-between hover:border-[#e47352]/50 hover:shadow-md transition-all duration-200 bg-white relative overflow-hidden group">
+                      
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-slate-50 rounded-full translate-x-12 -translate-y-12 group-hover:bg-orange-50/40 transition-colors z-0" />
+
+                      <div className="relative z-10">
+                        <div className="flex items-center space-x-3.5 mb-4">
+                          <div className="h-10 w-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 group-hover:bg-orange-50 group-hover:text-[#e47352] group-hover:border-orange-100 transition-colors duration-200">
+                            <Landmark className="w-5 h-5" />
                           </div>
-                        )}
+                          <div>
+                            <p className="font-extrabold text-slate-850 text-sm tracking-tight">{account.bankName}</p>
+                            <p className="text-xs text-slate-500 italic mt-0.5">Beneficiario: <b className="text-slate-700 font-medium">{account.accountName}</b></p>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-2 mt-4 pt-4 border-t border-slate-100">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-slate-400 uppercase text-[9px]">Número de Cuenta</span>
+                            <span className="font-mono text-slate-800 font-semibold select-all bg-slate-50 rounded px-1.5 py-0.5 border border-slate-100">{account.accountNumber}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-slate-400 uppercase text-[9px]">CLABE Interbancaria</span>
+                            <span className="font-mono text-slate-800 font-semibold select-all bg-slate-55 bg-slate-50 rounded px-1.5 py-0.5 border border-slate-100">{account.clabe}</span>
+                          </div>
+                          {account.reference && (
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-400 uppercase text-[9px]">Referencia Interna</span>
+                              <span className="text-indigo-650 font-bold bg-indigo-50/50 rounded px-1.5 py-0.5">{account.reference}</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-slate-200 rounded-3xl p-16 flex flex-col items-center justify-center text-center">
-                  <Landmark className="w-12 h-12 text-slate-300 mb-4 stroke-1" />
-                  <p className="text-slate-500 font-medium">No hay cuentas bancarias registradas</p>
+                <div className="border border-dashed border-slate-350 bg-white rounded-3xl p-16 flex flex-col items-center justify-center text-center">
+                  <div className="h-12 w-12 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 mb-4">
+                    <Landmark className="w-6 h-6 stroke-1.5" />
+                  </div>
+                  <p className="text-slate-700 font-bold text-sm">No hay cuentas bancarias registradas</p>
+                  <p className="text-slate-400 text-xs mt-1 max-w-xs leading-relaxed">Configura cuentas bancarias para ligar los cobros, compras y pagos directamente a sus CLABEs.</p>
                 </div>
               )}
             </div>
           )}
 
           {activeTab === "Pagos" && (
-            <div className="animate-in fade-in duration-300">
-               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Historial de Pagos</h3>
-                <button onClick={() => openPaymentModal()} className="flex items-center text-[#e47352] bg-[#e47352]/10 px-4 py-2 rounded-lg font-bold text-xs hover:bg-[#e47352]/20 transition-colors">
-                  <Plus className="w-4 h-4 mr-1.5" /> Nuevo Pago
+            <div className="animate-in fade-in duration-300 space-y-6">
+              <div className="flex justify-between items-center bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 font-sans">Historial de Pagos</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Control financiero, liquidaciones e historial de erogaciones aplicadas</p>
+                </div>
+                <button 
+                  onClick={() => openPaymentModal()} 
+                  className="bg-[#e47352] text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-orange-600 transition flex items-center justify-center cursor-pointer shadow-sm shadow-orange-500/10"
+                >
+                  <Plus className="w-4 h-4 mr-1.5" /> Registrar Egresos / Pagos
                 </button>
               </div>
             
               {provPayments.length > 0 ? (
-                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                <div className="bg-white border border-slate-200/85 rounded-2xl shadow-sm overflow-hidden">
                   <table className="w-full text-left border-collapse">
-                    <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase tracking-widest font-bold border-b border-slate-200">
+                    <thead className="bg-[#f8fafc] text-slate-500 text-[10px] uppercase font-bold border-b border-slate-200">
                       <tr>
-                        <th className="px-6 py-4">Fecha</th>
-                        <th className="px-6 py-4">Concepto</th>
-                        <th className="px-6 py-4">Estado</th>
-                        <th className="px-6 py-4 text-right">Monto</th>
+                        <th className="px-6 py-4">Fecha de Operación</th>
+                        <th className="px-6 py-4">Concepto del Gasto</th>
+                        <th className="px-6 py-4 text-center">Estatus</th>
+                        <th className="px-6 py-4 text-right">Monto Erogado</th>
                         <th className="px-6 py-4 text-center">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="text-sm divide-y divide-slate-100">
                       {provPayments.map((payment) => (
-                        <tr key={payment.id} onClick={() => openPaymentModal(payment)} className="hover:bg-slate-50/50 transition-colors cursor-pointer">
-                          <td className="px-6 py-4 font-medium text-slate-700">{payment.date}</td>
-                          <td className="px-6 py-4 text-slate-800 font-medium">
+                        <tr key={payment.id} onClick={() => openPaymentModal(payment)} className="hover:bg-indigo-50/15 transition-all cursor-pointer group">
+                          <td className="px-6 py-4 font-semibold text-slate-700 font-mono text-xs">{payment.date}</td>
+                          <td className="px-6 py-4 text-slate-800 font-bold group-hover:text-indigo-650 transition-colors">
                             {payment.description || "Pago general"}
                           </td>
-                          <td className="px-6 py-4">
-                            <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${payment.status === 'Aplicado' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+                          <td className="px-6 py-4 text-center">
+                            <span className={`text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full border ${
+                              payment.status === 'Aplicado' 
+                                ? 'bg-emerald-50 text-[#0f573f] border-emerald-100' 
+                                : 'bg-amber-50 text-[#7a4c10] border-amber-100'
+                            }`}>
                               {payment.status || 'Aplicado'}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-right font-mono font-bold text-slate-800 text-base">
-                            ${payment.amount.toLocaleString()} {payment.currency}
+                          <td className="px-6 py-4 text-right font-mono font-black text-slate-800 text-sm">
+                            ${payment.amount.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})} {payment.currency}
                           </td>
                           <td className="px-6 py-4 text-center">
                             <button
@@ -458,7 +604,7 @@ export function ProveedorDetail() {
                                   deleteFinancialTransaction(payment.id);
                                 }
                               }}
-                              className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 transition-colors inline-flex items-center"
+                              className="text-rose-500 hover:text-rose-700 p-2 rounded-xl hover:bg-rose-50 transition-colors inline-flex items-center cursor-pointer border border-transparent hover:border-rose-100"
                               title="Eliminar Pago"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -470,9 +616,12 @@ export function ProveedorDetail() {
                   </table>
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-slate-200 rounded-3xl p-16 flex flex-col items-center justify-center text-center">
-                  <Receipt className="w-12 h-12 text-slate-300 mb-4 stroke-1" />
-                  <p className="text-slate-500 font-medium">No hay pagos registrados para este proveedor</p>
+                <div className="border border-dashed border-slate-350 bg-white rounded-3xl p-16 flex flex-col items-center justify-center text-center">
+                  <div className="h-12 w-12 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 mb-4">
+                    <Receipt className="w-6 h-6 stroke-1.5" />
+                  </div>
+                  <p className="text-slate-700 font-bold text-sm">No hay pagos o egresos registrados para este proveedor</p>
+                  <p className="text-slate-400 text-xs mt-1 max-w-xs leading-relaxed">Puedes ingresar aquí pagos periódicos, erogaciones extraordinarias de caja o transferencias.</p>
                 </div>
               )}
             </div>
@@ -480,7 +629,7 @@ export function ProveedorDetail() {
 
           {activeTab === "Alumnos Inscritos" && (
             <div className="animate-in fade-in duration-300 space-y-6">
-              <div className="flex justify-between items-center bg-slate-50 p-4 border border-slate-200 rounded-2xl">
+              <div className="flex justify-between items-center bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm">
                 <div>
                   <h3 className="text-sm font-bold text-slate-800 tracking-tight">Estudiantes Vinculados</h3>
                   <p className="text-xs text-slate-500 mt-0.5">Listado de alumnos inscritos en las clases o servicios provistos por este colaborador</p>
@@ -488,54 +637,54 @@ export function ProveedorDetail() {
               </div>
 
               {/* Tarjetas de Resumen */}
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center space-x-4 shadow-sm col-span-2 lg:col-span-1">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                <div className="bg-white border border-slate-200/70 shadow-sm rounded-2xl p-4 flex items-center space-x-3.5 col-span-2 lg:col-span-1">
                   <div className="w-10 h-10 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center justify-center text-indigo-600">
                     <Users className="w-5 h-5" />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Total de Alumnos</p>
-                    <p className="text-xl font-bold font-mono text-slate-800">{enrolledStudents.length}</p>
+                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Total Estudiantes</p>
+                    <p className="text-xl font-black font-mono text-slate-850">{enrolledStudents.length}</p>
                   </div>
                 </div>
 
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center space-x-4 shadow-sm">
-                  <div className="w-10 h-10 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center justify-center text-emerald-600">
-                    <span className="text-[10px] font-black">ACT</span>
+                <div className="bg-white border border-slate-200/70 shadow-sm rounded-2xl p-4 flex items-center space-x-3.5">
+                  <div className="w-10 h-10 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 font-extrabold text-[10px]">
+                    ACT
                   </div>
                   <div>
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Activos / Cursando</p>
-                    <p className="text-xl font-bold font-mono text-emerald-700">{activeEnrollmentsCount}</p>
+                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Activos</p>
+                    <p className="text-xl font-black font-mono text-emerald-600">{activeEnrollmentsCount}</p>
                   </div>
                 </div>
 
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center space-x-4 shadow-sm">
-                  <div className="w-10 h-10 bg-blue-50 border border-blue-100 rounded-xl flex items-center justify-center text-blue-600">
-                    <span className="text-[10px] font-black">COMP</span>
+                <div className="bg-white border border-slate-200/70 shadow-sm rounded-2xl p-4 flex items-center space-x-3.5">
+                  <div className="w-10 h-10 bg-blue-50 border border-blue-100 rounded-xl flex items-center justify-center text-blue-600 font-extrabold text-[10px]">
+                    CMP
                   </div>
                   <div>
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Completados</p>
-                    <p className="text-xl font-bold font-mono text-blue-700">{completedEnrollmentsCount}</p>
+                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Completados</p>
+                    <p className="text-xl font-black font-mono text-blue-605 text-blue-600">{completedEnrollmentsCount}</p>
                   </div>
                 </div>
 
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center space-x-4 shadow-sm">
-                  <div className="w-10 h-10 bg-amber-50 border border-amber-100 rounded-xl flex items-center justify-center text-amber-600">
-                    <span className="text-[10px] font-black">HOLD</span>
+                <div className="bg-white border border-slate-200/70 shadow-sm rounded-2xl p-4 flex items-center space-x-3.5">
+                  <div className="w-10 h-10 bg-amber-50 border border-amber-100 rounded-xl flex items-center justify-center text-amber-600 font-extrabold text-[10px]">
+                    HLD
                   </div>
                   <div>
-                    <p className="text-[10px] font-black uppercase text-[#925f1a] tracking-wider">On hold</p>
-                    <p className="text-xl font-bold font-mono text-amber-750">{onHoldEnrollmentsCount}</p>
+                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">On Hold</p>
+                    <p className="text-xl font-black font-mono text-amber-600">{onHoldEnrollmentsCount}</p>
                   </div>
                 </div>
 
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center space-x-4 shadow-sm">
-                  <div className="w-10 h-10 bg-rose-50 border border-rose-100 rounded-xl flex items-center justify-center text-rose-600">
-                    <span className="text-[10px] font-black">WITH</span>
+                <div className="bg-white border border-slate-200/70 shadow-sm rounded-2xl p-4 flex items-center space-x-3.5">
+                  <div className="w-10 h-10 bg-rose-55 bg-rose-50 border border-rose-100 rounded-xl flex items-center justify-center text-rose-600 font-extrabold text-[10px]">
+                    WDR
                   </div>
                   <div>
-                    <p className="text-[10px] font-black uppercase text-[#8d2a2a] tracking-wider">Withdrawn</p>
-                    <p className="text-xl font-bold font-mono text-rose-700">{withdrawnEnrollmentsCount}</p>
+                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Withdrawn</p>
+                    <p className="text-xl font-black font-mono text-rose-600">{withdrawnEnrollmentsCount}</p>
                   </div>
                 </div>
               </div>
@@ -543,16 +692,16 @@ export function ProveedorDetail() {
               {providerEnrollments.length > 0 ? (
                 <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
                   <table className="w-full text-left border-collapse table-auto">
-                    <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase tracking-widest font-bold border-b border-slate-200">
+                    <thead className="bg-[#f8fafc] text-slate-500 text-[10px] uppercase font-bold border-b border-slate-200">
                       <tr>
-                        <th className="px-6 py-4">Alumno</th>
-                        <th className="px-6 py-4">Clase / Programa</th>
+                        <th className="px-6 py-4">Estudiante / Alumno</th>
+                        <th className="px-6 py-4">Clase o Programa Académico</th>
                         <th className="px-6 py-4 text-center">Estatus</th>
                         <th className="px-6 py-4">Línea de Tiempo</th>
                         <th className="px-6 py-4 text-center">Créditos</th>
                       </tr>
                     </thead>
-                    <tbody className="text-sm divide-y divide-slate-100">
+                    <tbody className="text-sm divide-y divide-slate-105 divide-slate-100">
                       {providerEnrollments.map((env) => {
                         const student = students?.find(s => s.id === env.studentId);
                         const cItem = classes?.find(c => c.id === env.classId);
@@ -569,7 +718,7 @@ export function ProveedorDetail() {
                         } else if (statusVal === 'On hold') {
                           statusColor = "bg-amber-50 text-amber-700 border-amber-100";
                         } else if (statusVal === 'Withdrawn') {
-                          statusColor = "bg-slate-100 text-slate-700 border-slate-200";
+                          statusColor = "bg-slate-100 text-slate-705 border-slate-200";
                         }
 
                         const studentInitials = `${student.name[0] || 'A'}${student.lastName ? student.lastName[0] : ''}`.toUpperCase();
@@ -578,25 +727,25 @@ export function ProveedorDetail() {
                           <tr 
                             key={env.id} 
                             onClick={() => navigate(`/alumnos/${student.id}`)}
-                            className="hover:bg-slate-50/50 transition-colors cursor-pointer group"
+                            className="hover:bg-indigo-50/15 transition-all cursor-pointer group"
                           >
                             <td className="px-6 py-4">
                               <div className="flex items-center space-x-3">
-                                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-700 font-bold text-xs flex items-center justify-center border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-600 transition-colors">
+                                <div className="w-9 h-9 rounded-xl bg-orange-50 text-[#e47352] font-black text-xs flex items-center justify-center border border-orange-100 group-hover:bg-orange-500 group-hover:text-white group-hover:border-orange-500 transition-colors">
                                   {studentInitials}
                                 </div>
                                 <div className="leading-tight">
-                                  <p className="font-semibold text-slate-800 text-sm group-hover:text-indigo-600 transition-colors font-sans">
+                                  <p className="font-bold text-slate-800 text-sm group-hover:text-indigo-650 transition-colors font-sans">
                                     {student.name} {student.lastName}
                                   </p>
                                   <div className="flex items-center space-x-1.5 mt-0.5">
                                     {student.studentCustomId && (
-                                      <span className="text-[9px] font-mono text-[#e47352] bg-orange-50 px-1 py-0.2 rounded border border-orange-100 font-semibold leading-none uppercase">
+                                      <span className="text-[8px] font-black font-mono text-[#e47352] bg-orange-50 px-1 py-0.2 rounded border border-orange-100 leading-none uppercase">
                                         {student.studentCustomId}
                                       </span>
                                     )}
                                     {inst && (
-                                      <span className="text-[10px] text-slate-500 font-medium">
+                                      <span className="text-[10px] text-slate-400 font-semibold flex items-center gap-0.5">
                                         🏫 {inst.name}
                                       </span>
                                     )}
@@ -607,9 +756,9 @@ export function ProveedorDetail() {
                             <td className="px-6 py-4">
                               {cItem ? (
                                 <div>
-                                  <p className="font-semibold text-slate-850 text-xs leading-none mb-1">{cItem.name}</p>
+                                  <p className="font-bold text-slate-800 text-xs leading-none mb-1 group-hover:text-indigo-600 transition-colors">{cItem.name}</p>
                                   {cItem.code && (
-                                    <span className="text-[9.5px] text-slate-500 font-mono tracking-wider">{cItem.code}</span>
+                                    <span className="text-[9px] text-[#e47352] bg-orange-50/55 rounded px-1 font-mono tracking-wider font-semibold">{cItem.code}</span>
                                   )}
                                 </div>
                               ) : (
@@ -617,24 +766,24 @@ export function ProveedorDetail() {
                               )}
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider ${statusColor}`}>
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[9px] font-black border uppercase tracking-widest ${statusColor}`}>
                                 {statusVal}
                               </span>
                             </td>
                             <td className="px-6 py-4">
-                              <div className="flex flex-col space-y-0.5 text-[11px] font-mono text-slate-500">
+                              <div className="flex flex-col space-y-0.5 text-[10px] font-mono text-slate-500">
                                 {env.enrollmentDate && (
                                   <p>
-                                    <span className="font-sans text-slate-400 font-semibold uppercase text-[9px]">Inscrito:</span> {env.enrollmentDate}
+                                    <span className="font-sans text-slate-400 font-bold uppercase text-[9px] mr-1">Inscrito:</span>{env.enrollmentDate}
                                   </p>
                                 )}
                                 <p>
-                                  <span className="font-sans text-slate-400 font-semibold uppercase text-[9px]">Clases:</span> {env.startDate || env.activationDate || '-'} al {env.endDate || '-'}
+                                  <span className="font-sans text-slate-400 font-bold uppercase text-[9px] mr-1">Vigencia:</span>{env.startDate || env.activationDate || '-'} al {env.endDate || '-'}
                                 </p>
                               </div>
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono font-bold text-xs text-indigo-700 bg-indigo-50 border border-indigo-150 shadow-sm leading-none whitespace-nowrap">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-lg font-mono font-bold text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-100 shadow-sm leading-none whitespace-nowrap">
                                 {cItem?.creditType || `${cItem?.credits || 0} CR`}
                               </span>
                             </td>
@@ -645,10 +794,12 @@ export function ProveedorDetail() {
                   </table>
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-slate-200 rounded-3xl p-16 flex flex-col items-center justify-center text-center">
-                  <Users className="w-12 h-12 text-slate-300 mb-4 stroke-1" />
-                  <p className="text-slate-500 font-medium font-sans">No hay alumnos inscritos en los servicios de este proveedor</p>
-                  <p className="text-xs text-slate-400 mt-1 max-w-sm font-sans">Si creas clases asignadas a este proveedor e inscribes alumnos en su respectiva ficha o agenda, aparecerán aquí de forma automática.</p>
+                <div className="border border-dashed border-slate-350 bg-white rounded-3xl p-16 flex flex-col items-center justify-center text-center">
+                  <div className="h-12 w-12 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 mb-4">
+                    <Users className="w-6 h-6 stroke-1.5" />
+                  </div>
+                  <p className="text-slate-700 font-bold text-sm">No hay alumnos inscritos en los servicios de este proveedor</p>
+                  <p className="text-slate-400 text-xs mt-1 max-w-sm leading-relaxed">Si creas clases asignadas a este proveedor e inscribes alumnos en su respectiva ficha o agenda, aparecerán aquí de forma automática.</p>
                 </div>
               )}
             </div>
@@ -658,9 +809,9 @@ export function ProveedorDetail() {
             <div className="animate-in fade-in duration-300 space-y-8">
               
               {/* 1. Tarifario Base por Tipo de Producto */}
-              <div className="bg-[#f8fafc] border border-[#e2e8f0] p-6 rounded-3xl space-y-6">
+              <div className="bg-white border border-slate-200 p-6 rounded-3xl space-y-6 shadow-sm">
                 <div>
-                  <h3 className="text-base font-bold text-slate-800 tracking-tight">1. Tarifario Estándar por Tipo de Producto</h3>
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider font-sans">1. Tarifario Estándar por Tipo de Producto</h3>
                   <p className="text-xs text-slate-500 mt-1">Configura los precios de venta (ingresos) y costos de adquisición (egresos) de este proveedor por tarifa para cada tipo general de producto.</p>
                 </div>
 
@@ -672,15 +823,15 @@ export function ProveedorDetail() {
                     const hasRates = typeConfig && typeConfig.countryPrices && typeConfig.countryPrices.length > 0;
 
                     return (
-                      <div key={type} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
+                      <div key={type} className="bg-slate-50/60 border border-slate-200/80 rounded-2xl p-5 hover:bg-white hover:border-[#e47352]/40 hover:shadow-md transition-all duration-200 flex flex-col justify-between">
                         <div>
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                             <span className={cn(
-                              "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                              "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
                               (type === 'Clase' || type === 'Syllabus Académico') && "bg-blue-50 text-blue-700 border border-blue-200",
                               (type === 'Plataforma' || type === 'Curso de Idiomas') && "bg-purple-50 text-purple-700 border border-purple-200",
                               (type === 'Examen' || type === 'Certificación AP') && "bg-orange-50 text-orange-700 border border-orange-200",
-                              !['Clase', 'Plataforma', 'Examen', 'Syllabus Académico', 'Curso de Idiomas', 'Certificación AP'].includes(type) && "bg-teal-50 text-teal-705 text-teal-700 border border-teal-200",
+                              !['Clase', 'Plataforma', 'Examen', 'Syllabus Académico', 'Curso de Idiomas', 'Certificación AP'].includes(type) && "bg-teal-50 text-teal-700 border border-teal-200",
                             )}>
                               {type}
                             </span>
@@ -701,7 +852,7 @@ export function ProveedorDetail() {
                                 });
                                 setIsCountryModalOpen(true);
                               }}
-                              className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-150 px-2.5 py-1.5 rounded-lg transition"
+                              className="text-[10px] font-black text-[#e47352] bg-orange-50 border border-orange-200/50 hover:bg-orange-100 hover:text-orange-700 px-3 py-1.5 rounded-xl transition cursor-pointer"
                             >
                               {hasRates ? "Configurar Tarifas" : "+ Añadir Tarifa"}
                             </button>
@@ -710,19 +861,36 @@ export function ProveedorDetail() {
                           {/* List of Country rates for this type */}
                           <div className="mt-4 space-y-2">
                             {hasRates ? (
-                              <div className="space-y-2 overflow-y-auto max-h-36 pr-1 custom-scrollbar">
+                              <div className="space-y-3 overflow-y-auto max-h-48 pr-1 custom-scrollbar">
                                 {typeConfig.countryPrices.map((cp, cpIdx) => (
-                                  <div key={cpIdx} className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col">
+                                  <div key={cpIdx} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col hover:border-indigo-150 transition-colors">
                                     <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                                      <span className="text-xs font-bold text-slate-800">{cp.country}</span>
-                                      <div className="flex items-center space-x-1">
+                                      <span className="text-xs font-bold text-slate-800 flex items-center">
+                                        🌍 {cp.country}
+                                      </span>
+                                      <div className="flex items-center space-x-1 font-mono text-[9px]">
+                                        <button
+                                          onClick={() => {
+                                            setCountryForm({
+                                              ...cp,
+                                              country: '', // Clear the country so they can pick a new target tariff country
+                                            });
+                                            setSelectedProductTypeForCountry(type);
+                                            setIsCountryModalOpen(true);
+                                          }}
+                                          className="text-emerald-600 hover:text-emerald-800 font-bold px-1 py-0.5 rounded hover:bg-emerald-50 cursor-pointer"
+                                          title="Duplicar tarifa"
+                                        >
+                                          Duplicar
+                                        </button>
+                                        <span className="text-slate-300">|</span>
                                         <button
                                           onClick={() => {
                                             setCountryForm({ ...cp });
                                             setSelectedProductTypeForCountry(type);
                                             setIsCountryModalOpen(true);
                                           }}
-                                          className="text-indigo-600 hover:text-indigo-800 p-0.5 text-[10px]"
+                                          className="text-indigo-600 hover:text-indigo-850 font-bold px-1 py-0.5 rounded hover:bg-indigo-50 cursor-pointer"
                                           title="Editar tarifa"
                                         >
                                           Editar
@@ -734,7 +902,7 @@ export function ProveedorDetail() {
                                               handleDeleteCountryRate(type, cp.country);
                                             }
                                           }}
-                                          className="text-rose-500 hover:text-rose-700 p-0.5 text-[10px]"
+                                          className="text-rose-500 hover:text-rose-700 font-bold px-1 py-0.5 rounded hover:bg-rose-50 cursor-pointer"
                                           title="Eliminar tarifa"
                                         >
                                           Eliminar
@@ -742,18 +910,18 @@ export function ProveedorDetail() {
                                       </div>
                                     </div>
                                     
-                                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-600">
+                                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-650">
                                       {['clase', 'clases'].includes(type.toLowerCase()) ? (
                                         <>
                                           <div>
-                                            <span className="font-medium text-slate-400">Ventas (Completo/Medio/AP):</span>
-                                            <div className="font-mono text-slate-700">
+                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Ventas (Comp/Med/AP):</span>
+                                            <div className="font-mono text-slate-800 font-bold mt-0.5">
                                               ${cp.priceFullCredit || "0"} / ${cp.priceHalfCredit || "0"} / AP: ${cp.priceFullApCredit || "0"}
                                             </div>
                                           </div>
                                           <div>
-                                            <span className="font-medium text-slate-400">Costos (Completo/Medio/AP):</span>
-                                            <div className="font-mono text-slate-700 text-rose-600">
+                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Costos (Comp/Med/AP):</span>
+                                            <div className="font-mono text-rose-650 font-bold mt-0.5">
                                               ${cp.costFullCredit || "0"} / ${cp.costHalfCredit || "0"} / AP: ${cp.costFullApCredit || "0"}
                                             </div>
                                           </div>
@@ -761,14 +929,14 @@ export function ProveedorDetail() {
                                       ) : (
                                         <>
                                           <div>
-                                            <span className="font-medium text-slate-400">Precio Venta:</span>
-                                            <div className="font-mono font-bold text-slate-800 text-xs">
+                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Precio Venta:</span>
+                                            <div className="font-mono font-black text-slate-850 text-xs mt-0.5">
                                               ${cp.priceFullCredit || cp.priceFullApCredit || "0"}
                                             </div>
                                           </div>
                                           <div>
-                                            <span className="font-medium text-slate-400">Costo Venta:</span>
-                                            <div className="font-mono font-bold text-rose-600 text-xs">
+                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Costo Adquisición:</span>
+                                            <div className="font-mono font-black text-rose-650 text-xs mt-0.5">
                                               ${cp.costFullCredit || cp.costFullApCredit || "0"}
                                             </div>
                                           </div>
@@ -779,7 +947,7 @@ export function ProveedorDetail() {
                                 ))}
                               </div>
                             ) : (
-                              <div className="text-[11px] text-slate-400 italic bg-slate-50 border border-dashed border-slate-200 rounded-xl p-4 text-center">
+                              <div className="text-[10px] text-slate-400 italic bg-white border border-dashed border-slate-200 rounded-xl p-4 text-center">
                                 Sin tarifas configuradas para este tipo de producto.
                               </div>
                             )}
@@ -801,25 +969,27 @@ export function ProveedorDetail() {
                 {providerClasses && providerClasses.length > 0 ? (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-xs bg-white min-w-[500px]">
-                      <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
+                      <thead className="bg-[#f8fafc] text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
                         <tr>
-                          <th className="px-6 py-3">Clave</th>
-                          <th className="px-6 py-3">Nombre</th>
-                          <th className="px-6 py-3">Tipo de Crédito</th>
-                          <th className="px-6 py-3">Vigencia</th>
+                          <th className="px-6 py-4">Clave de Clase</th>
+                          <th className="px-6 py-4">Nombre Oficial</th>
+                          <th className="px-6 py-4">Tipo de Crédito</th>
+                          <th className="px-6 py-4">Vigencia del Servicio</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-slate-100 text-sm">
                         {providerClasses.map((cl) => (
                           <tr key={cl.id} className="hover:bg-slate-50/50">
-                            <td className="px-6 py-3 font-mono font-bold text-slate-900">{cl.code || 'SIN CLAVE'}</td>
-                            <td className="px-6 py-3 font-semibold text-slate-800">{cl.name}</td>
-                            <td className="px-6 py-3">
-                              <span className="inline-block px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-100 text-[10px] text-indigo-700 font-bold whitespace-nowrap">
+                            <td className="px-6 py-4 font-mono font-black text-[#e47352] text-xs">
+                              <span className="bg-orange-50 px-2 py-1 rounded border border-orange-100">{cl.code || 'SIN CLAVE'}</span>
+                            </td>
+                            <td className="px-6 py-4 font-bold text-slate-800">{cl.name}</td>
+                            <td className="px-6 py-4">
+                              <span className="inline-block px-2.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-100 text-[10px] text-indigo-750 font-black uppercase tracking-wider whitespace-nowrap">
                                 {cl.creditType || 'Crédito completo'}
                               </span>
                             </td>
-                            <td className="px-6 py-3 font-mono text-slate-500">{cl.validity || 'Sin vigencia'}</td>
+                            <td className="px-6 py-4 font-mono text-slate-500 text-xs">{cl.validity || 'Sin vigencia'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -831,7 +1001,6 @@ export function ProveedorDetail() {
                   </div>
                 )}
               </div>
-
             </div>
           )}
         </div>
@@ -965,6 +1134,8 @@ export function ProveedorDetail() {
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Categoría</label>
                 <select required value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white">
+                  <option value="">Selecciona...</option>
+                  <option value="Categoría Académica">Categoría Académica</option>
                   <option value="Transporte">Transporte</option>
                   <option value="Materiales">Materiales Didácticos</option>
                   <option value="Educación">Educación</option>
@@ -974,8 +1145,44 @@ export function ProveedorDetail() {
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Subcategoría</label>
-                <input type="text" value={editForm.subcategory} onChange={e => setEditForm({...editForm, subcategory: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm" />
+                {editForm.category === "Categoría Académica" ? (
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Subcategoría Académica</label>
+                    <select
+                      value={academicSubcats.includes(editForm.subcategory) ? editForm.subcategory : (editForm.subcategory ? "Otro" : "")}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "Otro") {
+                          setEditForm({ ...editForm, subcategory: "" });
+                        } else {
+                          setEditForm({ ...editForm, subcategory: val });
+                        }
+                      }}
+                      className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white font-medium text-slate-700"
+                    >
+                      <option value="">Selecciona subcategoría...</option>
+                      {academicSubcats.map(sub => (
+                        <option key={sub} value={sub}>{sub}</option>
+                      ))}
+                      <option value="Otro">Otro (Especificar)</option>
+                    </select>
+                    
+                    {(!academicSubcats.includes(editForm.subcategory) || editForm.subcategory === "") && (
+                      <input
+                        type="text"
+                        value={editForm.subcategory}
+                        onChange={e => setEditForm({ ...editForm, subcategory: e.target.value })}
+                        className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                        placeholder="Especificar otra subcategoría académica..."
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Subcategoría</label>
+                    <input type="text" value={editForm.subcategory} onChange={e => setEditForm({...editForm, subcategory: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm" />
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1006,7 +1213,19 @@ export function ProveedorDetail() {
               </div>
               <div className="sm:col-span-1">
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">País</label>
-                <input required type="text" value={editForm.country} onChange={e => setEditForm({...editForm, country: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm" />
+                <select
+                  required
+                  value={editForm.country}
+                  onChange={e => setEditForm({...editForm, country: e.target.value})}
+                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white font-medium text-slate-700 cursor-pointer"
+                >
+                  <option value="México">México</option>
+                  <option value="Estados Unidos de America">Estados Unidos de America</option>
+                  <option value="Canadá">Canadá</option>
+                  <option value="España">España</option>
+                  <option value="Reino Unido">Reino Unido</option>
+                  <option value="Australia">Australia</option>
+                </select>
               </div>
               <div className="sm:col-span-1">
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Estado (Status)</label>

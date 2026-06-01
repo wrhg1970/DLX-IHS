@@ -41,6 +41,7 @@ export function Alumnos() {
   const [pendingBulkUpdates, setPendingBulkUpdates] = useState<any>(null);
   const [studentToArchive, setStudentToArchive] = useState<any>(null);
   const [studentToDelete, setStudentToDelete] = useState<any>(null);
+  const [showBulkDeleteConfirmModal, setShowBulkDeleteConfirmModal] = useState(false);
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -207,6 +208,21 @@ export function Alumnos() {
     setTimeout(() => {
       setSuccessMessage(null);
     }, 5000);
+  };
+
+  const handleBulkDeleteClick = () => {
+    if (selectedStudentIds.length === 0) return;
+    setShowBulkDeleteConfirmModal(true);
+  };
+
+  const executeBulkDelete = () => {
+    selectedStudentIds.forEach(id => {
+      deleteStudent(id);
+    });
+    setSuccessMessage(`Se han eliminado con éxito ${selectedStudentIds.length} alumnos.`);
+    setSelectedStudentIds([]);
+    setShowBulkDeleteConfirmModal(false);
+    setTimeout(() => setSuccessMessage(null), 4000);
   };
 
   const handleExportCSV = () => {
@@ -597,7 +613,14 @@ export function Alumnos() {
             </div>
           </div>
 
-          <div className="flex justify-end pt-1">
+          <div className="flex justify-end gap-3 pt-1">
+            <button 
+              onClick={handleBulkDeleteClick}
+              className="bg-rose-600 hover:bg-rose-700 text-white px-5 py-1.5 rounded-md text-[11px] font-bold uppercase tracking-wider shadow transition flex items-center space-x-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Eliminar seleccionados</span>
+            </button>
             <button 
               onClick={handleApplyBulkUpdate}
               className="bg-indigo-600 text-white px-5 py-1.5 rounded-md text-[11px] font-bold uppercase tracking-wider shadow hover:bg-indigo-700 transition flex items-center space-x-1.5 animate-pulse"
@@ -901,6 +924,41 @@ export function Alumnos() {
                 className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-colors"
               >
                 Sí, Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBulkDeleteConfirmModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200" id="custom-delete-confirm-bulk-students">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full border border-slate-100 p-6 space-y-4 animate-in zoom-in-95 duration-150 text-slate-800">
+            <div className="flex items-start space-x-3">
+              <div className="bg-rose-100 text-rose-700 p-2.5 rounded-xl shrink-0">
+                <Trash2 className="w-5 h-5 animate-pulse" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-rose-900">¿Eliminar alumnos seleccionados?</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  ¿Estás completamente seguro de que deseas eliminar permanentemente a los <strong className="text-rose-600">{selectedStudentIds.length}</strong> alumnos seleccionados? Esta acción purgará sus registros oficiales, inscripciones y antecedentes de forma definitiva de la base de datos digital.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteConfirmModal(false)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={executeBulkDelete}
+                className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-colors cursor-pointer"
+              >
+                Sí, Eliminar Todo
               </button>
             </div>
           </div>

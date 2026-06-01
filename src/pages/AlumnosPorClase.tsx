@@ -16,7 +16,8 @@ import {
   CheckCircle2, 
   X, 
   Sliders, 
-  Building2 
+  Building2,
+  Trash2
 } from "lucide-react";
 
 export function AlumnosPorClase() {
@@ -27,6 +28,7 @@ export function AlumnosPorClase() {
     providers, 
     institutions, 
     updateEnrollment,
+    deleteEnrollment,
     catalogs,
     providerProductServices
   } = useAppContext();
@@ -42,6 +44,7 @@ export function AlumnosPorClase() {
 
   // Bulk Edit Modal state
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [bulkSuccessMessage, setBulkSuccessMessage] = useState<string | null>(null);
 
   // Bulk Edit Form state (which fields are active and their values)
@@ -445,17 +448,24 @@ export function AlumnosPorClase() {
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => setSelectedEnrollmentIds([])}
-                className="px-4 py-2 border border-white/30 hover:border-white/60 bg-white/5 hover:bg-white/10 text-white font-extrabold uppercase tracking-widest text-[10px] rounded-xl transition"
+                className="px-4 py-2 border border-white/30 hover:border-white/60 bg-white/5 hover:bg-white/10 text-white font-extrabold uppercase tracking-widest text-[10px] rounded-xl transition cursor-pointer"
               >
                 Deseleccionar
               </button>
               <button
                 onClick={handleOpenBulkModal}
                 style={{ color: "#1e1b4b" }}
-                className="px-5 py-2.5 bg-white text-indigo-950 font-black uppercase tracking-widest text-[10px] rounded-xl hover:bg-slate-100 hover:scale-103 active:scale-97 shadow-md transition-all flex items-center gap-1.5"
+                className="px-5 py-2.5 bg-white text-indigo-950 font-black uppercase tracking-widest text-[10px] rounded-xl hover:bg-slate-100 hover:scale-103 active:scale-97 shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
               >
                 <Edit3 className="w-3.5 h-3.5 text-indigo-950" style={{ color: "#1e1b4b" }} />
                 Masivo: Modificar Datos
+              </button>
+              <button
+                onClick={() => setIsDeleteModalOpen(true)}
+                className="px-5 py-2.5 bg-rose-600 border border-rose-500 hover:bg-rose-700 text-white font-black uppercase tracking-widest text-[10px] rounded-xl hover:scale-103 active:scale-97 shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-white" />
+                Borrar Seleccionados
               </button>
             </div>
           </div>
@@ -834,6 +844,75 @@ export function AlumnosPorClase() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+        title="Confirmar Eliminación de Inscripciones"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 flex items-start gap-2.5 animate-in fade-in duration-300">
+            <Info className="w-5 h-5 text-rose-600 mt-0.5 shrink-0" />
+            <div className="text-xs text-rose-950">
+              <p className="font-bold uppercase tracking-wide">¿Está seguro de que desea eliminar las inscripciones?</p>
+              <p className="mt-1 font-medium leading-relaxed opacity-90">
+                Está a punto de de eliminar <span className="font-bold underline">{selectedEnrollmentIds.length} alumnos/inscripciones</span> de sus respectivas clases. Esta acción removerá el vínculo de los alumnos con estas clases de forma permanente.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2 max-h-[35vh] overflow-y-auto border border-slate-100 rounded-xl p-3 bg-slate-50">
+            <p className="text-[10px] font-black uppercase text-slate-500 tracking-wider mb-1">
+              Alumnos a desvincular:
+            </p>
+            {selectedEnrollmentIds.map((id) => {
+              const env = enrichedEnrollments.find(e => e.id === id);
+              if (!env) return null;
+              return (
+                <div key={id} className="flex justify-between items-center text-xs bg-white p-2.5 rounded-xl border border-slate-200/60 shadow-sm animate-in zoom-in-95 duration-200">
+                  <div>
+                    <p className="font-bold text-slate-800">{env.studentName}</p>
+                    <p className="text-[10px] text-slate-500 font-medium">{env.className}</p>
+                  </div>
+                  <span className="text-[9px] font-black uppercase text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-full inline-block">
+                    Se desvinculará
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Form Actions footer */}
+          <div className="pt-4 flex justify-end space-x-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsDeleteModalOpen(false)}
+              className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 uppercase tracking-wider transition cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                selectedEnrollmentIds.forEach((id) => {
+                  deleteEnrollment(id);
+                });
+                const count = selectedEnrollmentIds.length;
+                setSelectedEnrollmentIds([]);
+                setIsDeleteModalOpen(false);
+                setBulkSuccessMessage(`Se eliminaron correctamente ${count} inscripciones de clases.`);
+                setTimeout(() => setBulkSuccessMessage(null), 7000);
+              }}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-sm transition duration-150 flex items-center gap-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              Sí, Eliminar de las Clases
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );
