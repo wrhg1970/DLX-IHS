@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 export function Dashboard() {
-  const { institutions, students, classes, enrollments, providers, financialTransactions } = useAppContext();
+  const { institutions, students, classes, enrollments, providers, financialTransactions, payments } = useAppContext();
   const [dashboardView, setDashboardView] = useState<'performance' | 'cobranza'>('performance');
   const [semaforoFilter, setSemaforoFilter] = useState<'all' | 'rojo' | 'amarillo' | 'verde'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -233,6 +233,31 @@ export function Dashboard() {
         }
       }
     });
+
+    // Process real student payments as additional incomes/revenues
+    const resolvedPayments = payments || [];
+    resolvedPayments.forEach(p => {
+      if (!p.date) return;
+      const dateParts = p.date.split('-');
+      if (dateParts.length >= 2) {
+        const year = dateParts[0];
+        const month = dateParts[1];
+        const monthKey = `${year}-${month}`;
+        
+        const amount = p.finalAmount || p.amount || 0;
+        
+        if (!monthlyMap[monthKey]) {
+          monthlyMap[monthKey] = { income: 0, expense: 0 };
+        }
+        
+        // If a payment has a providerId and no studentId, it can be counted as expense, otherwise income
+        if (p.providerId && !p.studentId) {
+          monthlyMap[monthKey].expense += amount;
+        } else {
+          monthlyMap[monthKey].income += amount;
+        }
+      }
+    });
     
     // Convert map to array and sort chronologically
     const sortedKeys = Object.keys(monthlyMap).sort();
@@ -252,19 +277,6 @@ export function Dashboard() {
       };
     });
     
-    const activeRecords = records.filter(r => r.Ingresos > 0 || r.Egresos > 0);
-    if (activeRecords.length === 0) {
-      // Return beautiful baseline data if absolutely blank
-      return [
-        { name: 'Ene ' + String(currentYear).substring(2), Ingresos: 240000, Egresos: 110000, Balance: 130000 },
-        { name: 'Feb ' + String(currentYear).substring(2), Ingresos: 290000, Egresos: 150000, Balance: 140000 },
-        { name: 'Mar ' + String(currentYear).substring(2), Ingresos: 310000, Egresos: 135000, Balance: 175000 },
-        { name: 'Abr ' + String(currentYear).substring(2), Ingresos: 270000, Egresos: 160000, Balance: 110000 },
-        { name: 'May ' + String(currentYear).substring(2), Ingresos: 350000, Egresos: 180000, Balance: 170000 },
-        { name: 'Jun ' + String(currentYear).substring(2), Ingresos: 420000, Egresos: 220000, Balance: 200000 },
-      ];
-    }
-    
     return records.filter(r => {
       const hasData = r.Ingresos > 0 || r.Egresos > 0;
       const currentMonth = new Date().getMonth() + 1;
@@ -273,7 +285,7 @@ export function Dashboard() {
       const isPastOrPresentMonth = parseInt(mStr, 10) <= currentMonth;
       return hasData || (isCurrentYear && isPastOrPresentMonth);
     }).slice(-6);
-  }, [financialTransactions]);
+  }, [financialTransactions, payments]);
 
   const currentChartTotals = useMemo(() => {
     let totalIn = 0;

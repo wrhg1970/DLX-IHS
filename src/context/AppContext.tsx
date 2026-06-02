@@ -944,6 +944,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             }
           } catch (e) {
             console.error(`Error syncing collection ${collectionName}:`, e);
+            const errMsg = e instanceof Error ? e.message : String(e);
+            if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted')) {
+              if (typeof window !== 'undefined') {
+                (window as any).__firestore_quota_exceeded__ = true;
+                window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+              }
+            }
           }
         };
 

@@ -19,6 +19,17 @@ export async function testFirebaseConnection() {
     await getDocFromServer(doc(db, 'system', 'connection_test_spec'));
     console.log("Firebase connection verified and online.");
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const isQuotaError = errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted');
+    
+    if (isQuotaError) {
+      if (typeof window !== 'undefined') {
+        (window as any).__firestore_quota_exceeded__ = true;
+        window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+      }
+      console.warn("Firestore Quota Handshake notice: Quota limit exceeded.");
+    }
+
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error("Please check your Firebase configuration or network status.");
     } else {
@@ -55,8 +66,20 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMsg = error instanceof Error ? error.message : String(error);
+  const isQuotaError = errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted');
+  
+  if (isQuotaError) {
+    if (typeof window !== 'undefined') {
+      (window as any).__firestore_quota_exceeded__ = true;
+      window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+    }
+    console.warn("Firestore Quota Limit Exceeded. Switching automatically to Local-Only mode. All data is securely saved in browser LocalStorage.");
+    return; // Prevent crash/unhandled rejection loop by not throwing
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
