@@ -480,11 +480,13 @@ export function Proveedores() {
                   className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white font-medium text-slate-700 cursor-pointer"
                 >
                   <option value="México">México</option>
-                  <option value="Estados Unidos de America">Estados Unidos de America</option>
-                  <option value="Canadá">Canadá</option>
-                  <option value="España">España</option>
-                  <option value="Reino Unido">Reino Unido</option>
                   <option value="Australia">Australia</option>
+                  <option value="Canadá">Canadá</option>
+                  <option value="China">China</option>
+                  <option value="España">España</option>
+                  <option value="Estados Unidos de America">Estados Unidos de America</option>
+                  <option value="Italia">Italia</option>
+                  <option value="Reino Unido">Reino Unido</option>
                 </select>
               </div>
               <div className="sm:col-span-1">

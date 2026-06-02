@@ -638,6 +638,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('fully_cleared_v3', 'true');
   }
 
+  // Clear cached catalogs, providers and bank accounts so they get hydrated with new user list
+  if (typeof window !== 'undefined' && !localStorage.getItem('fully_cleared_v4_catalogs')) {
+    localStorage.removeItem('catalogs');
+    localStorage.removeItem('providers');
+    localStorage.removeItem('bankAccounts');
+    localStorage.setItem('fully_cleared_v4_catalogs', 'true');
+  }
+
   const [institutions, setInstitutions] = useState<Institution[]>(() => loadSaved('institutions', []));
 
   const [students, setStudents] = useState<Student[]>(() => loadSaved('students', []));
@@ -646,9 +654,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [enrollments, setEnrollments] = useState<Enrollment[]>(() => loadSaved('enrollments', []));
 
-  const [providers, setProviders] = useState<Provider[]>(() => loadSaved('providers', []));
+  const [providers, setProviders] = useState<Provider[]>(() => {
+    const saved = loadSaved<Provider[]>('providers', []);
+    if (saved.length === 0) {
+      return [
+        { id: 1, commercialName: 'Keystone', legalName: 'Keystone Education', rfc: '', phone: '', email: 'contact@keystone.com', category: 'Proveedor Principal', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Curriculum Académico' },
+        { id: 2, commercialName: 'Nelson Academy', legalName: 'Nelson Academy', rfc: '', phone: '', email: 'info@nelsonacademy.com', category: 'Proveedor Principal', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Curriculum Académico' },
+        { id: 3, commercialName: 'ITEP', legalName: 'International Test of English Proficiency', rfc: '', phone: '', email: 'info@itepexam.com', category: 'Proveedor Principal', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Servicios Extras' },
+        { id: 4, commercialName: 'TOEFL', legalName: 'TOEFL iBT', rfc: '', phone: '', email: 'toefl@ets.org', category: 'Proveedor Principal', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Servicios Extras' },
+        { id: 5, commercialName: 'Estudiantes Embajadores', legalName: 'Estudiantes Embajadores S.A.', rfc: '', phone: '', email: 'contacto@estudiantesembajadores.com', category: 'Proveedor Principal', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Servicios Extras' },
+        { id: 6, commercialName: 'Schmoop', legalName: 'Schmoop University Inc.', rfc: '', phone: '', email: 'support@shmoop.com', category: 'Proveedor Principal', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Servicios Extras' },
+        { id: 7, commercialName: 'Coordinador', legalName: 'Coordinador de Escuela', rfc: '', phone: '', email: 'coordinador@prov.com', category: 'Proveedor Administrativo', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Servicios Extras' },
+        { id: 8, commercialName: 'Alumno', legalName: 'Alumno Servicios', rfc: '', phone: '', email: 'alumno@prov.com', category: 'Proveedor Administrativo', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Servicios Extras' },
+        { id: 9, commercialName: 'Padre Familia', legalName: 'Padre Familia Servicios', rfc: '', phone: '', email: 'padrefamilia@prov.com', category: 'Proveedor Administrativo', subcategory: '', street: '', neighborhood: '', city: '', state: '', zipCode: '', country: 'México', status: 'Activo', providerType: 'Servicios Extras' }
+      ];
+    }
+    return saved;
+  });
 
-  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>(() => loadSaved('bankAccounts', []));
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>(() => {
+    const saved = loadSaved<BankAccount[]>('bankAccounts', []);
+    if (saved.length === 0) {
+      return [
+        { id: 1, providerId: 2, bankName: 'Banorte PEM MXN', accountName: 'Programas Estudiantiles de Mexico', accountNumber: '0000000000', clabe: '0000000000' },
+        { id: 2, providerId: 5, bankName: 'WellsFargo USD', accountName: 'International High School', accountNumber: '0000000000', clabe: '0000000000' }
+      ];
+    }
+    return saved;
+  });
   const [payments, setPayments] = useState<Payment[]>(() => loadSaved('payments', []));
   const [contacts, setContacts] = useState<Contact[]>(() => loadSaved('contacts', []));
   const [tasks, setTasks] = useState<Task[]>(() => loadSaved('tasks', []));
@@ -724,17 +757,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const fallback: Record<CatalogTypes, CatalogItem[]> = {
       'Tarifas Países': [
         { id: '1', name: 'México' },
-        { id: '2', name: 'Estados Unidos de America' },
-        { id: '3', name: 'Canadá' },
-        { id: '4', name: 'España' },
-        { id: '5', name: 'Reino Unido' },
-        { id: '6', name: 'Australia' }
+        { id: '2', name: 'LATAM' },
+        { id: '3', name: 'Colombia A' },
+        { id: '4', name: 'Colombia B' },
+        { id: '5', name: 'China' },
+        { id: '6', name: 'Homeschool' }
       ],
       'Tipos de Institución': [
         { id: '1', name: 'Colegio Internacional' },
-        { id: '2', name: 'Universidad' },
-        { id: '3', name: 'Academia de Idiomas' },
-        { id: '4', name: 'Corporativo' }
+        { id: '2', name: 'Homeschool' }
       ],
       'Monedas': [
         { id: '1', name: 'MXN - Peso Mexicano' },
@@ -743,14 +774,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ],
       'Roles de Usuario': [
         { id: '1', name: 'Superadministrador' },
-        { id: '2', name: 'Finanzas' },
-        { id: '3', name: 'Academia' },
-        { id: '4', name: 'Ventas' }
+        { id: '2', name: 'Director' },
+        { id: '3', name: 'Finanzas' },
+        { id: '4', name: 'Academia' },
+        { id: '5', name: 'Ventas' }
       ],
       'Métodos de Pago': [
-        { id: '1', name: 'Transferencia Bancaria' },
-        { id: '2', name: 'Tarjeta de Crédito' },
-        { id: '3', name: 'Efectivo' }
+        { id: 'pay_1', name: 'Transferencia' },
+        { id: 'pay_2', name: 'Tarjeta de Crédito' },
+        { id: 'pay_3', name: 'Efectivo' }
       ],
       'Estados Académicos': [
         { id: '1', name: 'Activo' },
@@ -760,44 +792,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ],
       'Categorías': defaultCats,
       'Subcategorías': defaultSubcats,
-      'Membresías': [],
-      'Cuentas bancarias': [],
+      'Membresías': [
+        { id: 'memb_1', name: 'M-2000' },
+        { id: 'memb_2', name: 'M-1000' },
+        { id: 'memb_3', name: 'M-500' },
+        { id: 'memb_4', name: 'Sin membresia' }
+      ],
+      'Cuentas bancarias': [
+        { id: 'bank_1', name: 'Banorte PEM MXN', companyName: 'Programas Estudiantiles de Mexico', accountNumber: '0000000000' },
+        { id: 'bank_2', name: 'WellsFargo USD', companyName: 'International High School', accountNumber: '0000000000' }
+      ],
       'Modalidades': [
-        { id: '1', name: 'Presencial' },
-        { id: '2', name: 'Online / Semipresencial' },
-        { id: '3', name: 'Híbrida' },
-        { id: '4', name: 'Intercambio' }
+        { id: 'mod_1', name: 'Dual' },
+        { id: 'mod_2', name: 'APID' },
+        { id: 'mod_3', name: 'Homeschool' },
+        { id: 'mod_4', name: 'Transfer' },
+        { id: 'mod_5', name: 'Complementaria' }
       ],
       'Tipo de Producto': [
-        { id: '1', name: 'Syllabus Académico' },
-        { id: '2', name: 'Curso de Idiomas' },
-        { id: '3', name: 'Certificación AP' },
-        { id: '4', name: 'Consultoría / Tutoría' },
-        { id: '5', name: 'Seguros Médicos' },
-        { id: '6', name: 'Excursión / Programa' }
+        { id: 'prod_1', name: 'Clases', providerIds: [1, 2] },
+        { id: 'prod_2', name: 'Math Exam Accreditation', providerIds: [2] },
+        { id: 'prod_3', name: 'Certificación Ingles', providerIds: [3, 4] },
+        { id: 'prod_4', name: 'University Placement', providerIds: [5] },
+        { id: 'prod_5', name: 'Centro de Idiomas Digital', providerIds: [5] },
+        { id: 'prod_6', name: 'Schmoop', providerIds: [6] },
+        { id: 'prod_7', name: 'Community Service Accreditation', providerIds: [2, 7, 8, 9] }
       ]
     };
 
     const saved = loadSaved<any>('catalogs', fallback);
     
-    // Migrate saved 'Países y Regiones' to 'Tarifas Países' if present
-    if (saved['Países y Regiones'] && (!saved['Tarifas Países'] || saved['Tarifas Países'].length === 0)) {
-      saved['Tarifas Países'] = saved['Países y Regiones'];
-      delete saved['Países y Regiones'];
-    }
-
     // Safety check to migrate/inject items even if they exist but have empty catalogs
     if (!saved['Categorías'] || saved['Categorías'].length === 0) {
       saved['Categorías'] = defaultCats;
     }
-    if (!saved['Tarifas Países'] || saved['Tarifas Países'].length === 0 || saved['Tarifas Países'].some((item: any) => item.name === 'China' || item.name === 'Estados Unidos' || item.name === 'Japón')) {
+    if (!saved['Tarifas Países'] || saved['Tarifas Países'].length === 0) {
       saved['Tarifas Países'] = fallback['Tarifas Países'];
+    }
+    if (!saved['Tipos de Institución'] || saved['Tipos de Institución'].length === 0) {
+      saved['Tipos de Institución'] = fallback['Tipos de Institución'];
+    }
+    if (!saved['Roles de Usuario'] || saved['Roles de Usuario'].length === 0) {
+      saved['Roles de Usuario'] = fallback['Roles de Usuario'];
+    }
+    if (!saved['Métodos de Pago'] || saved['Métodos de Pago'].length === 0) {
+      saved['Métodos de Pago'] = fallback['Métodos de Pago'];
+    }
+    if (!saved['Membresías'] || saved['Membresías'].length === 0) {
+      saved['Membresías'] = fallback['Membresías'];
+    }
+    if (!saved['Cuentas bancarias'] || saved['Cuentas bancarias'].length === 0) {
+      saved['Cuentas bancarias'] = fallback['Cuentas bancarias'];
     }
     if (!saved['Subcategorías'] || saved['Subcategorías'].length === 0) {
       saved['Subcategorías'] = defaultSubcats;
-    }
-    if (!saved['Cuentas bancarias']) {
-      saved['Cuentas bancarias'] = [];
     }
     if (!saved['Modalidades'] || saved['Modalidades'].length === 0) {
       saved['Modalidades'] = fallback['Modalidades'];
@@ -920,7 +968,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const { testFirebaseConnection } = await import('../lib/firebase');
 
         // Test database handshake
-        await testFirebaseConnection();
+        try {
+          await testFirebaseConnection();
+        } catch (e) {
+          console.warn("Handshake/test connection failed:", e);
+          const errMsg = e instanceof Error ? e.message : String(e);
+          if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted')) {
+            if (typeof window !== 'undefined') {
+              (window as any).__firestore_quota_exceeded__ = true;
+              window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+            }
+            setFirebaseSyncCompleted(true);
+            return;
+          }
+        }
 
         // Sub-function to safely query or back up a collection
         const syncCollection = async <T extends { id: string | number }>(
@@ -928,6 +989,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           localList: T[],
           setter: (val: T[]) => void
         ) => {
+          if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) {
+            return;
+          }
           try {
             const snap = await getDocs(collection(db, collectionName));
             if (!snap.empty) {
@@ -992,6 +1056,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) {
+        prevRef.current = list;
+        return;
+      }
+
       const addedOrUpdated = list.filter(item => {
         const prev = prevRef.current.find(p => p.id === item.id);
         return !prev || JSON.stringify(prev) !== JSON.stringify(item);
@@ -1003,13 +1072,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
         import('firebase/firestore').then(async ({ doc, setDoc, deleteDoc }) => {
           addedOrUpdated.forEach(item => {
             setDoc(doc(db, collectionName, String(item.id)), item).catch(err => {
-              handleFirestoreError(err, OperationType.WRITE, `${collectionName}/${item.id}`);
+              const errMsg = err instanceof Error ? err.message : String(err);
+              if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted')) {
+                if (typeof window !== 'undefined') {
+                  (window as any).__firestore_quota_exceeded__ = true;
+                  window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+                }
+              } else {
+                handleFirestoreError(err, OperationType.WRITE, `${collectionName}/${item.id}`);
+              }
             });
           });
 
           deleted.forEach(item => {
             deleteDoc(doc(db, collectionName, String(item.id))).catch(err => {
-              handleFirestoreError(err, OperationType.DELETE, `${collectionName}/${item.id}`);
+              const errMsg = err instanceof Error ? err.message : String(err);
+              if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted')) {
+                if (typeof window !== 'undefined') {
+                  (window as any).__firestore_quota_exceeded__ = true;
+                  window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+                }
+              } else {
+                handleFirestoreError(err, OperationType.DELETE, `${collectionName}/${item.id}`);
+              }
             });
           });
         });
