@@ -349,12 +349,11 @@ export function Alumnos() {
           >
             <option value="">Todos los Paises</option>
             <option value="México">México</option>
+            <option value="Estados Unidos de America">Estados Unidos de America</option>
+            <option value="Canadá">Canadá</option>
             <option value="España">España</option>
-            <option value="Japón">Japón</option>
-            <option value="Colombia">Colombia</option>
-            <option value="EAU">EAU</option>
-            <option value="China">China</option>
-            <option value="Brasil">Brasil</option>
+            <option value="Reino Unido">Reino Unido</option>
+            <option value="Australia">Australia</option>
           </select>
         </div>
         <div className="flex space-x-2 ml-4 shrink-0">
@@ -522,12 +521,11 @@ export function Alumnos() {
               >
                 <option value="">Seleccionar...</option>
                 <option value="México">México</option>
+                <option value="Estados Unidos de America">Estados Unidos de America</option>
+                <option value="Canadá">Canadá</option>
                 <option value="España">España</option>
-                <option value="Japón">Japón</option>
-                <option value="Colombia">Colombia</option>
-                <option value="EAU">EAU</option>
-                <option value="China">China</option>
-                <option value="Brasil">Brasil</option>
+                <option value="Reino Unido">Reino Unido</option>
+                <option value="Australia">Australia</option>
               </select>
             </div>
 

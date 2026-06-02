@@ -110,10 +110,10 @@ export function Sidebar() {
   ];
 
   return (
-    <nav className="w-64 flex-shrink-0 bg-[#0a0a0a] flex flex-col border-r border-[#1a1a1a]">
+    <nav className="w-64 flex-shrink-0 bg-[#000000] flex flex-col border-r border-[#1a1a1a]">
       <div className="p-6">
         <div className="flex items-center space-x-3 mb-10">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-indigo-600/20">IHS</div>
+          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shadow-[0_0_15px_rgba(99,102,241,0.65)] animate-pulse border border-indigo-400/30">IHS</div>
           <span className="text-white font-semibold text-sm tracking-widest uppercase">DLX System</span>
         </div>
         
