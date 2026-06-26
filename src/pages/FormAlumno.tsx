@@ -16,7 +16,7 @@ export function FormAlumno() {
   const { id } = useParams();
   const isEditing = Boolean(id);
   
-  const { institutions, students, addStudent, updateStudent, catalogs, currentUser } = useAppContext();
+  const { institutions, students, addStudent, updateStudent, catalogs, currentUser, users } = useAppContext();
   const activeInstitutions = institutions.filter(inst => inst.active !== false);
   const defaultInstId = activeInstitutions[0]?.id || institutions[0]?.id || 1;
 
@@ -50,6 +50,7 @@ export function FormAlumno() {
     studentCustomId: '',
     modality: '',
     schoolYear: '',
+    agentId: '',
     notificationPayment: {
       alumno: true,
       instituto: false,
@@ -91,6 +92,7 @@ export function FormAlumno() {
           studentCustomId: student.studentCustomId || '',
           modality: student.modality || '',
           schoolYear: student.schoolYear || '',
+          agentId: student.agentId ? student.agentId.toString() : '',
           notificationPayment: student.notificationPayment || {
             alumno: true,
             instituto: false,
@@ -115,10 +117,15 @@ export function FormAlumno() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanData = {
+      ...formData,
+      institutionId: Number(formData.institutionId),
+      agentId: formData.agentId ? Number(formData.agentId) : undefined
+    };
     if (isEditing) {
-      updateStudent(Number(id), { ...formData, institutionId: Number(formData.institutionId) });
+      updateStudent(Number(id), cleanData);
     } else {
-      addStudent({ ...formData, institutionId: Number(formData.institutionId) });
+      addStudent(cleanData);
     }
     navigate(isEditing ? `/alumnos/${id}` : '/alumnos');
   };
@@ -223,6 +230,19 @@ export function FormAlumno() {
                     ))}
                   </select>
                 </div>
+                {(formData.modality?.toLowerCase() === 'homeschool' || formData.modality === 'Homeschool') && (
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-700 uppercase tracking-wider mb-2">Agente *</label>
+                    <select name="agentId" value={formData.agentId} onChange={handleChange} required className="w-full border border-indigo-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                      <option value="">Seleccionar agente...</option>
+                      {users
+                        .filter(u => u.role === 'Agente' || u.role === 'Vendedor')
+                        .map(u => (
+                          <option key={u.id} value={u.id}>{u.name}</option>
+                        ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Año Escolar</label>
                   <input name="schoolYear" value={formData.schoolYear} onChange={handleChange} disabled={isAlumno} placeholder="Ej. 10º Grado" type="text" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed" />
@@ -232,8 +252,9 @@ export function FormAlumno() {
               <div className="pt-6 border-t border-slate-100">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Institución Origen *</label>
                 <select name="institutionId" value={formData.institutionId} onChange={handleChange} disabled={isCoordinador || isAlumno} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed">
-                  {institutions
+                  {[...institutions]
                     .filter(inst => inst.active !== false || inst.id === Number(formData.institutionId))
+                    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es'))
                     .map(inst => (
                       <option key={inst.id} value={inst.id}>
                         {inst.name} {inst.active === false ? " (Inactiva)" : ""}
@@ -250,9 +271,9 @@ export function FormAlumno() {
               <div className="grid grid-cols-2 gap-6">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
-                    Correo Electrónico * <Mail className="w-3 h-3 ml-1 text-slate-400" />
+                    Correo Electrónico <Mail className="w-3 h-3 ml-1 text-slate-400" />
                   </label>
-                  <input required name="email" value={formData.email} onChange={handleChange} type="email" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  <input name="email" value={formData.email} onChange={handleChange} type="email" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">

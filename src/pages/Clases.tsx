@@ -1,4 +1,4 @@
-import { BookOpen, Users, Globe, DollarSign, Plus, Trash2, LayoutGrid, List, CheckSquare, Search, Filter, Calendar, X } from "lucide-react";
+import { BookOpen, Users, Globe, DollarSign, Plus, Trash2, LayoutGrid, List, CheckSquare, Search, Filter, Calendar, X, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
@@ -238,6 +238,43 @@ export function Clases() {
     return true;
   });
 
+  // Sorting state for classes
+  const [sortField, setSortField] = useState<'name' | 'provider' | 'enrolled' | ''>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  const handleSort = (field: 'name' | 'provider' | 'enrolled') => {
+    if (sortField === field) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const sortedClasses = React.useMemo(() => {
+    if (!sortField) return filteredClasses;
+
+    return [...filteredClasses].sort((a, b) => {
+      let comparison = 0;
+
+      if (sortField === 'name') {
+        comparison = (a.name || '').localeCompare(b.name || '', 'es');
+      } else if (sortField === 'provider') {
+        const provA = providers.find(p => p.id === a.providerId);
+        const provB = providers.find(p => p.id === b.providerId);
+        const nameA = provA ? (provA.commercialName || provA.legalName || '') : '';
+        const nameB = provB ? (provB.commercialName || provB.legalName || '') : '';
+        comparison = nameA.localeCompare(nameB, 'es');
+      } else if (sortField === 'enrolled') {
+        const enrolledA = enrollments.filter(e => Number(e.classId) === Number(a.id)).length;
+        const enrolledB = enrollments.filter(e => Number(e.classId) === Number(b.id)).length;
+        comparison = enrolledA - enrolledB;
+      }
+
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
+  }, [filteredClasses, sortField, sortOrder, providers, enrollments]);
+
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 flex-1 flex flex-col">
       {/* Search and View Controls */}
@@ -294,7 +331,7 @@ export function Clases() {
         <div className="flex items-center space-x-2 text-slate-800 border-b border-slate-100 pb-2">
           <Filter className="w-4 h-4 text-indigo-600" />
           <h3 className="text-xs font-bold uppercase tracking-wider">Filtros de Clases</h3>
-          {(filterProviderId !== 'all' || filterCreditType !== 'all' || filterValidityStatus !== 'all' || filterValidityYear !== 'all' || searchQuery !== '') && (
+          {(filterProviderId !== 'all' || filterCreditType !== 'all' || filterValidityStatus !== 'all' || filterValidityYear !== 'all' || searchQuery !== '' || sortField !== '') && (
             <button
               onClick={() => {
                 setFilterProviderId('all');
@@ -302,6 +339,8 @@ export function Clases() {
                 setFilterValidityStatus('all');
                 setFilterValidityYear('all');
                 setSearchQuery('');
+                setSortField('');
+                setSortOrder('asc');
               }}
               className="ml-auto text-[10px] text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider flex items-center gap-1 transition-all"
             >
@@ -310,7 +349,7 @@ export function Clases() {
           )}
         </div>
         
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           {/* Filter 1: Provider */}
           <div>
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Proveedor Académico</label>
@@ -352,7 +391,7 @@ export function Clases() {
                 const val = e.target.value;
                 setFilterValidityStatus(val);
                 if (val === 'sin_vigencia') {
-                  setFilterValidityYear('all');
+                   setFilterValidityYear('all');
                 }
               }}
               className="w-full text-xs font-semibold border border-slate-200 rounded-lg p-2 bg-slate-50/50 hover:bg-slate-50 transition focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 outline-none"
@@ -379,6 +418,43 @@ export function Clases() {
                 <option key={year} value={year}>{year}</option>
               ))}
             </select>
+          </div>
+
+          {/* Filter 5: Ordenar por */}
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Ordenar por</label>
+            <div className="flex gap-1.5">
+              <select
+                value={sortField}
+                onChange={(e) => {
+                  const val = e.target.value as 'name' | 'provider' | 'enrolled' | '';
+                  setSortField(val);
+                  if (val && !sortOrder) {
+                    setSortOrder('asc');
+                  }
+                }}
+                className="w-full text-xs font-semibold border border-slate-200 rounded-lg p-2 bg-slate-50/50 hover:bg-slate-50 transition focus:outline-none focus:ring-2 focus:ring-indigo-550 text-slate-700 outline-none cursor-pointer"
+              >
+                <option value="">Sin orden específico</option>
+                <option value="name">Nombre de la Clase</option>
+                <option value="provider">Proveedor Académico</option>
+                <option value="enrolled">Alumnos Inscritos</option>
+              </select>
+              {sortField && (
+                <button
+                  type="button"
+                  onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                  className="px-2 border border-slate-200 rounded-lg bg-slate-50/50 hover:bg-slate-100 text-slate-700 transition outline-none shrink-0 flex items-center justify-center cursor-pointer"
+                  title={sortOrder === 'asc' ? 'Orden Ascendente' : 'Orden Descendente'}
+                >
+                  {sortOrder === 'asc' ? (
+                    <ArrowUp className="w-3.5 h-3.5 text-indigo-600" />
+                  ) : (
+                    <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -427,39 +503,75 @@ export function Clases() {
                     <th className="px-6 py-3 w-12 text-center">
                       <input
                         type="checkbox"
-                        checked={filteredClasses.length > 0 && filteredClasses.every(c => selectedIds.includes(c.id))}
+                        checked={sortedClasses.length > 0 && sortedClasses.every(c => selectedIds.includes(c.id))}
                         onChange={(e) => {
                           if (e.target.checked) {
                             setSelectedIds(prev => {
-                              const unique = new Set([...prev, ...filteredClasses.map(c => c.id)]);
+                              const unique = new Set([...prev, ...sortedClasses.map(c => c.id)]);
                               return Array.from(unique);
                             });
                           } else {
-                            setSelectedIds(prev => prev.filter(id => !filteredClasses.some(c => c.id === id)));
+                            setSelectedIds(prev => prev.filter(id => !sortedClasses.some(c => c.id === id)));
                           }
                         }}
                         className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer h-4 w-4"
                       />
                     </th>
                   )}
-                  <th className="px-6 py-3">Nombre de la Clase</th>
+                  <th 
+                    className="px-6 py-3 cursor-pointer select-none hover:bg-slate-100 hover:text-slate-700 transition"
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span>Nombre de la Clase</span>
+                      {sortField === 'name' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-350 opacity-40" />
+                      )}
+                    </div>
+                  </th>
                   <th className="px-6 py-3">Clave</th>
-                  <th className="px-6 py-3">Proveedor Académico</th>
+                  <th 
+                    className="px-6 py-3 cursor-pointer select-none hover:bg-slate-100 hover:text-slate-700 transition"
+                    onClick={() => handleSort('provider')}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span>Proveedor Académico</span>
+                      {sortField === 'provider' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-350 opacity-40" />
+                      )}
+                    </div>
+                  </th>
                   <th className="px-6 py-3">Tipo de Crédito</th>
                   <th className="px-6 py-3">Vigencia</th>
-                  <th className="px-6 py-3 text-center">Alumnos Inscritos</th>
+                  <th 
+                    className="px-6 py-3 cursor-pointer select-none hover:bg-slate-100 hover:text-slate-700 transition"
+                    onClick={() => handleSort('enrolled')}
+                  >
+                    <div className="flex items-center gap-1.5 justify-center">
+                      <span>Alumnos Inscritos</span>
+                      {sortField === 'enrolled' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-350 opacity-40" />
+                      )}
+                    </div>
+                  </th>
                   <th className="px-6 py-3 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs bg-white">
-                {filteredClasses.length === 0 ? (
+                {sortedClasses.length === 0 ? (
                   <tr>
                     <td colSpan={isSuperAdmin ? 8 : 7} className="px-6 py-12 text-center text-slate-400 italic">
                       No se encontraron clases que coincidan con la búsqueda.
                     </td>
                   </tr>
                 ) : (
-                  filteredClasses.map((curso) => {
+                  sortedClasses.map((curso) => {
                     const linkedProvider = providers.find(p => p.id === curso.providerId);
                     const numEnrolled = enrollments.filter(e => Number(e.classId) === Number(curso.id)).length;
                     const isSelected = selectedIds.includes(curso.id);
@@ -543,12 +655,12 @@ export function Clases() {
       ) : (
         /* GRID MODE */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredClasses.length === 0 ? (
+          {sortedClasses.length === 0 ? (
             <div className="col-span-full bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400 italic">
               No se encontraron clases que coincidan con la búsqueda.
             </div>
           ) : (
-            filteredClasses.map((curso) => {
+            sortedClasses.map((curso) => {
               const linkedProvider = providers.find(p => p.id === curso.providerId);
               const numEnrolled = enrollments.filter(e => Number(e.classId) === Number(curso.id)).length;
               const isSelected = selectedIds.includes(curso.id);

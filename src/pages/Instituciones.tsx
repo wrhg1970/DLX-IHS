@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Search, Filter, Trash2, Archive, AlertTriangle, CheckCircle, HelpCircle, SlidersHorizontal } from "lucide-react";
+import { Search, Filter, Trash2, Archive, AlertTriangle, CheckCircle, HelpCircle, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { useAppContext, Institution, resolveCreditPrices } from "../context/AppContext";
 import { useNavigate } from "react-router-dom";
 import { Modal } from "../components/ui/Modal";
@@ -36,6 +36,7 @@ export function Instituciones() {
   const [filterModality, setFilterModality] = useState("Todas");
   const [filterType, setFilterType] = useState("Todas");
   const [filterActive, setFilterActive] = useState("Todas");
+  const [filterIva, setFilterIva] = useState("Todas");
 
   // Selection & Bulk Modification State
   const [selectedInstIds, setSelectedInstIds] = useState<number[]>([]);
@@ -237,6 +238,19 @@ export function Instituciones() {
     setTimeout(() => setShowBulkSuccessToast(false), 4000);
   };
 
+  // Sorting State
+  const [sortBy, setSortBy] = useState<"name" | "status" | "membership" | null>("name");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+
+  const handleSort = (field: "name" | "status" | "membership") => {
+    if (sortBy === field) {
+      setSortOrder(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(field);
+      setSortOrder("asc");
+    }
+  };
+
   // Extract unique countries
   const countries = Array.from(
     new Set(
@@ -255,11 +269,12 @@ export function Instituciones() {
       ? inst.status 
       : (stats.totalPorRecaudar > 0 ? 'Pendiente' : 'Al corriente');
 
-    // Search matches against name, tradeName, country, contact
+    // Search matches against name, tradeName, country, contact, institutionCode
     const searchString = searchTerm.toLowerCase();
     const matchesSearch = 
       inst.name.toLowerCase().includes(searchString) ||
       (inst.tradeName || '').toLowerCase().includes(searchString) ||
+      (inst.institutionCode || '').toLowerCase().includes(searchString) ||
       inst.country.toLowerCase().includes(searchString) ||
       (inst.contact || '').toLowerCase().includes(searchString);
 
@@ -296,7 +311,48 @@ export function Instituciones() {
       if (filterActive === "Inactivas" && instIsActive) return false;
     }
 
+    // Pago con IVA filter
+    if (filterIva !== "Todas") {
+      const playsIva = inst.payWithIva === true;
+      if (filterIva === "Si" && !playsIva) return false;
+      if (filterIva === "No" && playsIva) return false;
+    }
+
     return true;
+  });
+
+  // Sort application
+  const sortedInstitutions = [...filteredInstitutions].sort((a, b) => {
+    if (!sortBy) return 0;
+    
+    let valA = "";
+    let valB = "";
+    
+    if (sortBy === "name") {
+      valA = (a.tradeName ? a.tradeName : a.name).toLowerCase();
+      valB = (b.tradeName ? b.tradeName : b.name).toLowerCase();
+    } else if (sortBy === "status") {
+      const statsA = getInstStats(a.id);
+      valA = ((a.status === 'Archivada' || a.status === 'Archivado') 
+        ? a.status 
+        : (statsA.totalPorRecaudar > 0 ? 'Pendiente' : 'Al corriente')).toLowerCase();
+        
+      const statsB = getInstStats(b.id);
+      valB = ((b.status === 'Archivada' || b.status === 'Archivado') 
+        ? b.status 
+        : (statsB.totalPorRecaudar > 0 ? 'Pendiente' : 'Al corriente')).toLowerCase();
+    } else if (sortBy === "membership") {
+      valA = (a.membershipId 
+        ? (catalogs['Membresías']?.find(m => m.id === a.membershipId)?.name || 'Desconocida') 
+        : 'Ninguna').toLowerCase();
+      valB = (b.membershipId 
+        ? (catalogs['Membresías']?.find(m => m.id === b.membershipId)?.name || 'Desconocida') 
+        : 'Ninguna').toLowerCase();
+    }
+    
+    if (valA < valB) return sortOrder === "asc" ? -1 : 1;
+    if (valA > valB) return sortOrder === "asc" ? 1 : -1;
+    return 0;
   });
 
   return (
@@ -357,7 +413,7 @@ export function Instituciones() {
             <Filter className="w-3.5 h-3.5 text-indigo-500" />
             Filtros Avanzados
           </h4>
-          {(filterCountry !== "Todas" || filterMembership !== "Todas" || filterProvider !== "Todas" || filterModality !== "Todas" || filterType !== "Todas" || filterActive !== "Todas") && (
+          {(filterCountry !== "Todas" || filterMembership !== "Todas" || filterProvider !== "Todas" || filterModality !== "Todas" || filterType !== "Todas" || filterActive !== "Todas" || filterIva !== "Todas") && (
             <button
               onClick={() => {
                 setFilterCountry("Todas");
@@ -366,6 +422,7 @@ export function Instituciones() {
                 setFilterModality("Todas");
                 setFilterType("Todas");
                 setFilterActive("Todas");
+                setFilterIva("Todas");
               }}
               className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold uppercase tracking-widest"
             >
@@ -374,7 +431,7 @@ export function Instituciones() {
           )}
         </div>
         
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
           {/* País Filter */}
           <div className="space-y-1">
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">País</label>
@@ -463,6 +520,20 @@ export function Instituciones() {
               <option value="Inactivas">Inactivas</option>
             </select>
           </div>
+
+          {/* Pago con IVA Filter */}
+          <div className="space-y-1">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Pago con IVA</label>
+            <select
+              value={filterIva}
+              onChange={(e) => setFilterIva(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 pointer-events-auto"
+            >
+              <option value="Todas">Todos (Con/Sin IVA)</option>
+              <option value="Si">Sí (Con IVA)</option>
+              <option value="No">No (Sin IVA)</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -481,24 +552,69 @@ export function Instituciones() {
                     />
                   </th>
                 )}
-                <th className="px-6 py-3">Nombre</th>
+                
+                {/* Clickable Header for Nombre */}
+                <th 
+                  onClick={() => handleSort("name")} 
+                  className="px-6 py-3 cursor-pointer select-none hover:bg-slate-100 group/th transition-all"
+                >
+                  <div className="flex items-center space-x-1 hover:text-slate-755">
+                    <span>Nombre</span>
+                    {sortBy === "name" ? (
+                      sortOrder === "asc" ? <ArrowUp className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 group-hover/th:text-slate-400 shrink-0 opacity-70" />
+                    )}
+                  </div>
+                </th>
+                
                 <th className="px-6 py-3">País</th>
-                <th className="px-6 py-3">Membresía</th>
+                
+                {/* Clickable Header for Membresía */}
+                <th 
+                  onClick={() => handleSort("membership")} 
+                  className="px-6 py-3 cursor-pointer select-none hover:bg-slate-100 group/th transition-all"
+                >
+                  <div className="flex items-center space-x-1 hover:text-slate-755">
+                    <span>Membresía</span>
+                    {sortBy === "membership" ? (
+                      sortOrder === "asc" ? <ArrowUp className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 group-hover/th:text-slate-400 shrink-0 opacity-70" />
+                    )}
+                  </div>
+                </th>
+                
                 <th className="px-6 py-3">Contacto Ppal.</th>
                 <th className="px-6 py-3 text-center">Alumnos</th>
-                <th className="px-6 py-3 text-center">Estado</th>
+                
+                {/* Clickable Header for Estado */}
+                <th 
+                  onClick={() => handleSort("status")} 
+                  className="px-6 py-3 cursor-pointer select-none hover:bg-slate-100 group/th transition-all"
+                >
+                  <div className="flex items-center justify-center space-x-1 hover:text-slate-755">
+                    <span>Estado</span>
+                    {sortBy === "status" ? (
+                      sortOrder === "asc" ? <ArrowUp className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 group-hover/th:text-slate-400 shrink-0 opacity-70" />
+                    )}
+                  </div>
+                </th>
+                
                 <th className="px-6 py-3 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs bg-white">
-              {filteredInstitutions.length === 0 ? (
+              {sortedInstitutions.length === 0 ? (
                 <tr>
                   <td colSpan={isSuperAdmin ? 8 : 7} className="px-6 py-12 text-center text-slate-400">
                     Ninguna institución coincide con los criterios de búsqueda.
                   </td>
                 </tr>
               ) : (
-                filteredInstitutions.map((inst) => {
+                sortedInstitutions.map((inst) => {
                   const stats = getInstStats(inst.id);
                   const resolvedStatus = (inst.status === 'Archivada' || inst.status === 'Archivado')
                     ? inst.status
@@ -519,6 +635,11 @@ export function Instituciones() {
                       <td className="px-6 py-3 border-l-[3px] border-transparent group-hover:text-indigo-600 transition-colors">
                         <div className="font-semibold text-slate-900 leading-tight flex items-center gap-1.5 flex-wrap">
                           <span>{inst.tradeName ? inst.tradeName : inst.name}</span>
+                          {inst.institutionCode && (
+                            <span className="bg-violet-50 text-violet-700 border-violet-100 text-[8px] font-black uppercase px-2 py-0.5 rounded border leading-none shadow-xs">
+                              {inst.institutionCode}
+                            </span>
+                          )}
                           {(inst.isCorporativo || inst.institutionTypeId === '4') && (
                             <span className="bg-slate-100 text-slate-700 text-[8px] font-black uppercase px-2 py-0.5 rounded border border-slate-200 shadow-xs leading-none">
                               Corp

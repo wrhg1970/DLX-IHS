@@ -1,6 +1,6 @@
-import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye } from "lucide-react";
+import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye, Database, RotateCcw, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import React, { useState } from "react";
-import { useAppContext, resolveCreditPrices } from "../context/AppContext";
+import { useAppContext, resolveCreditPrices, generateUniqueId } from "../context/AppContext";
 
 type PermissionMenu = "Dashboard" | "Agenda" | "Instituciones" | "Alumnos" | "Clases" | "Administración" | "Proveedores" | "Finanzas" | "Reportes" | "Catálogos" | "Configuración";
 
@@ -32,6 +32,14 @@ export function Configuracion() {
     success: number;
     errorCount: number;
     errors: Array<{ rowNum: number; msg: string; data: string }>;
+    results?: Array<{
+      rowNum: number;
+      status: 'success' | 'error';
+      msg?: string;
+      data: string;
+      identifier?: string;
+      details?: string;
+    }>;
   } | null>(null);
 
   const [previewState, setPreviewState] = useState<{
@@ -39,6 +47,23 @@ export function Configuracion() {
     headers: string[];
     rows: string[][];
   } | null>(null);
+
+  const [importFilter, setImportFilter] = useState<'all' | 'success' | 'error'>('all');
+  const [importSearch, setImportSearch] = useState('');
+  const [expandedRawRows, setExpandedRawRows] = useState<Record<number, boolean>>({});
+
+  // Backup-specific state variables
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(() => {
+    const saved = localStorage.getItem('auto_backup_enabled');
+    return saved === null ? true : saved === 'true';
+  });
+  const [autoBackupDay, setAutoBackupDay] = useState(() => localStorage.getItem('auto_backup_day') || "Domingo");
+  const [autoBackupTime, setAutoBackupTime] = useState(() => localStorage.getItem('auto_backup_time') || "23:00");
+  const [backupRestoreFile, setBackupRestoreFile] = useState<File | null>(null);
+  const [restorePayload, setRestorePayload] = useState<any | null>(null);
+  const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
+  const [backupGenerating, setBackupGenerating] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const { 
     institutions, addInstitution, addStudent, addClass, addPayment, addProvider, 
@@ -48,8 +73,236 @@ export function Configuracion() {
     currentUser,
     students, classes, addEnrollment, addActivity,
     catalogs, providerProductServices,
-    providers
+    providers, enrollments, financialTransactions,
+    addFinancialTransaction, bankAccounts,
+    backups, triggerFullBackup, restoreBackup, deleteBackup
   } = useAppContext();
+
+  // CSV formatting and trigger browser download
+  const exportToCSV = (filename: string, headers: string[], rows: any[][]) => {
+    const content = [
+      headers.join(','),
+      ...rows.map(row => 
+        row.map(val => {
+          let cleanVal = val === null || val === undefined ? '' : String(val);
+          // Escape quotes
+          cleanVal = cleanVal.replace(/"/g, '""');
+          // Wrap in quotes if commas, quotes, or newlines exist
+          if (/[",\n\r]/.test(cleanVal)) {
+            cleanVal = `"${cleanVal}"`;
+          }
+          return cleanVal;
+        }).join(',')
+      )
+    ].join('\n');
+
+    // Add UTF-8 BOM so Excel opens Spanish characters (ñ, accended vowels) correctly
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // PDF trigger using dynamic printable tab window with browser print styles
+  const exportToPDF = (title: string, headers: string[], rows: any[][]) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Por favor, permite las ventanas emergentes (popups) para exportar a PDF.');
+      return;
+    }
+
+    const rowsHtml = rows.map((row, idx) => `
+      <tr class="${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'} border-b border-slate-100">
+        ${row.map(val => `<td class="px-3 py-2 text-[11px] text-slate-700">${val === null || val === undefined ? '' : String(val)}</td>`).join('')}
+      </tr>
+    `).join('');
+
+    const headersHtml = headers.map(h => `
+      <th class="px-3 py-2.5 bg-slate-100 border-b border-slate-200 text-left text-[10px] uppercase font-bold text-slate-600 tracking-wider">
+        ${h}
+      </th>
+    `).join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${title}</title>
+          <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+          <style>
+            @media print {
+              body { padding: 1.5cm; }
+              .no-print { display: none; }
+            }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+          </style>
+        </head>
+        <body class="bg-white p-8">
+          <div class="max-w-5xl mx-auto space-y-6">
+            <!-- Header -->
+            <div class="flex justify-between items-start border-b border-slate-200 pb-6">
+              <div>
+                <h1 class="text-2xl font-black text-indigo-900 tracking-tight">IHS MANAGER - SISTEMA GENERAL</h1>
+                <p class="text-xs text-slate-500 mt-1">Exportación oficial de datos administrativos y escolares</p>
+              </div>
+              <div class="text-right">
+                <span class="inline-flex items-center px-2.5 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 text-[10px] font-bold uppercase tracking-wider">
+                  ${title}
+                </span>
+                <p class="text-[10px] text-slate-400 mt-1.5 font-medium">Fecha: ${new Date().toLocaleDateString('es-ES')} - ${new Date().toLocaleTimeString('es-ES')}</p>
+              </div>
+            </div>
+            
+            <!-- Methods print control -->
+            <div class="no-print bg-slate-50 border border-slate-200 p-4 rounded-xl flex justify-between items-center mb-4">
+              <span class="text-xs text-slate-650 font-bold text-slate-600">✓ Vista previa generada de forma segura. Listo para guardar como PDF o imprimir.</span>
+              <button 
+                onclick="window.print()" 
+                class="bg-indigo-600 hover:bg-indigo-750 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer"
+              >
+                Imprimir / Guardar como PDF
+              </button>
+            </div>
+
+            <!-- Table Container -->
+            <div class="overflow-x-auto border border-slate-200 rounded-xl">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr>
+                    ${headersHtml}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Footer -->
+            <div class="border-t border-slate-100 pt-6 flex justify-between items-center text-[10px] text-slate-400">
+              <span>© ${new Date().getFullYear()} IHS Manager. Todos los derechos reservados.</span>
+              <span>Generado por: ${currentUser?.name || 'Administrador'}</span>
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+  };
+
+  // Main list export multiplexer
+  const handleExportList = (type: string, format: 'csv' | 'pdf') => {
+    let title = "";
+    let headers: string[] = [];
+    let rows: any[][] = [];
+
+    if (type === "Instituciones") {
+      title = "Listado de Instituciones Socias";
+      headers = ["ID", "Nombre Comercial", "Institución (Razón Social)", "País", "Membresía", "Productor / Cuentas", "Fecha Registro", "Estatus"];
+      rows = institutions.map(i => [
+        i.id,
+        i.tradeName || i.name,
+        i.name,
+        i.country || "ND",
+        i.membershipId ? (catalogs['Membresías']?.find(m => m.id === i.membershipId)?.name || 'Especial') : 'Ninguna',
+        i.producerName || "ND",
+        i.registrationDate || "ND",
+        i.status || "Activo"
+      ]);
+    } else if (type === "Alumnos") {
+      title = "Listado General de Alumnos";
+      headers = ["ID", "Nombre", "Apellidos", "Institución", "Celular", "Correo", "Estado Alumno", "Grupo Sanguíneo"];
+      rows = students.map(s => {
+        const instName = institutions.find(i => i.id === s.institutionId)?.tradeName || institutions.find(i => i.id === s.institutionId)?.name || "Sin vincular";
+        return [
+          s.id,
+          s.name,
+          s.surname || "",
+          instName,
+          s.cellphone || "",
+          s.email || "",
+          s.status || "Activo",
+          s.bloodType || "ND"
+        ];
+      });
+    } else if (type === "Clases") {
+      title = "Oferta de Clases Extraescolares y Precios";
+      headers = ["ID Clase", "Nombre de la Clase", "Créditos", "Costo Base (USD)", "Categoría", "Institución Asignada", "Cupo Máx", "Estatus"];
+      rows = classes.map(c => {
+        const instName = institutions.find(i => i.id === c.institutionId)?.tradeName || institutions.find(i => i.id === c.institutionId)?.name || "Todas";
+        return [
+          c.id,
+          c.name,
+          c.credits || 0,
+          `$${(c.pricingBase || 0).toLocaleString()}`,
+          c.category || "General",
+          instName,
+          c.maxStudents || "Ilimitado",
+          c.status || "Activa"
+        ];
+      });
+    } else if (type === "Proveedores") {
+      title = "Listado de Proveedores Registrados";
+      headers = ["ID", "Nombre Comercial", "País / Pabellón", "Servicios Contratados", "Contacto Ppal.", "Teléfono", "Estatus"];
+      rows = providers.map(p => [
+        p.id,
+        p.tradeName || p.name,
+        p.country || "ND",
+        p.servicesProvided || "ND",
+        p.contactPerson || "ND",
+        p.phone || "",
+        p.status || "Activo"
+      ]);
+    } else if (type === "Inscripciones") {
+      title = "Control General de Inscripciones de Alumnos";
+      headers = ["ID Inscripción", "Nombre Alumno", "Clase / Taller", "Tarifa Pactada (USD)", "Fecha Inscripción", "Estatus"];
+      const allEnrollments = enrollments || [];
+      rows = allEnrollments.map(e => {
+        const student = students.find(s => s.id === e.studentId);
+        const nameStr = student ? `${student.name} ${student.surname || ''}` : "Alumno ID: " + e.studentId;
+        const claseStr = classes.find(c => c.id === e.classId)?.name || "Clase ID: " + e.classId;
+        return [
+          e.id,
+          nameStr,
+          claseStr,
+          `$${(e.agreedSessionPrice || 0).toLocaleString()}`,
+          e.enrollmentDate || "ND",
+          e.status || "Activa"
+        ];
+      });
+    } else if (type === "Transacciones") {
+      title = "Libro Diario de Transacciones Financieras";
+      headers = ["ID Transacción", "Fecha", "Tipo de Movimiento", "Monto (MXN)", "Categoría", "Concepto de Operación", "Referencia Bancaria", "Facturado"];
+      const allTransactions = financialTransactions.filter(t => !(typeof t.id === 'string' && t.id.startsWith('tx-init-')));
+      rows = allTransactions.map(t => [
+        t.id,
+        t.date || "ND",
+        t.type === 'income' ? 'Ingreso (+)' : 'Egreso (-)',
+        `$${(t.amountMXN || t.amount || 0).toLocaleString()}`,
+        t.category || "Otros",
+        t.description || "Sin descripción",
+        t.reference || "",
+        t.isInvoiced ? "Sí" : "No"
+      ]);
+    }
+
+    if (rows.length === 0) {
+      alert("No hay registros en esta categoría para exportar.");
+      return;
+    }
+
+    if (format === 'csv') {
+      const filename = `${type.toLowerCase()}-export-${new Date().toISOString().split('T')[0]}.csv`;
+      exportToCSV(filename, headers, rows);
+    } else if (format === 'pdf') {
+      exportToPDF(title, headers, rows);
+    }
+  };
 
   const [companyForm, setCompanyForm] = useState(companyInfo);
   const [docModalOpen, setDocModalOpen] = useState(false);
@@ -318,6 +571,35 @@ export function Configuracion() {
 
   const [selectedDocFile, setSelectedDocFile] = useState<File | null>(null);
   const [viewingCompanyDoc, setViewingCompanyDoc] = useState<any | null>(null);
+  const [activeCompanyPdfUrl, setActiveCompanyPdfUrl] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const rawData = viewingCompanyDoc?.fileData || (viewingCompanyDoc?.url?.startsWith('data:application/pdf') ? viewingCompanyDoc.url : null);
+    if (rawData?.startsWith('data:application/pdf')) {
+      try {
+        const parts = rawData.split(',');
+        const byteString = atob(parts[1]);
+        const arrayBuffer = new ArrayBuffer(byteString.length);
+        const uint8Array = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < byteString.length; i++) {
+          uint8Array[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        setActiveCompanyPdfUrl(url);
+        
+        return () => {
+          URL.revokeObjectURL(url);
+        };
+      } catch (e) {
+        console.error("Error creating company PDF blob URL:", e);
+        setActiveCompanyPdfUrl(rawData);
+      }
+    } else {
+      setActiveCompanyPdfUrl(viewingCompanyDoc?.url || null);
+    }
+  }, [viewingCompanyDoc]);
+
   const [docUploadType, setDocUploadType] = useState<"file" | "url">("file");
 
   const handleDocSubmit = (e: React.FormEvent) => {
@@ -351,9 +633,20 @@ export function Configuracion() {
 
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
-  const [autoGeneratePassword, setAutoGeneratePassword] = useState(false);
+  const [autoGeneratePassword, setAutoGeneratePassword] = useState(true);
+  const [customPassword, setCustomPassword] = useState("");
+  const [requirePasswordChange, setRequirePasswordChange] = useState(true);
+  const [requireEmailVerification, setRequireEmailVerification] = useState(true);
   const [generatedPassInfo, setGeneratedPassInfo] = useState<{ email: string; pass: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isSendingCredentialsEmail, setIsSendingCredentialsEmail] = useState(false);
+  const [credentialsEmailResult, setCredentialsEmailResult] = useState<{ success?: boolean; msg?: string } | null>(null);
+  const [isWelcomeEmailModalOpen, setIsWelcomeEmailModalOpen] = useState(false);
+  const [selectedUserForEmail, setSelectedUserForEmail] = useState<any>(null);
+  const [welcomeEmailSubject, setWelcomeEmailSubject] = useState("");
+  const [welcomeEmailBody, setWelcomeEmailBody] = useState("");
+  const [isSendingWelcomeEmail, setIsSendingWelcomeEmail] = useState(false);
+  const [welcomePasswordToInclude, setWelcomePasswordToInclude] = useState("");
   const [userForm, setUserForm] = useState<{
     name: string;
     email: string;
@@ -426,24 +719,105 @@ export function Configuracion() {
     }
   };
 
+  const handleSendCredentialsEmail = async () => {
+    if (!generatedPassInfo) return;
+    setIsSendingCredentialsEmail(true);
+    setCredentialsEmailResult(null);
+
+    const subject = "Tus credenciales de acceso para IHS";
+    const body = `Hola,\n\nSe ha creado tu cuenta en el sistema de IHS.\n\nAquí tienes tus credenciales provisionales para ingresar:\n• Correo: ${generatedPassInfo.email}\n• Contraseña temporal: ${generatedPassInfo.pass}\n\nNota: Por motivos de seguridad, el sistema te solicitará cambiar tu contraseña obligatoriamente en tu primer acceso.\n\nSi se requiere verificar tu correo, recibirás un código de 6 dígitos en tu bandeja.\n\nSaludos,\nEquipo IHS`;
+
+    const res = await sendRealNotificationEmail(generatedPassInfo.email, generatedPassInfo.email, subject, body);
+    setIsSendingCredentialsEmail(false);
+    if (res.success) {
+      setCredentialsEmailResult({ success: true, msg: "¡Credenciales enviadas correctamente por correo electrónico real!" });
+      triggerToast("Correo enviado con éxito", "success");
+    } else {
+      setCredentialsEmailResult({ success: false, msg: `No se pudo enviar: ${res.error || "Error de SMTP"}. Revisa tus credenciales en Configuración > Notificaciones.` });
+      triggerToast("Error al enviar correo", "error");
+    }
+  };
+
+  const handleOpenWelcomeEmailModal = (user: any) => {
+    setSelectedUserForEmail(user);
+    const pass = user.password || "ihs123";
+    setWelcomePasswordToInclude(pass);
+    setWelcomeEmailSubject("Bienvenido a IHS - Tus credenciales de acceso");
+    
+    const body = `Hola ${user.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Correo electrónico: ${user.email}\n• Contraseña provisional: ${pass}\n\nPor favor, ingresa a la plataforma utilizando el siguiente enlace:\n${window.location.origin}\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos,\nEquipo IHS`;
+    
+    setWelcomeEmailBody(body);
+    setIsWelcomeEmailModalOpen(true);
+  };
+
+  const handleSendWelcomeEmail = async () => {
+    if (!selectedUserForEmail) return;
+    setIsSendingWelcomeEmail(true);
+    
+    // Save updated password in app state if changed
+    if (welcomePasswordToInclude !== selectedUserForEmail.password) {
+      updateUser(selectedUserForEmail.id, { 
+        password: welcomePasswordToInclude,
+        requirePasswordChange: true 
+      });
+    }
+
+    const res = await sendRealNotificationEmail(
+      selectedUserForEmail.email,
+      selectedUserForEmail.name || selectedUserForEmail.email,
+      welcomeEmailSubject,
+      welcomeEmailBody
+    );
+    
+    setIsSendingWelcomeEmail(false);
+    if (res.success) {
+      triggerToast("¡Correo de bienvenida enviado con éxito!", "success");
+      setIsWelcomeEmailModalOpen(false);
+    } else {
+      triggerToast(`Error al enviar: ${res.error || "Revisa la configuración SMTP"}`);
+    }
+  };
+
   const handleUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
     let userPayload: any = { ...userForm };
     let generatedPass = '';
 
-    if (!editingUserId && autoGeneratePassword) {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      let randomPart = '';
-      for (let i = 0; i < 4; i++) {
-        randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    if (!editingUserId) {
+      if (autoGeneratePassword) {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let randomPart = '';
+        for (let i = 0; i < 4; i++) {
+          randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        generatedPass = `IHS-${randomPart}`;
+        userPayload = {
+          ...userPayload,
+          password: generatedPass,
+          requirePasswordChange: true,
+          requireEmailVerification: requireEmailVerification,
+          emailVerified: !requireEmailVerification
+        };
+      } else {
+        userPayload = {
+          ...userPayload,
+          password: customPassword || 'ihs123',
+          requirePasswordChange: requirePasswordChange,
+          requireEmailVerification: requireEmailVerification,
+          emailVerified: !requireEmailVerification
+        };
       }
-      generatedPass = `IHS-${randomPart}`;
+    } else {
+      // Editing user - update requirePasswordChange and requireEmailVerification if provided
       userPayload = {
         ...userPayload,
-        password: generatedPass,
-        requirePasswordChange: true
+        requirePasswordChange: requirePasswordChange,
+        requireEmailVerification: requireEmailVerification
       };
+      if (customPassword) {
+        userPayload.password = customPassword;
+      }
     }
 
     if (editingUserId) {
@@ -459,7 +833,10 @@ export function Configuracion() {
     }
     
     setUserForm({ name: '', email: '', role: '', studentId: undefined, institutionId: undefined });
-    setAutoGeneratePassword(false);
+    setAutoGeneratePassword(true);
+    setCustomPassword("");
+    setRequirePasswordChange(true);
+    setRequireEmailVerification(true);
     setEditingUserId(null);
   };
 
@@ -472,6 +849,9 @@ export function Configuracion() {
       studentId: user.studentId ? Number(user.studentId) : undefined, 
       institutionId: user.institutionId ? Number(user.institutionId) : undefined 
     });
+    setCustomPassword("");
+    setRequirePasswordChange(user.requirePasswordChange ?? false);
+    setRequireEmailVerification(user.requireEmailVerification ?? false);
     setIsUserModalOpen(true);
   };
 
@@ -499,17 +879,17 @@ export function Configuracion() {
       { 
         id: '2', 
         name: 'Finanzas', 
-        permissions: Object.fromEntries(menus.map(m => [m, ["Administración", "Proveedores"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS, view: true }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        permissions: Object.fromEntries(menus.map(m => [m, ["Administración", "Finanzas", "Reportes", "Proveedores"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
       },
       { 
         id: '3', 
         name: 'Academia', 
-        permissions: Object.fromEntries(menus.map(m => [m, ["Clases", "Alumnos", "Instituciones"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS, view: true }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        permissions: Object.fromEntries(menus.map(m => [m, ["Clases", "Alumnos", "Instituciones", "Agenda"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
       },
       { 
         id: '4', 
         name: 'Ventas', 
-        permissions: Object.fromEntries(menus.map(m => [m, ["Instituciones", "Alumnos"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS, view: true }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        permissions: Object.fromEntries(menus.map(m => [m, ["Instituciones", "Alumnos", "Dashboard"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
       },
       { 
         id: '5', 
@@ -529,7 +909,7 @@ export function Configuracion() {
     if(newRoleName.trim() === '') return;
     
     const newRole = {
-      id: Date.now().toString(),
+      id: generateUniqueId().toString(),
       name: newRoleName,
       permissions: Object.fromEntries(menus.map(m => [m, { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
     };
@@ -546,6 +926,46 @@ export function Configuracion() {
   const handleSavePermissions = () => {
     localStorage.setItem("system_roles", JSON.stringify(roles));
     triggerToast("¡Permisos guardados satisfactoriamente!");
+  };
+
+  const handleRestoreDefaultRoles = () => {
+    if (confirm("¿Estás seguro de restaurar todos los roles y permisos a sus configuraciones estándar? Esto sobrescribirá tus configuraciones personalizadas de roles.")) {
+      const defaultRoles = [
+        { 
+          id: '1', 
+          name: 'Superadministrador', 
+          permissions: Object.fromEntries(menus.map(m => [m, { ...DEFAULT_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        },
+        { 
+          id: '2', 
+          name: 'Finanzas', 
+          permissions: Object.fromEntries(menus.map(m => [m, ["Administración", "Finanzas", "Reportes", "Proveedores"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        },
+        { 
+          id: '3', 
+          name: 'Academia', 
+          permissions: Object.fromEntries(menus.map(m => [m, ["Clases", "Alumnos", "Instituciones", "Agenda"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        },
+        { 
+          id: '4', 
+          name: 'Ventas', 
+          permissions: Object.fromEntries(menus.map(m => [m, ["Instituciones", "Alumnos", "Dashboard"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        },
+        { 
+          id: '5', 
+          name: 'Alumno', 
+          permissions: Object.fromEntries(menus.map(m => [m, m === "Alumnos" ? { view: true, create: false, edit: true, delete: false } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        },
+        { 
+          id: '6', 
+          name: 'Coordinador', 
+          permissions: Object.fromEntries(menus.map(m => [m, ["Alumnos", "Instituciones", "Clases"].includes(m) ? { view: true, create: true, edit: true, delete: false } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
+        },
+      ];
+      setRoles(defaultRoles);
+      localStorage.setItem("system_roles", JSON.stringify(defaultRoles));
+      triggerToast("¡Roles restaurados a los valores estándar!");
+    }
   };
 
   const [selectedRoleId, setSelectedRoleId] = useState('1');
@@ -585,12 +1005,21 @@ export function Configuracion() {
       rowNumber: 0,
       success: 0,
       errorCount: 0,
-      errors: []
+      errors: [],
+      results: []
     });
 
     let currentSuccess = 0;
     let currentErrorCount = 0;
     const collectedErrors: Array<{ rowNum: number; msg: string; data: string }> = [];
+    const collectedResults: Array<{
+      rowNum: number;
+      status: 'success' | 'error';
+      msg?: string;
+      data: string;
+      identifier?: string;
+      details?: string;
+    }> = [];
 
     // Process rows asynchronously with short yield so the UI is responsive
     for (let i = 0; i < rows.length; i++) {
@@ -610,6 +1039,194 @@ export function Configuracion() {
               throw new Error("El 'País' es un dato obligatorio.");
             }
             
+            // Resilient modality mapper mapping spreadsheet names like "Anual"/"Dual" into the correct application modality
+            const rawModality = (data[14] || '').trim();
+            let resolvedModality = rawModality;
+            if (rawModality) {
+              const cleanMod = rawModality.toLowerCase();
+              // Look up first by exact or partial catalog match
+              const match = catalogs['Modalidades']?.find((m: any) => 
+                m.name.toLowerCase() === cleanMod || 
+                cleanMod.includes(m.name.toLowerCase()) ||
+                m.name.toLowerCase().includes(cleanMod)
+              );
+              if (match) {
+                resolvedModality = match.name;
+              } else {
+                // Heuristic rules for common spreadsheet patterns
+                if (cleanMod.includes('dual') || cleanMod.includes('anual') || cleanMod.includes('completo')) {
+                  resolvedModality = 'Dual';
+                } else if (cleanMod.includes('ap') || cleanMod.includes('apid')) {
+                  resolvedModality = 'APID';
+                } else if (cleanMod.includes('home') || cleanMod.includes('casa') || cleanMod.includes('indep')) {
+                  resolvedModality = 'Homeschool';
+                } else if (cleanMod.includes('trans') || cleanMod.includes('cred')) {
+                  resolvedModality = 'Transfer';
+                } else if (cleanMod.includes('complem') || cleanMod.includes('extra')) {
+                  resolvedModality = 'Complementaria';
+                } else if (catalogs['Modalidades'] && catalogs['Modalidades'].length > 0) {
+                  resolvedModality = catalogs['Modalidades'][0].name;
+                }
+              }
+            } else if (catalogs['Modalidades'] && catalogs['Modalidades'].length > 0) {
+              resolvedModality = catalogs['Modalidades'][0].name;
+            }
+
+            // Resilient country tariffs mapping resolving "Tarifa-MX-01" or country name synonyms to official catalog country-tariff IDs in active memory
+            const rawTarifas = (data[15] || '').trim();
+            let resolvedTarifasId = undefined;
+            if (rawTarifas) {
+              const cleanTar = rawTarifas.toLowerCase();
+              // Try to find if user provided an ID that matches
+              let found = catalogs['Tarifas Países']?.find((tp: any) => 
+                tp.id.toString() === cleanTar || 
+                tp.id.toString().toLowerCase() === cleanTar
+              );
+              
+              if (!found) {
+                // Try to find if user provided a Name or part of a Country name
+                found = catalogs['Tarifas Países']?.find((tp: any) => 
+                  tp.name.toLowerCase() === cleanTar || 
+                  cleanTar.includes(tp.name.toLowerCase()) ||
+                  tp.name.toLowerCase().includes(cleanTar)
+                );
+              }
+
+              if (!found) {
+                // Heuristics for common country synonyms or tariff codes
+                if (cleanTar.includes('mex') || cleanTar.includes('mx') || cleanTar.includes('méx') || cleanTar.includes('tarifa-mx')) {
+                  found = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'méxico');
+                } else if (cleanTar.includes('lat') || cleanTar.includes('america') || cleanTar.includes('américa')) {
+                  found = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'latam');
+                } else if (cleanTar.includes('colombia a') || cleanTar.includes('colombia_a')) {
+                  found = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'colombia a');
+                } else if (cleanTar.includes('colombia b') || cleanTar.includes('colombia_b')) {
+                  found = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'colombia b');
+                } else if (cleanTar.includes('colombia')) {
+                  found = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase().includes('colombia'));
+                } else if (cleanTar.includes('china')) {
+                  found = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'china');
+                } else if (cleanTar.includes('home') || cleanTar.includes('house') || cleanTar.includes('hs')) {
+                  found = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'homeschool');
+                }
+              }
+
+              resolvedTarifasId = found ? found.id : catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'méxico')?.id || catalogs['Tarifas Países']?.[0]?.id;
+            } else {
+              // Try matching country name column first
+              const rawCountry = (data[6] || '').trim().toLowerCase();
+              let matchedCountryTar = catalogs['Tarifas Países']?.find((tp: any) => 
+                tp.name.toLowerCase() === rawCountry || 
+                rawCountry.includes(tp.name.toLowerCase()) ||
+                tp.name.toLowerCase().includes(rawCountry)
+              );
+              if (!matchedCountryTar && (rawCountry.includes('mex') || rawCountry.includes('mx') || rawCountry.includes('méx'))) {
+                matchedCountryTar = catalogs['Tarifas Países']?.find((tp: any) => tp.name.toLowerCase() === 'méxico');
+              }
+              resolvedTarifasId = matchedCountryTar ? matchedCountryTar.id : catalogs['Tarifas Países']?.[0]?.id || '1';
+            }
+
+            // Resilient mapping for Tipo de Institución
+            const rawInstType = (data[13] || '').trim();
+            let resolvedInstitutionTypeId = undefined;
+            if (rawInstType) {
+              const cleanType = rawInstType.toLowerCase();
+              const foundType = catalogs['Tipos de Institución']?.find((ti: any) => 
+                ti.id.toString() === cleanType || 
+                ti.name.toLowerCase() === cleanType ||
+                cleanType.includes(ti.name.toLowerCase()) ||
+                ti.name.toLowerCase().includes(cleanType)
+              );
+              if (foundType) {
+                resolvedInstitutionTypeId = foundType.id;
+              } else {
+                if (cleanType.includes('col') || cleanType.includes('internacional') || cleanType.includes('priv') || cleanType.includes('pub')) {
+                  resolvedInstitutionTypeId = '1';
+                } else if (cleanType.includes('home') || cleanType.includes('casa')) {
+                  resolvedInstitutionTypeId = '2';
+                } else {
+                  resolvedInstitutionTypeId = catalogs['Tipos de Institución']?.[0]?.id || '1';
+                }
+              }
+            } else {
+              resolvedInstitutionTypeId = catalogs['Tipos de Institución']?.[0]?.id || '1';
+            }
+
+            // Resilient mapping for Proveedor Principal (matching by ID or Name substrings)
+            const rawProvider = (data[16] || '').trim();
+            let resolvedProviderId = undefined;
+            if (rawProvider) {
+              const numericProvId = Number(rawProvider);
+              const matchedProvider = providers.find(p =>
+                (!isNaN(numericProvId) && p.id === numericProvId) ||
+                (p.commercialName && p.commercialName.toLowerCase() === rawProvider.toLowerCase()) ||
+                (p.legalName && p.legalName.toLowerCase() === rawProvider.toLowerCase()) ||
+                (p.commercialName && p.commercialName.toLowerCase().includes(rawProvider.toLowerCase())) ||
+                (p.legalName && p.legalName.toLowerCase().includes(rawProvider.toLowerCase()))
+              );
+              if (matchedProvider) {
+                resolvedProviderId = matchedProvider.id;
+              } else if (!isNaN(numericProvId) && numericProvId > 0) {
+                resolvedProviderId = numericProvId;
+              }
+            }
+
+            // Resilient mapping for Membresías (matching ID, Name, or Synonyms)
+            const rawMembership = (data[17] || '').trim();
+            let resolvedMembershipId = 'memb_4';
+            if (rawMembership) {
+              const cleanMemb = rawMembership.toLowerCase();
+              const foundMemb = catalogs['Membresías']?.find((m: any) => 
+                m.id.toString() === cleanMemb || 
+                m.name.toLowerCase() === cleanMemb ||
+                cleanMemb.includes(m.name.toLowerCase()) ||
+                m.name.toLowerCase().includes(cleanMemb)
+              );
+              if (foundMemb) {
+                resolvedMembershipId = foundMemb.id;
+              } else {
+                if (cleanMemb.includes('2000') || cleanMemb.includes('prem') || cleanMemb.includes('plat') || cleanMemb.includes('high')) {
+                  resolvedMembershipId = 'memb_1';
+                } else if (cleanMemb.includes('1000') || cleanMemb.includes('gold') || cleanMemb.includes('oro') || cleanMemb.includes('mid')) {
+                  resolvedMembershipId = 'memb_2';
+                } else if (cleanMemb.includes('500') || cleanMemb.includes('silv') || cleanMemb.includes('plata') || cleanMemb.includes('bas')) {
+                  resolvedMembershipId = 'memb_3';
+                } else if (cleanMemb.includes('sin') || cleanMemb.includes('no') || cleanMemb.includes('ning') || cleanMemb.includes('free')) {
+                  resolvedMembershipId = 'memb_4';
+                } else {
+                  resolvedMembershipId = catalogs['Membresías']?.[0]?.id || 'memb_4';
+                }
+              }
+            }
+
+            // Resilient mapping for Método de Pago
+            const rawPaymentMethod = (data[20] || '').trim();
+            let resolvedPaymentMethod = undefined;
+            if (rawPaymentMethod) {
+              const cleanPay = rawPaymentMethod.toLowerCase();
+              const foundPay = catalogs['Métodos de Pago']?.find((mp: any) => 
+                mp.id.toLowerCase() === cleanPay || 
+                mp.name.toLowerCase() === cleanPay ||
+                cleanPay.includes(mp.name.toLowerCase()) ||
+                mp.name.toLowerCase().includes(cleanPay)
+              );
+              if (foundPay) {
+                resolvedPaymentMethod = foundPay.name;
+              } else {
+                if (cleanPay.includes('trans') || cleanPay.includes('banc') || cleanPay.includes('wire') || cleanPay.includes('depo')) {
+                  resolvedPaymentMethod = 'Transferencia';
+                } else if (cleanPay.includes('tarj') || cleanPay.includes('cred') || cleanPay.includes('card') || cleanPay.includes('deb')) {
+                  resolvedPaymentMethod = 'Tarjeta de Crédito';
+                } else if (cleanPay.includes('efect') || cleanPay.includes('cash')) {
+                  resolvedPaymentMethod = 'Efectivo';
+                } else {
+                  resolvedPaymentMethod = rawPaymentMethod;
+                }
+              }
+            } else {
+              resolvedPaymentMethod = 'Transferencia';
+            }
+            
             addInstitution({
               name: data[0] || '',
               tradeName: data[1] || undefined,
@@ -624,14 +1241,14 @@ export function Configuracion() {
               contactPosition: data[10] || undefined,
               contactEmail: data[11] || undefined,
               contactPhone: data[12] || undefined,
-              institutionTypeId: data[13] || undefined,
-              modality: data[14] || undefined,
-              tarifasId: data[15] || undefined,
-              mainProviderId: data[16] ? Number(data[16]) : undefined,
-              membershipId: data[17] || undefined,
+              institutionTypeId: resolvedInstitutionTypeId,
+              modality: resolvedModality,
+              tarifasId: resolvedTarifasId,
+              mainProviderId: resolvedProviderId,
+              membershipId: resolvedMembershipId,
               membershipExpiration: data[18] || undefined,
               payWithIva: data[19] ? ['si', 'sì', 'yes', 'true', '1'].includes(data[19].toLowerCase().trim()) : false,
-              paymentMethod: data[20] || undefined,
+              paymentMethod: resolvedPaymentMethod,
               paymentAccount: data[21] || undefined,
               priceObservations: data[22] || undefined,
               status: 'Al corriente',
@@ -646,8 +1263,10 @@ export function Configuracion() {
             if (!data[1] || !data[1].trim()) {
               throw new Error("El 'Apellido' del alumno es un dato obligatorio.");
             }
-            if (data[4] && data[4].trim() && !data[4].includes('@')) {
-              throw new Error(`El Email '${data[4]}' no tiene un formato válido.`);
+            // En la importación de alumnos, el email no es necesario (se puede omitir u obviar validación estricta)
+            let emailValue = (data[4] || '').trim();
+            if (emailValue && !emailValue.includes('@')) {
+              emailValue = '';
             }
 
             const instNameValue = (data[19] || '').trim();
@@ -683,7 +1302,7 @@ export function Configuracion() {
               lastName: data[1] || '',
               preferredName: data[2] || undefined,
               gender: data[3] || undefined,
-              email: data[4] || '',
+              email: emailValue,
               phone: data[5] || undefined,
               birthDate: data[6] || undefined,
               nationality: data[7] || undefined,
@@ -849,21 +1468,325 @@ export function Configuracion() {
             break;
           }
           case "Pagos": {
-            const stdId = Number(data[0]);
-            if (isNaN(stdId) || stdId <= 0) {
-              throw new Error(`El ID de Alumno '${data[0]}' no es válido.`);
+            const targetValue = (data[0] || '').trim();
+            if (!targetValue) {
+              throw new Error("El campo 'Instituto/Alumno' es obligatorio.");
             }
-            const amt = Number(data[2]);
+
+            let matchedStudent = null;
+            let matchedInstitution = null;
+
+            // Search in students
+            const numericStudentId = Number(targetValue);
+            matchedStudent = students.find(s => 
+              (!isNaN(numericStudentId) && s.id === numericStudentId) ||
+              (s.email && s.email.toLowerCase() === targetValue.toLowerCase()) ||
+              (s.studentCustomId && s.studentCustomId.toLowerCase() === targetValue.toLowerCase()) ||
+              (`${s.name} ${s.lastName || ''}`.trim().toLowerCase() === targetValue.toLowerCase()) ||
+              (s.name && s.name.toLowerCase() === targetValue.toLowerCase())
+            );
+
+            if (matchedStudent) {
+              // Found student, resolve institution from student
+              if (matchedStudent.institutionId) {
+                matchedInstitution = institutions.find(i => i.id === Number(matchedStudent.institutionId));
+              }
+            } else {
+              // Try to search directly on institutions
+              const numericInstId = Number(targetValue);
+              matchedInstitution = institutions.find(inst => 
+                (!isNaN(numericInstId) && inst.id === numericInstId) ||
+                (inst.name && inst.name.toLowerCase() === targetValue.toLowerCase()) ||
+                (inst.commercialName && inst.commercialName.toLowerCase() === targetValue.toLowerCase()) ||
+                (inst.legalName && inst.legalName.toLowerCase() === targetValue.toLowerCase())
+              );
+            }
+
+            if (!matchedStudent && !matchedInstitution) {
+              throw new Error(`No se encontró ningún Alumno ni Institución con la identificación '${targetValue}'.`);
+            }
+
+            // Resilient Category Mapping
+            const catInput = (data[1] || '').trim();
+            let categoryId = 'cat_ingreso_servicios'; // Standard default income category
+
+            if (catInput) {
+              const cleanCat = catInput.toLowerCase()
+                .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // Accent-insensitive
+
+              const matchedCat = catalogs['Categorías']?.find(c => {
+                const cleanId = c.id.toLowerCase();
+                const cleanName = c.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                return cleanId === cleanCat || 
+                       cleanName === cleanCat || 
+                       cleanCat.includes(cleanName) || 
+                       cleanName.includes(cleanCat);
+              });
+
+              if (matchedCat) {
+                categoryId = matchedCat.id;
+              } else {
+                // Heuristics for standard names if not matched directly
+                if (cleanCat.includes('ingreso') || cleanCat.includes('servicio') || cleanCat.includes('coleg') || cleanCat.includes('inscrip')) {
+                  categoryId = 'cat_ingreso_servicios';
+                } else if (cleanCat.includes('socio') || cleanCat.includes('aport')) {
+                  categoryId = 'cat_aportacion_socios';
+                } else if (cleanCat.includes('operat') || cleanCat.includes('gasto op')) {
+                  categoryId = 'cat_gastos_operativos';
+                } else if (cleanCat.includes('admin') || cleanCat.includes('gasto ad')) {
+                  categoryId = 'cat_gastos_administrativos';
+                } else if (cleanCat.includes('vent')) {
+                  categoryId = 'cat_gastos_venta';
+                } else if (cleanCat.includes('sueld') || cleanCat.includes('salar') || cleanCat.includes('nomin')) {
+                  categoryId = 'cat_sueldos_salarios';
+                } else if (cleanCat.includes('impuest') || cleanCat.includes('sat') || cleanCat.includes('iva') || cleanCat.includes('isr')) {
+                  categoryId = 'cat_impuestos';
+                } else if (cleanCat.includes('banc')) {
+                  categoryId = 'cat_bancos';
+                } else if (cleanCat.includes('activ')) {
+                  categoryId = 'cat_activos';
+                } else if (cleanCat.includes('reembols')) {
+                  categoryId = 'cat_reembolso';
+                } else {
+                  categoryId = catInput;
+                }
+              }
+            }
+
+            // Resilient Subcategory Mapping
+            const subInput = (data[2] || '').trim();
+            let subcategory = 'sub_cursos_ingreso';
+
+            if (subInput) {
+              const cleanSub = subInput.toLowerCase()
+                .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+              // First try under the resolved categoryId
+              let matchedSub = catalogs['Subcategorías']?.find(s => {
+                const cleanId = s.id.toLowerCase();
+                const cleanName = s.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                return s.parentId === categoryId && (
+                  cleanId === cleanSub || 
+                  cleanName === cleanSub ||
+                  cleanSub.includes(cleanName) || 
+                  cleanName.includes(cleanSub)
+                );
+              });
+
+              // Fallback to match globally
+              if (!matchedSub) {
+                matchedSub = catalogs['Subcategorías']?.find(s => {
+                  const cleanId = s.id.toLowerCase();
+                  const cleanName = s.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                  return cleanId === cleanSub || 
+                         cleanName === cleanSub ||
+                         cleanSub.includes(cleanName) || 
+                         cleanName.includes(cleanSub);
+                });
+              }
+
+              if (matchedSub) {
+                subcategory = matchedSub.id;
+              } else {
+                // Heuristics for standard subcategories
+                if (cleanSub.includes('curs') || cleanSub.includes('clase') || cleanSub.includes('tall')) {
+                  subcategory = categoryId === 'cat_pago_servicios' ? 'sub_cursos_pago' : 'sub_cursos_ingreso';
+                } else if (cleanSub.includes('membres')) {
+                  subcategory = 'sub_membresia';
+                } else if (cleanSub.includes('agua')) {
+                  subcategory = 'sub_agua';
+                } else if (cleanSub.includes('internet') || cleanSub.includes('tel') || cleanSub.includes('wifi')) {
+                  subcategory = 'sub_internet_tel';
+                } else if (cleanSub.includes('renta') || cleanSub.includes('alquil')) {
+                  subcategory = 'sub_renta';
+                } else if (cleanSub.includes('comision') || cleanSub.includes('vend')) {
+                  subcategory = 'sub_comisiones_vend';
+                } else if (cleanSub.includes('sueld') || cleanSub.includes('nomin')) {
+                  subcategory = 'sub_sueldo';
+                } else if (cleanSub.includes('reembols')) {
+                  subcategory = 'sub_reembolso';
+                } else {
+                  subcategory = subInput;
+                }
+              }
+            }
+
+            const paymentMethod = (data[3] || 'Transferencia').trim();
+
+            const accountInput = (data[4] || '').trim();
+            let bankAccountId: string | number = '';
+            if (accountInput) {
+              const numericAccId = Number(accountInput);
+              const matchedAcc = bankAccounts?.find(b => 
+                (!isNaN(numericAccId) && b.id === numericAccId) ||
+                (b.bankName && b.bankName.toLowerCase().includes(accountInput.toLowerCase())) ||
+                (b.accountName && b.accountName.toLowerCase().includes(accountInput.toLowerCase())) ||
+                (b.accountNumber && b.accountNumber.includes(accountInput))
+              );
+              if (matchedAcc) {
+                bankAccountId = matchedAcc.id;
+              } else {
+                bankAccountId = accountInput;
+              }
+            }
+
+            const description = (data[5] || 'Pago Importado').trim();
+            
+            // Resilient Date parsing (handles DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, etc.)
+            const rawDate = (data[6] || '').trim();
+            let date = new Date().toISOString().split('T')[0];
+            if (rawDate) {
+              const matchedSlash = rawDate.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+              if (matchedSlash) {
+                // We have DD/MM/YYYY or DD-MM-YYYY
+                const [, day, month, year] = matchedSlash;
+                date = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+              } else {
+                const matchedIso = rawDate.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+                if (matchedIso) {
+                  // We have YYYY-MM-DD
+                  const [, year, month, day] = matchedIso;
+                  date = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                } else {
+                  // Fallback to JS parsing
+                  try {
+                    const parsed = new Date(rawDate);
+                    if (!isNaN(parsed.getTime())) {
+                      date = parsed.toISOString().split('T')[0];
+                    } else {
+                      date = rawDate;
+                    }
+                  } catch (e) {
+                    date = rawDate;
+                  }
+                }
+              }
+            }
+
+            const taxId = (data[7] || '').trim();
+
+            const amtRaw = (data[8] || '').trim().replace(/[^0-9.-]/g, '');
+            const amt = parseFloat(amtRaw);
             if (isNaN(amt) || amt < 0) {
-              throw new Error(`El Monto de pago '${data[2]}' debe ser un número válido.`);
+              throw new Error(`El Monto '${data[8]}' debe ser un número válido.`);
             }
-            addPayment({
-              studentId: stdId,
-              date: data[1] || new Date().toISOString().split('T')[0],
-              amount: amt,
-              tax: 0,
-              finalAmount: amt
+
+            // Determine if the imported CSV template has the 'Moneda' column by examining headers
+            const headerLower = Array.isArray(headers) ? headers.map(h => (h || '').toLowerCase().trim()) : [];
+            const hasMonedaField = headerLower.some(h => h.includes('moneda'));
+
+            const matchedAcc = bankAccounts?.find(b => b.id === Number(bankAccountId) || b.id.toString() === bankAccountId.toString());
+            let transCurrency = 'MXN';
+            let ivaRaw = '';
+            let rateRaw = '';
+
+            if (hasMonedaField) {
+              const csvCurrency = (data[9] || '').trim().toUpperCase();
+              transCurrency = csvCurrency || matchedAcc?.currency || 'MXN';
+              ivaRaw = data[10] || '';
+              rateRaw = data[11] || '';
+            } else {
+              // Old template format mapping
+              transCurrency = matchedAcc?.currency || 'MXN';
+              ivaRaw = data[9] || '';
+              rateRaw = data[10] || '';
+            }
+
+            // Parse Estado column if present
+            const estadoColIdx = headerLower.findIndex(h => h.includes('estado'));
+            let statusVal: 'Pagado' | 'Pendiente' | 'Programado' | 'Aplicado' = 'Pagado';
+            if (estadoColIdx !== -1 && data[estadoColIdx]) {
+              const csvEstado = data[estadoColIdx].trim().toLowerCase();
+              if (csvEstado.includes('pendiente')) {
+                statusVal = 'Pendiente';
+              } else if (csvEstado.includes('programado')) {
+                statusVal = 'Programado';
+              } else if (csvEstado.includes('pagado')) {
+                statusVal = 'Pagado';
+              } else if (csvEstado.includes('aplicado')) {
+                statusVal = 'Aplicado';
+              }
+            }
+
+            // IVA calculation
+            const isIvaEnabled = matchedInstitution?.payWithIva === true;
+            let ivaValue = undefined;
+            if (ivaRaw && ivaRaw.trim() !== '') {
+              const cleanedIva = ivaRaw.trim().replace(/[^0-9.-]/g, '');
+              const parsedIva = parseFloat(cleanedIva);
+              if (!isNaN(parsedIva)) {
+                ivaValue = parsedIva;
+              }
+            }
+            if (ivaValue === undefined && isIvaEnabled) {
+              ivaValue = amt * 0.16;
+            }
+
+            let rate = 1.0;
+            if (rateRaw && rateRaw.trim() !== '') {
+              const cleanedRate = rateRaw.trim().replace(/[^0-9.-]/g, '');
+              const parsedRate = parseFloat(cleanedRate);
+              if (!isNaN(parsedRate) && parsedRate > 0) {
+                rate = parsedRate;
+              }
+            } else {
+              if (transCurrency === 'USD') {
+                rate = 18.5;
+              }
+            }
+
+            const totalWithIva = amt + (ivaValue || 0);
+
+            let finAmt = transCurrency === 'MXN' ? (amt / rate) : amt;
+            let amtMxn = transCurrency === 'MXN' ? amt : (amt * rate);
+
+            if (transCurrency === 'MXN') {
+              amtMxn = totalWithIva;
+              finAmt = totalWithIva / rate;
+            } else {
+              amtMxn = totalWithIva * rate;
+              finAmt = totalWithIva;
+            }
+
+            // 1. Add legacy/student Payment if we matched a student
+            if (matchedStudent) {
+              addPayment({
+                studentId: matchedStudent.id,
+                date: date,
+                amount: amt,
+                tax: ivaValue || 0,
+                finalAmount: transCurrency === 'MXN' ? totalWithIva : amt,
+                exchangeRate: rate,
+                concept: description,
+                reference: taxId || undefined,
+                bankAccountId: bankAccountId
+              });
+            }
+
+            // 2. Add Financial Transaction
+            addFinancialTransaction({
+              type: 'income',
+              date: date,
+              description: description,
+              amount: transCurrency === 'MXN' ? totalWithIva : amt,
+              currency: transCurrency as any,
+              exchangeRate: rate,
+              amountMXN: amtMxn,
+              finalAmount: finAmt,
+              status: statusVal,
+              categoryId: categoryId,
+              subcategory: subcategory,
+              paymentMethod: paymentMethod,
+              bankAccountId: bankAccountId,
+              institutionId: matchedInstitution?.id,
+              studentId: matchedStudent?.id,
+              taxId: taxId,
+              agentId: currentUser?.id,
+              iva: ivaValue,
+              originalAmount: amt,
+              originalCurrency: (transCurrency || 'MXN') as any,
             });
+
             break;
           }
           case "Proveedores": {
@@ -889,13 +1812,78 @@ export function Configuracion() {
             break;
           }
         }
+        
+        let identifier = "";
+        let details = "";
+        switch (type) {
+          case "Instituciones": {
+            identifier = (data[0] || '').trim();
+            details = (data[2] || '').trim() ? `RFC: ${(data[2] || '').trim()}` : '';
+            break;
+          }
+          case "Alumnos": {
+            identifier = `${data[0] || ''} ${data[1] || ''}`.trim();
+            details = (data[4] || '').trim() ? `Email: ${(data[4] || '').trim()}` : '';
+            break;
+          }
+          case "Clases": {
+            identifier = (data[0] || '').trim();
+            details = (data[1] || '').trim() ? `Máx. Alumnos: ${(data[1] || '').trim()}` : '';
+            break;
+          }
+          case "Inscripciones": {
+            identifier = `Matrícula: ${data[0] || ''} ➔ ${data[1] || ''}`;
+            details = (data[2] || '').trim() ? `Fecha: ${(data[2] || '').trim()}` : '';
+            break;
+          }
+          case "Pagos": {
+            identifier = (data[0] || '').trim();
+            const amtStr = (data[8] || '').trim();
+            const conceptStr = (data[5] || 'Pago').trim();
+            details = `${conceptStr} - Monto: ${amtStr}`;
+            break;
+          }
+          case "Proveedores": {
+            identifier = (data[0] || '').trim();
+            details = (data[2] || '').trim() ? `RFC: ${(data[2] || '').trim()}` : '';
+            break;
+          }
+        }
+
+        collectedResults.push({
+          rowNum,
+          status: 'success',
+          data: data.slice(0, 5).join(', ') + (data.length > 5 ? "..." : ""),
+          identifier,
+          details
+        });
         currentSuccess++;
       } catch (err: any) {
         currentErrorCount++;
+        const errMsg = err?.message || "Error al parsear el registro.";
         collectedErrors.push({
           rowNum,
-          msg: err?.message || "Error al parsear el registro.",
+          msg: errMsg,
           data: data.length > 0 ? data.slice(0, 3).join(', ') + (data.length > 3 ? "..." : "") : "Fila vacía"
+        });
+
+        let identifier = (data[0] || 'Fila Vacía/Inválida').trim();
+        let details = "";
+        if (type === "Pagos") {
+          const amtStr = (data[8] || '').trim();
+          const conceptStr = (data[5] || '').trim();
+          details = conceptStr || amtStr ? `${conceptStr} - Monto: ${amtStr}` : "Datos de pago incompletos";
+        } else if (type === "Alumnos") {
+          identifier = `${data[0] || ''} ${data[1] || ''}`.trim() || 'Fila de Alumno Inválida';
+        }
+
+        collectedResults.push({
+          rowNum,
+          status: 'error',
+          msg: errMsg,
+          data: data.length > 0 ? data.slice(0, 5).join(', ') + (data.length > 5 ? "..." : "") : "Fila vacía",
+          identifier,
+          details
         });
       }
 
@@ -907,7 +1895,8 @@ export function Configuracion() {
           rowNumber: i + 1,
           success: currentSuccess,
           errorCount: currentErrorCount,
-          errors: [...collectedErrors]
+          errors: [...collectedErrors],
+          results: [...collectedResults]
         };
       });
     }
@@ -1031,7 +2020,7 @@ export function Configuracion() {
         filename = "plantilla_inscripciones.csv";
         break;
       case "Pagos":
-        headers = "AlumnoID,Fecha(YYYY-MM-DD),MontoFinal,Concepto\n1,2026-05-01,1500,Pago Mensual";
+        headers = "Instituto/Alumno,Categoria,Subcategoria,Metodo Pago,Cuenta Pago,CONCEPTO,FECHA DE PAGO,Folio,Monto,Moneda,IVA,Tipo Cambio,TOTAL MXN,Estado\nColegio San Patricio S.C.,cat_ingreso_servicios,sub_cursos_ingreso,Transferencia,BANCOMER 5432,Colegiatura Mayo 2026,2026-05-15,REF1002,1500,MXN,,18.5,27750,Pagado";
         filename = "plantilla_pagos.csv";
         break;
       case "Proveedores":
@@ -1078,12 +2067,19 @@ export function Configuracion() {
             <Users className={`h-4 w-4 mr-3 ${activeTab === 'Usuarios' ? '' : 'opacity-70'}`} />
             Usuarios del Sistema
           </button>
-          <button 
+           <button 
             onClick={() => setActiveTab("Importacion")}
-            className={`w-full flex items-center p-3 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'Importacion' ? 'bg-indigo-50 border border-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}
+            className={`w-full flex items-center p-3 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'Importacion' ? 'bg-indigo-50 border border-indigo-150 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}
           >
             <FileSpreadsheet className={`h-4 w-4 mr-3 ${activeTab === 'Importacion' ? '' : 'opacity-70'}`} />
-            Plantillas e Importación
+            Plantillas Import/Export
+          </button>
+          <button 
+            onClick={() => setActiveTab("Respaldos")}
+            className={`w-full flex items-center p-3 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'Respaldos' ? 'bg-indigo-50 border border-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <Database className={`h-4 w-4 mr-3 ${activeTab === 'Respaldos' ? '' : 'opacity-70'}`} />
+            Respaldos de Datos
           </button>
           <button 
             onClick={() => setActiveTab("Roles")}
@@ -1447,10 +2443,17 @@ export function Configuracion() {
                         {user.role}
                       </span>
                       <div className="flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => handleEditUser(user)} className="text-slate-400 hover:text-indigo-600">
+                        <button 
+                          onClick={() => handleOpenWelcomeEmailModal(user)} 
+                          className="text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                          title="Enviar correo de bienvenida con credenciales"
+                        >
+                          <Mail className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => handleEditUser(user)} className="text-slate-400 hover:text-indigo-600 cursor-pointer">
                           <Edit2 className="w-4 h-4" />
                         </button>
-                        <button onClick={() => handleDeleteUser(user.id)} className="text-slate-400 hover:text-rose-600">
+                        <button onClick={() => handleDeleteUser(user.id)} className="text-slate-400 hover:text-rose-600 cursor-pointer">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -1465,12 +2468,17 @@ export function Configuracion() {
             <>
               <div className="px-6 py-4 border-b border-slate-100 shrink-0 flex justify-between items-center bg-white flex-col sm:flex-row gap-2">
                 <div>
-                  <h3 className="font-bold text-slate-800 text-sm">Plantillas e Importación Masiva</h3>
-                  <p className="text-xs text-slate-500 mt-1">Descarga plantillas CSV e importa registros al sistema de forma ágil y segura.</p>
+                  <h3 className="font-bold text-slate-800 text-sm">Plantillas, Importación y Exportación de Datos</h3>
+                  <p className="text-xs text-slate-500 mt-1">Descarga plantillas CSV, importa registros o exporta listados del sistema a CSV/PDF para reportes externos.</p>
                 </div>
                 {importState && (
                   <button 
-                    onClick={() => setImportState(null)}
+                    onClick={() => {
+                      setImportState(null);
+                      setImportFilter('all');
+                      setImportSearch('');
+                      setExpandedRawRows({});
+                    }}
                     className="text-xs text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg px-2.5 py-1.5 font-bold transition-all"
                   >
                     Clear / Nueva Importación
@@ -1528,37 +2536,230 @@ export function Configuracion() {
                       </div>
                     </div>
 
-                    {/* Detailed errors reporter */}
-                    {importState.errors.length > 0 && (
-                      <div className="border border-rose-200 bg-rose-50/5 rounded-xl overflow-hidden mt-3 animate-fadeIn">
-                        <div className="bg-rose-50 border-b border-rose-150 px-4 py-2.5 flex justify-between items-center">
-                          <span className="text-xs font-extrabold text-rose-850 uppercase tracking-wider flex items-center">
-                            ⚠️ Listado de Errores Detallado ({importState.errors.length})
-                          </span>
-                          <span className="text-[10px] bg-rose-100 text-rose-800 rounded-full px-2 py-0.5 font-bold">
-                            Fallo Parcial Solamente
-                          </span>
-                        </div>
-                        <div className="divide-y divide-rose-100 max-h-56 overflow-y-auto font-sans">
-                          {importState.errors.map((err, idx) => (
-                            <div key={idx} className="p-3 hover:bg-rose-50/30 transition-colors text-xs">
-                              <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-1.5">
-                                <span className="bg-slate-700 text-slate-100 text-[10px] px-2 py-0.5 rounded font-mono font-bold shrink-0">
-                                  Fila #{err.rowNum}
-                                </span>
-                                <span className="text-rose-700 font-bold bg-rose-100/60 px-2 py-0.5 rounded text-[11px] leading-relaxed">
-                                  {err.msg}
-                                </span>
-                              </div>
-                              <div className="bg-slate-50 border border-slate-200 rounded p-2 mt-2 font-mono text-[10px] text-slate-500 overflow-x-auto whitespace-pre">
-                                <span className="text-slate-400 font-bold block mb-0.5 uppercase text-[8px] tracking-wider">Datos leídos:</span>
-                                {err.data}
-                              </div>
+                    {/* Detailed row-by-row results logger with filter tabs and search */}
+                    {(() => {
+                      const list = importState.results || [];
+                      const filteredList = list.filter(item => {
+                        // 1. Tab filter
+                        if (importFilter === 'success' && item.status !== 'success') return false;
+                        if (importFilter === 'error' && item.status !== 'error') return false;
+                        
+                        // 2. Search query filter
+                        if (importSearch) {
+                          const query = importSearch.toLowerCase();
+                          const idText = (item.identifier || '').toLowerCase();
+                          const detailText = (item.details || '').toLowerCase();
+                          const rowText = `fila #${item.rowNum}`;
+                          const rawData = (item.data || '').toLowerCase();
+                          const errorText = (item.msg || '').toLowerCase();
+                          
+                          return idText.includes(query) || 
+                                 detailText.includes(query) || 
+                                 rowText.includes(query) || 
+                                 rawData.includes(query) ||
+                                 errorText.includes(query);
+                        }
+                        
+                        return true;
+                      });
+
+                      const totalCount = list.length;
+                      const successCount = list.filter(item => item.status === 'success').length;
+                      const errorCount = list.filter(item => item.status === 'error').length;
+
+                      return (
+                        <div className="border border-slate-200 bg-white rounded-xl overflow-hidden mt-5 shadow-sm animate-fadeIn">
+                          {/* Section Header */}
+                          <div className="bg-slate-50 border-b border-slate-150 px-4 py-3 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                            <div>
+                              <span className="text-xs font-bold text-slate-805 uppercase tracking-wider flex items-center gap-1.5">
+                                <FileSpreadsheet className="w-4 h-4 text-indigo-550 shrink-0" />
+                                Bitácora de Registro Fila por Fila
+                              </span>
+                              <p className="text-[10px] text-slate-500 mt-0.5">
+                                Listado completo con estado e indicadores de guardado para la verificación de registros.
+                              </p>
                             </div>
-                          ))}
+                            
+                            {/* Stats mini badge */}
+                            <div className="flex gap-1.5 self-stretch md:self-auto">
+                              <span className="text-[10px] font-bold bg-indigo-50 border border-indigo-150 text-indigo-700 rounded-full px-2.5 py-1">
+                                Procesado: {importState.rowNumber} / {importState.total}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Control Bar: Tabs & Search input */}
+                          <div className="p-4 border-b border-slate-150 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-white text-xs">
+                            {/* Tabs selector */}
+                            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setImportFilter('all')}
+                                className={`px-3 py-1.5 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1.5 cursor-pointer ${
+                                  importFilter === 'all'
+                                    ? 'bg-white text-slate-800 shadow-sm'
+                                    : 'text-slate-500 hover:text-slate-800'
+                                }`}
+                              >
+                                Todos
+                                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono leading-none ${
+                                  importFilter === 'all' ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200 text-slate-505'
+                                }`}>
+                                  {totalCount}
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setImportFilter('success')}
+                                className={`px-3 py-1.5 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1.5 cursor-pointer ${
+                                  importFilter === 'success'
+                                    ? 'bg-white text-emerald-800 shadow-sm border border-emerald-100'
+                                    : 'text-slate-500 hover:text-slate-800'
+                                }`}
+                              >
+                                Éxitos
+                                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono leading-none ${
+                                  importFilter === 'success' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-505'
+                                }`}>
+                                  {successCount}
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setImportFilter('error')}
+                                className={`px-3 py-1.5 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1.5 cursor-pointer ${
+                                  importFilter === 'error'
+                                    ? 'bg-white text-rose-800 shadow-sm border border-rose-100'
+                                    : 'text-slate-500 hover:text-slate-800'
+                                }`}
+                              >
+                                Errores
+                                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono leading-none ${
+                                  importFilter === 'error' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-505'
+                                }`}>
+                                  {errorCount}
+                                </span>
+                              </button>
+                            </div>
+
+                            {/* Search bar */}
+                            <div className="relative flex-1 md:max-w-xs">
+                              <input
+                                type="text"
+                                value={importSearch}
+                                onChange={(e) => setImportSearch(e.target.value)}
+                                placeholder="Buscar concepto, error..."
+                                className="w-full bg-slate-50 border border-slate-200 text-slate-750 py-1.5 pl-8 pr-3.5 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white placeholder-slate-400 transition-all shadow-inner"
+                              />
+                              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+                              {importSearch && (
+                                <button
+                                  onClick={() => setImportSearch('')}
+                                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold"
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* List of row results */}
+                          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto font-sans bg-slate-55/15">
+                            {filteredList.length === 0 ? (
+                              <div className="p-8 text-center text-slate-400 text-xs">
+                                <FileSpreadsheet className="w-8 h-8 mx-auto mb-2.5 text-slate-350 opacity-50 stroke-1" />
+                                No se encontraron filas procesadas con estos filtros.
+                              </div>
+                            ) : (
+                              filteredList.map((item) => {
+                                const isSuccess = item.status === 'success';
+                                const isExpanded = !!expandedRawRows[item.rowNum];
+                                return (
+                                  <div
+                                    key={item.rowNum}
+                                    className={`p-3 hover:bg-slate-50/60 transition-colors text-xs border-l-4 ${
+                                      isSuccess ? 'border-l-emerald-500 bg-emerald-50/5' : 'border-l-rose-500 bg-rose-50/5'
+                                    }`}
+                                  >
+                                    <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-2">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="bg-slate-750 bg-slate-800 text-slate-100 text-[9px] px-2 py-0.5 rounded font-mono font-bold shrink-0">
+                                          Fila #{item.rowNum}
+                                        </span>
+                                        
+                                        <div className="flex flex-col">
+                                          <span className="text-slate-800 font-bold leading-none">
+                                            {item.identifier || 'Datos del registro'}
+                                          </span>
+                                          {item.details && (
+                                            <span className="text-[10px] mt-0.5 text-slate-500">
+                                              {item.details}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                                        {/* State badge */}
+                                        {isSuccess ? (
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                            <CheckCircle className="w-2.5 h-2.5 mr-1 text-emerald-555" /> Guardado ✓
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                            <AlertTriangle className="w-2.5 h-2.5 mr-1 text-rose-555" /> Falló ✗
+                                          </span>
+                                        )}
+
+                                        {/* Toggle Original Raw CSV row details */}
+                                        <button
+                                          type="button"
+                                          onClick={() => setExpandedRawRows(prev => ({ ...prev, [item.rowNum]: !isExpanded }))}
+                                          className="text-[9px] text-indigo-650 hover:text-indigo-800 bg-indigo-50/50 hover:bg-indigo-100/70 border border-indigo-150 rounded px-1.5 py-0.5 font-bold transition-all shrink-0 cursor-pointer"
+                                        >
+                                          {isExpanded ? "Ocultar CSV" : "Ver CSV"}
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Error Message if failed */}
+                                    {!isSuccess && item.msg && (
+                                      <div className="mt-2 bg-rose-50 border border-rose-150 text-rose-900 rounded-lg p-2.5 text-[11px] leading-relaxed">
+                                        <strong className="font-bold text-rose-700 block mb-0.5 text-[9px] tracking-wider uppercase">Motivo del fallo:</strong>
+                                        {item.msg}
+                                      </div>
+                                    )}
+
+                                    {/* Collapsed view of raw cells */}
+                                    {isExpanded && (
+                                      <div className="bg-slate-900 text-slate-300 border border-slate-800 rounded-lg p-2.5 mt-2.5 font-mono text-[10px] overflow-x-auto whitespace-pre animate-fadeIn">
+                                        <div className="flex justify-between items-center border-b border-slate-800 pb-1 mb-1 bg-slate-900">
+                                          <span className="text-slate-500 font-bold uppercase text-[8px] tracking-wider">Celdas CSV Originales</span>
+                                        </div>
+                                        <span className="text-slate-333 text-[10px] leading-relaxed text-slate-300">{item.data}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                          
+                          {/* Footer help line */}
+                          <div className="bg-slate-50/80 border-t border-slate-150 px-4 py-2 flex justify-between items-center text-[10px] text-slate-400">
+                            <span>* El procesamiento asíncrono no detiene la navegación.</span>
+                            {errorCount > 0 && (
+                              <span className="text-rose-600 font-semibold">
+                                Se detectaron errores corregibles en algunas filas.
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -1596,6 +2797,61 @@ export function Configuracion() {
                     </div>
                   ))}
                 </div>
+
+                {/* Módulo de Extracción y Reportes Rápidos */}
+                <div className="max-w-4xl mx-auto border-t border-slate-200/80 my-8 pt-8 space-y-6">
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-sm flex items-center">
+                      <Download className="w-4 h-4 mr-2 text-indigo-600 animate-bounce" />
+                      Módulo de Extracción y Reportes Rápidos
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-1 font-medium">
+                      Elige el listado del sistema que deseas consultar para generar un archivo descargable de inmediato.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {[
+                      { type: "Instituciones", desc: "Colegios, campus, convenios de membresía, fecha de registro y estatus actual.", count: institutions.length },
+                      { type: "Alumnos", desc: "Matrícula total de alumnos con información de contacto, grupo de sangre y correos.", count: students.length },
+                      { type: "Clases", desc: "Catálogo de talleres extraescolares, créditos académicos, profesores y precios asignados.", count: classes.length },
+                      { type: "Proveedores", desc: "Pabellones, partners de servicios, datos de facturación e información fiscal.", count: providers.length },
+                      { type: "Inscripciones", desc: "Registros históricos y activos de alumnos asignados a clases con sus tarifas pactadas.", count: enrollments?.length || 0 },
+                      { type: "Transacciones", desc: "Libro mayor y reporte contable de ingresos, egresos y referencias de transacciones reales.", count: financialTransactions?.filter(t => !(typeof t.id === 'string' && t.id.startsWith('tx-init-'))).length || 0 },
+                    ].map((item) => (
+                      <div key={item.type} className="bg-white rounded-xl border border-slate-200/70 p-4 shadow-sm hover:shadow hover:border-slate-350 transition flex flex-col justify-between space-y-3.5 group">
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-start">
+                            <span className="font-bold text-slate-800 text-xs uppercase tracking-wider">{item.type}</span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-600 border border-slate-200 rounded-md font-mono">
+                              {item.count} {item.count === 1 ? 'registro' : 'registros'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 leading-relaxed">{item.desc}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            type="button"
+                            onClick={() => handleExportList(item.type, 'csv')}
+                            className="flex-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold uppercase tracking-wider py-1.5 rounded-lg text-[9px] transition flex items-center justify-center cursor-pointer font-sans"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5 text-emerald-600 shrink-0" />
+                            Exportar CSV
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => handleExportList(item.type, 'pdf')}
+                            className="flex-1 bg-indigo-50 hover:bg-indigo-100 border border-indigo-150 text-indigo-700 font-bold uppercase tracking-wider py-1.5 rounded-lg text-[9px] transition flex items-center justify-center cursor-pointer font-sans"
+                          >
+                            <FileText className="w-3.5 h-3.5 mr-1.5 text-indigo-600 shrink-0" />
+                            Generar PDF
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
               </div>
             </>
           )}
@@ -1607,12 +2863,20 @@ export function Configuracion() {
                   <h3 className="font-bold text-slate-800 text-sm">Roles y Permisos</h3>
                   <p className="text-xs text-slate-500 mt-1">Configura el acceso a los diferentes módulos del sistema.</p>
                 </div>
-                <button 
-                  onClick={() => setIsRoleModalOpen(true)}
-                  className="bg-indigo-600 text-white px-4 py-1.5 rounded text-xs font-semibold shadow-sm hover:bg-indigo-700 transition"
-                >
-                  + Nuevo Rol
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={handleRestoreDefaultRoles}
+                    className="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold shadow-sm transition border border-slate-200"
+                  >
+                    Restaurar por Defecto
+                  </button>
+                  <button 
+                    onClick={() => setIsRoleModalOpen(true)}
+                    className="bg-indigo-600 text-white px-4 py-1.5 rounded text-xs font-semibold shadow-sm hover:bg-indigo-700 transition"
+                  >
+                    + Nuevo Rol
+                  </button>
+                </div>
               </div>
               
               <div className="flex-1 overflow-auto flex flex-col md:flex-row">
@@ -2503,7 +3767,7 @@ export function Configuracion() {
                                       
                                       setNotifHistory([
                                         {
-                                          id: Date.now(),
+                                          id: generateUniqueId(),
                                           date: new Date().toISOString(),
                                           recipient: `${studentName} (Alumno)`,
                                           target: "Alumno",
@@ -2609,7 +3873,7 @@ export function Configuracion() {
                                         
                                         setNotifHistory([
                                           {
-                                            id: Date.now(),
+                                            id: generateUniqueId(),
                                             date: new Date().toISOString(),
                                             recipient: `${studentName} (Alumno)`,
                                             target: "Alumno",
@@ -2693,7 +3957,7 @@ export function Configuracion() {
                                           
                                           setNotifHistory([
                                             {
-                                              id: Date.now(),
+                                              id: generateUniqueId(),
                                               date: new Date().toISOString(),
                                               recipient: `${inst.name} (Coordinador)`,
                                               target: "Institución",
@@ -3100,7 +4364,7 @@ export function Configuracion() {
                                   onClick={() => {
                                     const duplicated = {
                                       ...rule,
-                                      id: `rule_${Date.now()}`,
+                                      id: `rule_${generateUniqueId()}`,
                                       name: `${rule.name} (Copia)`,
                                       enabled: false
                                     };
@@ -3546,7 +4810,7 @@ export function Configuracion() {
                             } else {
                               const newRuleObj = {
                                 ...ruleForm,
-                                id: `rule_${Date.now()}`,
+                                id: `rule_${generateUniqueId()}`,
                                 enabled: true
                               };
                               const updated = [...customRules, newRuleObj];
@@ -3567,6 +4831,262 @@ export function Configuracion() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === "Respaldos" && (
+            <div className="flex flex-col h-full overflow-y-auto bg-slate-50/50">
+              {/* Header de Respaldos */}
+              <div className="px-6 py-5 border-b border-slate-100 bg-white shrink-0">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-lg flex items-center">
+                      <Database className="w-5 h-5 mr-2 text-indigo-600" />
+                      Respaldos de Datos
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Gestiona los puntos de restauración del sistema y las descargas de bases de datos completas.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cuerpo */}
+              <div className="p-6 space-y-6 max-w-5xl">
+                {/* Panel de Controles Rápidos */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Respaldo Manual */}
+                  <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                        <Download className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-extrabold text-slate-800 text-sm">Copia de Seguridad Instantánea</h4>
+                        <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
+                          Descarga un archivo JSON plano con todos los registros actuales del sistema (alumnos, instituciones, pagos, etc.) de forma local. Es 100% privado y seguro.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        disabled={backupGenerating}
+                        onClick={async () => {
+                          setBackupGenerating(true);
+                          try {
+                            const result = await triggerFullBackup('Manual');
+                            triggerToast(`Copia de seguridad manual descargada con éxito (${result.size})`);
+                          } catch (err) {
+                            triggerToast("Error al generar copia de seguridad", "error");
+                          } finally {
+                            setBackupGenerating(false);
+                          }
+                        }}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+                      >
+                        {backupGenerating ? (
+                          <>Generando Respaldo...</>
+                        ) : (
+                          <>
+                            <Download className="w-4 h-4" />
+                            Respaldar y Descargar JSON
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Respaldo Automático Semanal */}
+                  <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                        <Calendar className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-extrabold text-slate-800 text-sm">Respaldo Automático Semanal</h4>
+                        <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
+                          Al iniciar el sistema, se verifica si ya corresponde el respaldo periódico programado. Si sí, se genera y descarga una copia de respaldo sin interrumpir.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 pt-2">
+                      <label className="flex items-center space-x-2.5 cursor-pointer text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={autoBackupEnabled}
+                          onChange={(e) => {
+                            setAutoBackupEnabled(e.target.checked);
+                            localStorage.setItem('auto_backup_enabled', String(e.target.checked));
+                            triggerToast(e.target.checked ? "Respaldo automático activado" : "Respaldo automático desactivado");
+                          }}
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                        />
+                        <span>Habilitar Respaldo Semanal Automático</span>
+                      </label>
+
+                      <div className="grid grid-cols-2 gap-3 pt-1">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Día Programado</label>
+                          <select
+                            disabled={!autoBackupEnabled}
+                            value={autoBackupDay}
+                            onChange={(e) => {
+                              setAutoBackupDay(e.target.value);
+                              localStorage.setItem('auto_backup_day', e.target.value);
+                              triggerToast(`Día programado actualizado a ${e.target.value}`);
+                            }}
+                            className="w-full text-xs font-semibold rounded-lg border-slate-200 bg-white py-2 px-2.5 focus:border-indigo-500 focus:ring-0 disabled:opacity-50"
+                          >
+                            <option value="Lunes">Lunes</option>
+                            <option value="Martes">Martes</option>
+                            <option value="Miércoles">Miércoles</option>
+                            <option value="Jueves">Jueves</option>
+                            <option value="Viernes">Viernes</option>
+                            <option value="Sábado">Sábado</option>
+                            <option value="Domingo">Domingo</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Hora Programada</label>
+                          <input
+                            type="time"
+                            disabled={!autoBackupEnabled}
+                            value={autoBackupTime}
+                            onChange={(e) => {
+                              setAutoBackupTime(e.target.value);
+                              localStorage.setItem('auto_backup_time', e.target.value);
+                              triggerToast(`Hora programada fijada para las ${e.target.value} hrs`);
+                            }}
+                            className="w-full text-xs font-semibold rounded-lg border-slate-200 bg-white py-1.5 px-2.5 focus:border-indigo-500 focus:ring-0 disabled:opacity-50"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Zona de Carga / Restaurar Respaldo */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                      <Upload className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-sm">Restaurar Sistema desde Copia de Seguridad</h4>
+                      <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
+                        Carga una copia de seguridad local (archivo en formato JSON) para reestablecer todos tus datos. <span className="text-rose-600 font-bold">¡Atención! Esta acción sobrescribirá y reemplazará absolutamente todos los registros actuales en el sistema.</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-2">
+                    <div 
+                      className="border-2 border-dashed border-indigo-200 hover:border-indigo-400/80 bg-slate-50 hover:bg-indigo-50/10 rounded-2xl p-6 text-center cursor-pointer transition-all duration-200"
+                      onClick={() => document.getElementById('backup-file-input')?.click()}
+                    >
+                      <input
+                        type="file"
+                        id="backup-file-input"
+                        accept=".json"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            try {
+                              const parsed = JSON.parse(event.target?.result as string);
+                              if (!parsed || (typeof parsed !== 'object')) {
+                                triggerToast("El archivo seleccionado no es un respaldo de datos válido.", "error");
+                                return;
+                              }
+                              setBackupRestoreFile(file);
+                              setRestorePayload(parsed);
+                              setIsRestoreConfirmOpen(true);
+                              e.target.value = '';
+                            } catch (err) {
+                              triggerToast("Error al procesar el archivo JSON de respaldo.", "error");
+                            }
+                          };
+                          reader.readAsText(file);
+                        }}
+                      />
+                      <Upload className="w-8 h-8 mx-auto text-indigo-500 mb-2.5 opacity-85" />
+                      <p className="font-extrabold text-slate-800 text-xs">Arrastra o haz clic para seleccionar archivo JSON</p>
+                      <p className="text-[10px] text-slate-400 mt-1">Soporta archivos de respaldo creados por la función de "Respaldar y Descargar JSON"</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Lista Histórica de Respaldos (Auditoría) */}
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/40">
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider">Bitácora de Puntos de Respaldo Registrados</h4>
+                      <p className="text-[10px] text-slate-400 mt-0.5">Historial sincronizado en la nube para control administrativo.</p>
+                    </div>
+                  </div>
+
+                  {backups.length === 0 ? (
+                    <div className="p-8 text-center space-y-2">
+                      <Database className="w-8 h-8 text-slate-300 mx-auto" />
+                      <p className="text-xs font-bold text-slate-500">No hay registros de respaldos generados todavía</p>
+                      <p className="text-[10px] text-slate-400">Las copias de seguridad de datos aparecerán listadas aquí una vez generadas.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200">
+                          <tr>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Fecha de Creación</th>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Tipo de Respaldo</th>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Registros Totales</th>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Peso Estimado</th>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400 text-center">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {backups.map((bk) => (
+                            <tr key={bk.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-5 py-3 text-[11px] font-semibold text-slate-700">
+                                {new Date(bk.date).toLocaleString()}
+                              </td>
+                              <td className="px-5 py-3">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold ${bk.type === 'Automático' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-indigo-50 text-indigo-700 border border-indigo-100'}`}>
+                                  {bk.type}
+                                </span>
+                              </td>
+                              <td className="px-5 py-3 text-[11px] font-medium text-slate-600">
+                                {bk.records} registros
+                              </td>
+                              <td className="px-5 py-3 text-[11px] font-mono text-slate-500">
+                                {bk.size}
+                              </td>
+                              <td className="px-5 py-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    deleteBackup(bk.id);
+                                    triggerToast("Registro de respaldo eliminado con éxito");
+                                  }}
+                                  className="p-1 px-2.5 hover:bg-rose-50 text-rose-600 hover:text-rose-700 rounded-lg text-xs font-bold flex items-center gap-1 mx-auto transition-all"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  Borrar Log
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -3661,7 +5181,7 @@ export function Configuracion() {
                       className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white"
                     >
                       <option value="" disabled>Selecciona una institución...</option>
-                      {institutions.map(i => (
+                      {[...institutions].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es')).map(i => (
                         <option key={i.id} value={i.id}>{i.name}</option>
                       ))}
                     </select>
@@ -3675,7 +5195,13 @@ export function Configuracion() {
                         id="autoGeneratePassword"
                         type="checkbox"
                         checked={autoGeneratePassword}
-                        onChange={(e) => setAutoGeneratePassword(e.target.checked)}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setAutoGeneratePassword(val);
+                          if (val) {
+                            setRequirePasswordChange(true);
+                          }
+                        }}
                         className="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
                       />
                     </div>
@@ -3684,11 +5210,60 @@ export function Configuracion() {
                         Generar contraseña automáticamente
                       </label>
                       <p className="text-slate-500 mt-0.5 leading-relaxed">
-                        El usuario podrá ingresar con su contraseña provisional y el sistema le solicitará cambiarla obligatoriamente en su primer ingreso.
+                        El sistema generará una clave aleatoria provisional (ej: IHS-K8AJ) y obligará al usuario a cambiarla en su primer acceso.
                       </p>
                     </div>
                   </div>
                 )}
+
+                {/* Custom password field if not auto-generating or when editing */}
+                {(!autoGeneratePassword || editingUserId) && (
+                  <div className="space-y-1.5 mt-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      {editingUserId ? "Establecer Nueva Contraseña" : "Contraseña Personalizada"} {!editingUserId && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input 
+                      type="text"
+                      required={!editingUserId}
+                      value={customPassword}
+                      onChange={(e) => setCustomPassword(e.target.value)}
+                      className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                      placeholder={editingUserId ? "Dejar vacío para no modificar contraseña" : "Ingresa contraseña para el usuario"}
+                    />
+                  </div>
+                )}
+
+                {/* Additional Access Security Options */}
+                <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-200/60 mt-4 space-y-3">
+                  <h5 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Configuración de Seguridad en Primer Acceso</h5>
+                  
+                  <label className="flex items-start gap-2.5 cursor-pointer text-xs font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={requirePasswordChange}
+                      disabled={!editingUserId && autoGeneratePassword} // Forced to true if auto-generated
+                      onChange={(e) => setRequirePasswordChange(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer mt-0.5 disabled:opacity-55"
+                    />
+                    <div>
+                      <span>Forzar cambio de contraseña en primer ingreso</span>
+                      <p className="text-[10px] font-normal text-slate-400 mt-0.5">El usuario deberá actualizar su clave antes de ver el panel administrativo.</p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer text-xs font-semibold text-slate-700 pt-1 border-t border-slate-100">
+                    <input
+                      type="checkbox"
+                      checked={requireEmailVerification}
+                      onChange={(e) => setRequireEmailVerification(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer mt-0.5"
+                    />
+                    <div>
+                      <span>Requerir confirmar/verificar correo electrónico</span>
+                      <p className="text-[10px] font-normal text-slate-400 mt-0.5">Si ingresa por credenciales o por OTP, se le enviará un código para confirmar que el buzón es real.</p>
+                    </div>
+                  </label>
+                </div>
               </div>
               
               <div className="mt-8 flex justify-end space-x-3">
@@ -3719,10 +5294,10 @@ export function Configuracion() {
             </div>
             <h3 className="text-lg font-bold text-slate-900 mb-1">¡Contraseña Inicial Generada!</h3>
             <p className="text-xs text-slate-500 mb-6 px-1">
-              Copie la siguiente contraseña provisional para el usuario. Le será solicitado cambiarla obligatoriamente en cuanto ingrese por primera vez.
+              Copie la siguiente contraseña provisional para el usuario o envíasela directamente a su buzón por correo real.
             </p>
             
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-6 text-left space-y-3">
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4 text-left space-y-3">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Usuario / Correo:</span>
                 <span className="text-xs font-bold text-slate-700 block select-all font-mono break-all">{generatedPassInfo.email}</span>
@@ -3746,16 +5321,178 @@ export function Configuracion() {
               </div>
             </div>
 
+            {/* SMTP Sending Section */}
+            <div className="mb-6">
+              {credentialsEmailResult ? (
+                <div className={`p-3 rounded-xl text-xs font-semibold text-left flex items-start gap-2 ${credentialsEmailResult.success ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`}>
+                  {credentialsEmailResult.success ? <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-500" /> : <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-500" />}
+                  <span>{credentialsEmailResult.msg}</span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isSendingCredentialsEmail}
+                  onClick={handleSendCredentialsEmail}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 hover:text-indigo-800 font-bold rounded-xl text-xs transition-all border border-indigo-200/50 cursor-pointer disabled:opacity-50"
+                >
+                  {isSendingCredentialsEmail ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Enviando credenciales reales...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>Enviar credenciales por correo electrónico</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+ 
             <button
               type="button"
               onClick={() => {
                 setGeneratedPassInfo(null);
+                setCredentialsEmailResult(null);
                 setIsUserModalOpen(false);
               }}
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition-colors shadow-md shadow-indigo-600/10"
+              className="w-full py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl text-sm transition-colors shadow-md shadow-slate-800/10"
             >
               Cerrar y Continuar
             </button>
+          </div>
+        </div>
+      )}
+
+      {isWelcomeEmailModalOpen && selectedUserForEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center p-5 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg">
+                  <Mail className="h-5 w-5" />
+                </div>
+                <h3 className="font-bold text-lg text-slate-800">
+                  Enviar Correo de Bienvenida
+                </h3>
+              </div>
+              <button 
+                onClick={() => setIsWelcomeEmailModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1.5 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-5 space-y-4">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Destinatario:</span>
+                  <span className="text-xs font-bold text-slate-700 block">{selectedUserForEmail.name}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Correo Electrónico:</span>
+                  <span className="text-xs font-mono font-semibold text-slate-600 block break-all">{selectedUserForEmail.email}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Contraseña Provisional a Incluir
+                </label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={welcomePasswordToInclude}
+                    onChange={(e) => {
+                      const newPass = e.target.value;
+                      setWelcomePasswordToInclude(newPass);
+                      
+                      // Regenerate body dynamically
+                      const updatedBody = `Hola ${selectedUserForEmail.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Correo electrónico: ${selectedUserForEmail.email}\n• Contraseña provisional: ${newPass}\n\nPor favor, ingresa a la plataforma utilizando el siguiente enlace:\n${window.location.origin}\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos,\nEquipo IHS`;
+                      setWelcomeEmailBody(updatedBody);
+                    }}
+                    className="flex-1 border border-slate-300 rounded-xl px-4 py-2.5 text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                    placeholder="Contraseña del usuario"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                      let randomPart = '';
+                      for (let i = 0; i < 4; i++) {
+                        randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+                      }
+                      const generated = `IHS-${randomPart}`;
+                      setWelcomePasswordToInclude(generated);
+                      
+                      const updatedBody = `Hola ${selectedUserForEmail.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Correo electrónico: ${selectedUserForEmail.email}\n• Contraseña provisional: ${generated}\n\nPor favor, ingresa a la plataforma utilizando el siguiente enlace:\n${window.location.origin}\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos,\nEquipo IHS`;
+                      setWelcomeEmailBody(updatedBody);
+                    }}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 transition cursor-pointer flex items-center gap-1 shrink-0"
+                    title="Generar nueva clave"
+                  >
+                    <Key className="w-3.5 h-3.5" />
+                    Generar Clave
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">Si cambias la clave aquí, se actualizará en su perfil de forma automática al enviar.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Asunto del Correo</label>
+                <input 
+                  type="text" 
+                  value={welcomeEmailSubject}
+                  onChange={(e) => setWelcomeEmailSubject(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Mensaje de Bienvenida</label>
+                <textarea 
+                  value={welcomeEmailBody}
+                  onChange={(e) => setWelcomeEmailBody(e.target.value)}
+                  rows={8}
+                  className="w-full border border-slate-300 rounded-xl px-4 py-3 text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm resize-none whitespace-pre-wrap leading-relaxed"
+                />
+              </div>
+
+              <div className="text-[10px] text-slate-400 bg-slate-50 border border-slate-200 p-3 rounded-lg leading-relaxed">
+                ⚠️ <span className="font-semibold text-slate-600">Configuración SMTP Obligatoria:</span> Este correo se enviará a través del servidor de correo real configurado en la pestaña "Notificaciones". Asegúrate de que los parámetros del SMTP estén probados y guardados.
+              </div>
+            </div>
+
+            <div className="px-5 py-4 bg-slate-50 border-t border-slate-100 flex justify-end space-x-3">
+              <button 
+                type="button"
+                disabled={isSendingWelcomeEmail}
+                onClick={() => setIsWelcomeEmailModalOpen(false)}
+                className="px-4 py-2 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="button"
+                disabled={isSendingWelcomeEmail}
+                onClick={handleSendWelcomeEmail}
+                className="px-5 py-2 rounded-xl font-bold text-sm text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isSendingWelcomeEmail ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Enviando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" />
+                    <span>Enviar Correo Real</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -4003,15 +5740,72 @@ export function Configuracion() {
               <div className="border border-slate-200 rounded-lg p-2 bg-slate-50/50 text-center text-slate-400 text-xs flex flex-col items-center justify-center min-h-[300px]">
                 {viewingCompanyDoc.fileData?.startsWith('data:image/') || viewingCompanyDoc.url?.match(/\.(jpg|jpeg|png|webp|gif)/i) ? (
                   <img src={viewingCompanyDoc.fileData || viewingCompanyDoc.url} alt={viewingCompanyDoc.name} className="max-h-[350px] object-contain rounded hover:scale-101 transition p-2" referrerPolicy="no-referrer" />
-                ) : viewingCompanyDoc.fileData?.startsWith('data:application/pdf') || viewingCompanyDoc.url?.toLowerCase().endsWith('.pdf') ? (
-                  <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner animate-in fade-in duration-300">
-                    <iframe
-                      src={viewingCompanyDoc.fileData || viewingCompanyDoc.url}
-                      className="w-full h-full border-0"
-                      title={`PDF ${viewingCompanyDoc.name}`}
-                    />
-                  </div>
-                ) : (
+                ) : viewingCompanyDoc.fileData?.startsWith('data:application/pdf') || viewingCompanyDoc.url?.toLowerCase().endsWith('.pdf') ? (() => {
+                  const companyPdfUrl = activeCompanyPdfUrl || viewingCompanyDoc.fileData || viewingCompanyDoc.url;
+                  return (
+                    <div className="w-full flex flex-col space-y-3">
+                      {/* Barra de herramientas para asegurar que visualicen el PDF si el iframe se bloquea */}
+                      <div className="bg-white border border-slate-200 rounded-lg p-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm text-xs">
+                        <div className="flex items-center space-x-2.5 text-left">
+                          <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-700">Previsualizador de PDF</p>
+                            <p className="text-[10px] text-slate-400">Si el visor no carga en tu dispositivo, haz clic en el botón de la derecha para abrirlo.</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2 shrink-0">
+                          {companyPdfUrl && (
+                            <a 
+                              href={companyPdfUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-bold transition flex items-center space-x-1 border border-indigo-200"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                              </svg>
+                              <span>Pantalla Completa</span>
+                            </a>
+                          )}
+                          <button 
+                            type="button" 
+                            onClick={() => {
+                              const link = document.createElement('a');
+                              link.href = companyPdfUrl;
+                              link.download = viewingCompanyDoc.fileName || viewingCompanyDoc.name + '.pdf';
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                            }}
+                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[10px] font-bold transition flex items-center space-x-1 border border-slate-200"
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            <span>Descargar</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Visor integrado confiable con etiqueta object y fallback iframe */}
+                      <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner relative">
+                        <object
+                          data={companyPdfUrl}
+                          type="application/pdf"
+                          className="w-full h-full border-0"
+                        >
+                          <iframe
+                            src={companyPdfUrl}
+                            className="w-full h-full border-0"
+                            title={`PDF ${viewingCompanyDoc.name}`}
+                          />
+                        </object>
+                      </div>
+                    </div>
+                  );
+                })() : (
                   <div className="p-10 flex flex-col items-center justify-center space-y-3">
                     <svg className="w-12 h-12 text-slate-300" xmlns="http://www.w3.org/2050/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -4143,6 +5937,75 @@ export function Configuracion() {
                   className="px-5 py-2.5 rounded-xl font-bold text-sm text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-colors"
                 >
                   Confirmar e Importar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isRestoreConfirmOpen && backupRestoreFile && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 font-sans">
+            <div className="p-5 border-b border-slate-100 bg-rose-50/50 flex items-center gap-3">
+              <AlertTriangle className="w-6 h-6 text-rose-600 shrink-0 animate-bounce" />
+              <div>
+                <h4 className="font-extrabold text-slate-900 text-sm uppercase">¡Atención! Confirmar Restauración</h4>
+                <p className="text-[10px] text-slate-500">Esta acción es irreversible y sobrescribirá la base de datos</p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="text-xs text-slate-600 leading-relaxed space-y-3">
+                <p>
+                  Estás a punto de restaurar el sistema utilizando el siguiente respaldo local:
+                </p>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 font-mono text-[11px] text-slate-800 space-y-1">
+                  <p>• <strong>Archivo:</strong> {backupRestoreFile.name}</p>
+                  <p>• <strong>Tamaño:</strong> {(backupRestoreFile.size / 1024).toFixed(1)} KB</p>
+                  <p>• <strong>Fecha de Carga:</strong> {new Date().toLocaleString()}</p>
+                </div>
+                <p className="font-bold text-rose-600">
+                  ⚠️ ADVERTENCIA: Al confirmar, todos tus datos actuales (alumnos, matrículas, profesores, pagos y configuraciones) serán reemplazados por completo con los registros contenidos en este archivo de respaldo.
+                </p>
+                <p className="font-medium text-slate-700">
+                  ¿Estás completamente seguro de que deseas proceder con la restauración de datos?
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRestoreConfirmOpen(false);
+                    setBackupRestoreFile(null);
+                    setRestorePayload(null);
+                  }}
+                  className="px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const success = restoreBackup(restorePayload);
+                      if (success) {
+                        triggerToast("¡Base de datos restaurada de forma exitosa!");
+                      } else {
+                        triggerToast("Ocurrió un error al procesar la restauración.", "error");
+                      }
+                    } catch (err) {
+                      triggerToast("Error crítico durante la restauración.", "error");
+                    } finally {
+                      setIsRestoreConfirmOpen(false);
+                      setBackupRestoreFile(null);
+                      setRestorePayload(null);
+                    }
+                  }}
+                  className="px-4 py-2 text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-md transition"
+                >
+                  Sí, Sobrescribir y Restaurar
                 </button>
               </div>
             </div>

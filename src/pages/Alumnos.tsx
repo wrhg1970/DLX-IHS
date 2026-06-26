@@ -4,7 +4,7 @@ import { useAppContext } from "../context/AppContext";
 import { useNavigate } from "react-router-dom";
 
 export function Alumnos() {
-  const { students, institutions, deleteStudent, updateStudent, currentUser, catalogs } = useAppContext();
+  const { students, institutions, deleteStudent, updateStudent, currentUser, catalogs, users } = useAppContext();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState("");
@@ -689,6 +689,11 @@ export function Alumnos() {
                       <span className="block font-normal text-[10px] text-slate-500 mt-0.5">{student.email}</span>
                       <div className="flex flex-wrap gap-1 mt-1 font-mono text-[9px] text-slate-500">
                         {student.modality && <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">Modality: {student.modality}</span>}
+                        {student.agentId && (
+                          <span className="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 font-bold">
+                            Agente: {users.find(u => u.id === student.agentId)?.name || `Agente #${student.agentId}`}
+                          </span>
+                        )}
                         {student.gender && <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">Sexo: {student.gender}</span>}
                         {student.country && <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">País: {student.country}</span>}
                         {student.state && <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">Edo: {student.state}</span>}

@@ -20,7 +20,11 @@ export async function testFirebaseConnection() {
     console.log("Firebase connection verified and online.");
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    const isQuotaError = errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted');
+    const isQuotaError = 
+      errMsg.toLowerCase().includes('quota') || 
+      errMsg.toLowerCase().includes('exhausted') || 
+      errMsg.toLowerCase().includes('resource-exhausted') ||
+      errMsg.toLowerCase().includes('limit exceeded');
     
     if (isQuotaError) {
       if (typeof window !== 'undefined') {
@@ -67,7 +71,11 @@ export interface FirestoreErrorInfo {
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errMsg = error instanceof Error ? error.message : String(error);
-  const isQuotaError = errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted');
+  const isQuotaError = 
+    errMsg.toLowerCase().includes('quota') || 
+    errMsg.toLowerCase().includes('exhausted') || 
+    errMsg.toLowerCase().includes('resource-exhausted') ||
+    errMsg.toLowerCase().includes('limit exceeded');
   
   if (isQuotaError) {
     if (typeof window !== 'undefined') {

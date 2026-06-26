@@ -24,6 +24,7 @@ import { ClaseDetail } from "./pages/ClaseDetail";
 import { Administracion } from "./pages/Administracion";
 import { Proveedores } from "./pages/Proveedores";
 import { ProveedorDetail } from "./pages/ProveedorDetail";
+import { ServiciosExtras } from "./pages/ServiciosExtras";
 import { Reportes } from "./pages/Reportes";
 import { Catalogos } from "./pages/Catalogos";
 import { Configuracion } from "./pages/Configuracion";
@@ -32,21 +33,33 @@ import { Perfil } from "./pages/Perfil";
 import { Finanzas } from "./pages/Finanzas";
 import { Agentes } from "./pages/Agentes";
 import { CRM } from "./pages/CRM";
+import { PermissionMenu, hasPermission } from "./utils/permissionCheck";
 
 interface RoleGuardProps {
   allowedRoles: string[];
   fallbackTo: string;
+  permission?: PermissionMenu;
   children: React.ReactElement;
 }
 
-function RoleGuard({ allowedRoles, fallbackTo, children }: RoleGuardProps) {
+function RoleGuard({ allowedRoles, fallbackTo, permission, children }: RoleGuardProps) {
   const { currentUser } = useAppContext();
   if (!currentUser) return <Navigate to="/" replace />;
   
-  if (allowedRoles.includes(currentUser.role)) {
+  if (!allowedRoles.includes(currentUser.role)) {
+    return <Navigate to={fallbackTo} replace />;
+  }
+
+  // Bypass extra permission check for Alumno and Coordinador basic access
+  if (currentUser.role === "Alumno" || currentUser.role === "Coordinador") {
     return children;
   }
-  return <Navigate to={fallbackTo} replace />;
+
+  if (permission && !hasPermission(currentUser.role, permission, "view")) {
+    return <Navigate to={fallbackTo} replace />;
+  }
+  
+  return children;
 }
 
 export default function App() {
@@ -86,7 +99,7 @@ export default function App() {
           <Route 
             path="alumnos/:id" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Alumno', 'Coordinador']} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Alumno', 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos">
                 <AlumnoDetail />
               </RoleGuard>
             } 
@@ -96,7 +109,7 @@ export default function App() {
           <Route 
             path="instituciones/:id" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Instituciones">
                 <InstitucionDetail />
               </RoleGuard>
             } 
@@ -106,7 +119,7 @@ export default function App() {
           <Route 
             path="alumnos" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos">
                 <Alumnos />
               </RoleGuard>
             } 
@@ -114,7 +127,7 @@ export default function App() {
           <Route 
             path="alumnos/nuevo" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos">
                 <FormAlumno />
               </RoleGuard>
             } 
@@ -122,7 +135,7 @@ export default function App() {
           <Route 
             path="alumnos/editar/:id" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos">
                 <FormAlumno />
               </RoleGuard>
             } 
@@ -132,7 +145,7 @@ export default function App() {
           <Route 
             index 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Dashboard">
                 <Inicio />
               </RoleGuard>
             } 
@@ -140,7 +153,7 @@ export default function App() {
           <Route 
             path="dashboard" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Dashboard">
                 <Dashboard />
               </RoleGuard>
             } 
@@ -148,7 +161,7 @@ export default function App() {
           <Route 
             path="agenda" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Agenda">
                 <Agenda />
               </RoleGuard>
             } 
@@ -156,7 +169,7 @@ export default function App() {
           <Route 
             path="crm" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Dashboard">
                 <CRM />
               </RoleGuard>
             } 
@@ -164,7 +177,7 @@ export default function App() {
           <Route 
             path="instituciones" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Instituciones">
                 <Instituciones />
               </RoleGuard>
             } 
@@ -172,7 +185,7 @@ export default function App() {
           <Route 
             path="instituciones/dashboard" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Instituciones">
                 <InstitucionesDashboard />
               </RoleGuard>
             } 
@@ -180,7 +193,7 @@ export default function App() {
           <Route 
             path="instituciones/nueva" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Instituciones">
                 <FormFormInstitucionGuard />
               </RoleGuard>
             } 
@@ -188,7 +201,7 @@ export default function App() {
           <Route 
             path="alumnos/dashboard" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Alumnos">
                 <AlumnosDashboard />
               </RoleGuard>
             } 
@@ -196,7 +209,7 @@ export default function App() {
           <Route 
             path="alumnos/por-clase" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Alumnos">
                 <AlumnosPorClase />
               </RoleGuard>
             } 
@@ -204,7 +217,7 @@ export default function App() {
           <Route 
             path="agentes" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Dashboard">
                 <Agentes />
               </RoleGuard>
             } 
@@ -212,7 +225,7 @@ export default function App() {
           <Route 
             path="clases" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Clases">
                 <Clases />
               </RoleGuard>
             } 
@@ -220,7 +233,7 @@ export default function App() {
           <Route 
             path="clases/:id" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Clases">
                 <ClaseDetail />
               </RoleGuard>
             } 
@@ -228,7 +241,7 @@ export default function App() {
           <Route 
             path="administracion" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Administración">
                 <Administracion />
               </RoleGuard>
             } 
@@ -236,15 +249,23 @@ export default function App() {
           <Route 
             path="proveedores" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Proveedores">
                 <Proveedores />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="proveedores/servicios-extras" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Proveedores">
+                <ServiciosExtras />
               </RoleGuard>
             } 
           />
           <Route 
             path="proveedores/:id" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Proveedores">
                 <ProveedorDetail />
               </RoleGuard>
             } 
@@ -252,7 +273,7 @@ export default function App() {
           <Route 
             path="reportes" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Reportes">
                 <Reportes />
               </RoleGuard>
             } 
@@ -260,7 +281,7 @@ export default function App() {
           <Route 
             path="finanzas" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Finanzas">
                 <Finanzas />
               </RoleGuard>
             } 
@@ -268,7 +289,7 @@ export default function App() {
           <Route 
             path="catalogos" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Catálogos">
                 <Catalogos />
               </RoleGuard>
             } 
@@ -276,7 +297,7 @@ export default function App() {
           <Route 
             path="configuracion" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Configuración">
                 <Configuracion />
               </RoleGuard>
             } 

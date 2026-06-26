@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAppContext } from '../context/AppContext';
 import { 
@@ -8,14 +9,100 @@ import {
   Clock, 
   Search, 
   SlidersHorizontal,
-  ChevronDown
+  ChevronDown,
+  UserPlus,
+  CalendarPlus,
+  FileBarChart2,
+  Sparkles,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 
 export function Dashboard() {
+  const navigate = useNavigate();
   const { institutions, students, classes, enrollments, providers, financialTransactions, payments } = useAppContext();
   const [dashboardView, setDashboardView] = useState<'performance' | 'cobranza'>('performance');
   const [semaforoFilter, setSemaforoFilter] = useState<'all' | 'rojo' | 'amarillo' | 'verde'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedInstId, setSelectedInstId] = useState<string>('all');
+  const [sortKey, setSortKey] = useState<'alumnos-desc' | 'alumnos-asc' | 'nombre-asc' | 'nombre-desc' | 'ingresos-desc'>('alumnos-desc');
+
+  const [cobranzaSort, setCobranzaSort] = useState<{
+    key: 'institucion' | 'recaudado' | 'pendiente' | 'percentagePending';
+    direction: 'asc' | 'desc';
+  }>({ key: 'percentagePending', direction: 'desc' });
+
+  const handleCobranzaSort = (key: 'institucion' | 'recaudado' | 'pendiente' | 'percentagePending') => {
+    setCobranzaSort(prev => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'desc' };
+    });
+  };
+
+  const renderSortIcon = (key: 'institucion' | 'recaudado' | 'pendiente' | 'percentagePending') => {
+    if (cobranzaSort.key !== key) {
+      return <ArrowUpDown className="w-3.5 h-3.5 text-slate-350 shrink-0 ml-1 inline-block" />;
+    }
+    if (cobranzaSort.direction === 'asc') {
+      return <ArrowUp className="w-3.5 h-3.5 text-indigo-600 shrink-0 ml-1 inline-block" />;
+    }
+    return <ArrowDown className="w-3.5 h-3.5 text-indigo-600 shrink-0 ml-1 inline-block" />;
+  };
+
+  // Filter core context arrays based on selected institution
+  const filteredStudents = useMemo(() => {
+    if (selectedInstId === 'all') return students;
+    return students.filter(s => Number(s.institutionId) === Number(selectedInstId));
+  }, [students, selectedInstId]);
+
+  const filteredStudentIds = useMemo(() => {
+    return filteredStudents.map(s => s.id);
+  }, [filteredStudents]);
+
+  const filteredEnrollments = useMemo(() => {
+    if (selectedInstId === 'all') return enrollments;
+    return enrollments.filter(e => filteredStudentIds.includes(e.studentId));
+  }, [enrollments, filteredStudentIds, selectedInstId]);
+
+  const filteredInstitutions = useMemo(() => {
+    if (selectedInstId === 'all') return institutions;
+    return institutions.filter(i => Number(i.id) === Number(selectedInstId));
+  }, [institutions, selectedInstId]);
+
+  const filteredFinancialTransactions = useMemo(() => {
+    if (selectedInstId === 'all') return financialTransactions;
+    return financialTransactions.filter(tx => {
+      if (tx.institutionId && Number(tx.institutionId) === Number(selectedInstId)) return true;
+      if (tx.studentId && filteredStudentIds.includes(tx.studentId)) return true;
+      return false;
+    });
+  }, [financialTransactions, selectedInstId, filteredStudentIds]);
+
+  const filteredPayments = useMemo(() => {
+    if (selectedInstId === 'all') return payments;
+    return (payments || []).filter(p => p.studentId && filteredStudentIds.includes(p.studentId));
+  }, [payments, filteredStudentIds, selectedInstId]);
+
+  const averageUsdRate = useMemo(() => {
+    const usdRates = (financialTransactions || [])
+      .map(t => {
+        if (t.exchangeRate && t.exchangeRate > 1) {
+          return t.exchangeRate;
+        }
+        if ((t.currency === 'USD' || t.originalCurrency === 'USD') && t.amount > 0 && t.amountMXN > t.amount) {
+          return t.amountMXN / t.amount;
+        }
+        return null;
+      })
+      .filter((r): r is number => r !== null && r > 1);
+
+    return usdRates.length > 0
+      ? usdRates.reduce((acc, val) => acc + val, 0) / usdRates.length
+      : 18.0;
+  }, [financialTransactions]);
   
   // Resolve price for enrollment if null, using catalog pricing fallback
   const getAgreedPrice = (e: any) => {
@@ -46,43 +133,68 @@ export function Dashboard() {
   };
 
   // Convert institutions into dynamic rows mapped with real real DB state
-  const institutionMetrics = institutions.map(inst => {
-    const instStudentsList = students.filter(s => Number(s.institutionId) === Number(inst.id));
-    const instStudentIds = instStudentsList.map(s => Number(s.id));
-    const instEnrollments = enrollments.filter(e => instStudentIds.includes(Number(e.studentId)));
-    
-    // Fallback to static count only if we don't have registered items yet
-    const alumnosCount = instStudentsList.length || inst.students || 0;
-    
-    const activeEnrollments = instEnrollments.filter(e => e.status !== 'Withdrawn');
-    const dynamicRevenue = activeEnrollments.length > 0
-      ? activeEnrollments.reduce((sum, e) => sum + getAgreedPrice(e), 0)
-      : (inst.revenue || 0);
+  const institutionMetrics = useMemo(() => {
+    return filteredInstitutions.map(inst => {
+      const instStudentsList = filteredStudents.filter(s => Number(s.institutionId) === Number(inst.id));
+      const instStudentIds = instStudentsList.map(s => Number(s.id));
+      const instEnrollments = filteredEnrollments.filter(e => instStudentIds.includes(Number(e.studentId)));
+      
+      // Fallback to static count only if we don't have registered items yet
+      const alumnosCount = instStudentsList.length || inst.students || 0;
+      
+      const activeEnrollments = instEnrollments.filter(e => e.status !== 'Withdrawn');
+      const dynamicRevenue = activeEnrollments.length > 0
+        ? activeEnrollments.reduce((sum, e) => sum + getAgreedPrice(e), 0)
+        : (inst.revenue || 0);
 
-    return {
-      ...inst,
-      alumnosCount,
-      revenueValue: dynamicRevenue
-    };
-  });
+      return {
+        ...inst,
+        alumnosCount,
+        revenueValue: dynamicRevenue
+      };
+    });
+  }, [filteredInstitutions, filteredStudents, filteredEnrollments]);
 
-  const totalStudents = institutionMetrics.reduce((acc, inst) => acc + inst.alumnosCount, 0);
-  const totalExpectedRevenue = institutionMetrics.reduce((acc, inst) => acc + inst.revenueValue, 0);
-  const formattedRevenue = totalExpectedRevenue >= 1000000
-    ? (totalExpectedRevenue / 1000000).toFixed(2) + 'M'
-    : totalExpectedRevenue.toLocaleString();
+  const totalStudents = useMemo(() => {
+    return institutionMetrics.reduce((acc, inst) => acc + inst.alumnosCount, 0);
+  }, [institutionMetrics]);
+
+  const totalExpectedRevenue = useMemo(() => {
+    return institutionMetrics.reduce((acc, inst) => acc + inst.revenueValue, 0);
+  }, [institutionMetrics]);
+
+  const formattedRevenue = useMemo(() => {
+    return totalExpectedRevenue >= 1000000
+      ? (totalExpectedRevenue / 1000000).toFixed(2) + 'M'
+      : totalExpectedRevenue.toLocaleString();
+  }, [totalExpectedRevenue]);
 
   // Filter and sort for premium top-performing institutions (only with students, ordered desc)
   const premiumInstitutionMetrics = useMemo(() => {
-    return institutionMetrics
+    return [...institutionMetrics]
       .filter(inst => inst.alumnosCount > 0)
-      .sort((a, b) => b.alumnosCount - a.alumnosCount);
-  }, [institutionMetrics]);
+      .sort((a, b) => {
+        if (sortKey === 'nombre-asc') {
+          return a.name.localeCompare(b.name);
+        }
+        if (sortKey === 'nombre-desc') {
+          return b.name.localeCompare(a.name);
+        }
+        if (sortKey === 'alumnos-asc') {
+          return a.alumnosCount - b.alumnosCount;
+        }
+        if (sortKey === 'ingresos-desc') {
+          return b.revenueValue - a.revenueValue;
+        }
+        // Default to alumnos-desc
+        return b.alumnosCount - a.alumnosCount;
+      });
+  }, [institutionMetrics, sortKey]);
 
   // Calculation of institutions by country
   const institutionsByCountry = useMemo(() => {
     const countryMap = new Map<string, number>();
-    institutions.forEach(inst => {
+    filteredInstitutions.forEach(inst => {
       const country = inst.country?.trim() || 'Sin especificar';
       countryMap.set(country, (countryMap.get(country) || 0) + 1);
     });
@@ -95,7 +207,7 @@ export function Dashboard() {
     // Sort by count descending
     results.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
     return results;
-  }, [institutions]);
+  }, [filteredInstitutions]);
 
   const totalCountryInstitutions = useMemo(() => {
     return institutionsByCountry.reduce((acc, item) => acc + item.count, 0);
@@ -103,7 +215,7 @@ export function Dashboard() {
 
   // Calculation of active students per provider
   const providerStudentsMetric = useMemo(() => {
-    const activeEnrollments = enrollments.filter(e => e.status !== 'Withdrawn');
+    const activeEnrollments = filteredEnrollments.filter(e => e.status !== 'Withdrawn');
     const providerMap = new Map<number, Set<number>>();
 
     activeEnrollments.forEach(e => {
@@ -134,7 +246,7 @@ export function Dashboard() {
     // Sort by count descending
     results.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
     return results;
-  }, [enrollments, classes, providers]);
+  }, [filteredEnrollments, classes, providers]);
 
   const totalProviderStudents = useMemo(() => {
     return providerStudentsMetric.reduce((acc, item) => acc + item.count, 0);
@@ -142,25 +254,52 @@ export function Dashboard() {
 
   // Create collection metrics for "semáforo de cobranza"
   const collectionMetrics = useMemo(() => {
-    return institutions.map(inst => {
-      const instStudents = students.filter(s => Number(s.institutionId) === Number(inst.id));
+    return filteredInstitutions.map(inst => {
+      const instStudents = filteredStudents.filter(s => Number(s.institutionId) === Number(inst.id));
       const instStudentIds = instStudents.map(s => s.id);
 
       // Total vendido/esperado de inscripciones calculado con precios reales pactados
-      const instEnrollments = enrollments.filter(e => instStudentIds.includes(e.studentId));
+      const instEnrollments = filteredEnrollments.filter(e => instStudentIds.includes(e.studentId));
       const activeEnrollments = instEnrollments.filter(e => e.status !== 'Withdrawn');
       
       const totalVendido = activeEnrollments.length > 0
         ? activeEnrollments.reduce((sum, e) => sum + getAgreedPrice(e), 0)
         : (inst.revenue || 0);
 
-      // Total pagado/recaudado calculado con transacciones reales liquidadas de cobranza
-      const instPayments = financialTransactions.filter(p => 
+      // Total pagado/recaudado de las transacciones (financialTransactions) (ignoring initial mock transactions)
+      const instTxPayments = filteredFinancialTransactions.filter(p => 
+        !String(p.id).startsWith('tx-init-') &&
         (Number(p.institutionId) === Number(inst.id) || (p.studentId && instStudentIds.includes(p.studentId))) && 
         p.type === 'income' && 
         (p.status === 'Aplicado' || p.status === 'Pagado')
       );
-      const totalPagado = instPayments.reduce((sum, p) => sum + p.amountMXN, 0);
+      const totalTxPagadoUSD = instTxPayments.reduce((sum, p) => {
+        const isOrigUSD = p.originalCurrency === 'USD' || (p.currency === 'USD' && !p.originalCurrency);
+        const hasCustomRate = p.exchangeRate !== undefined && p.exchangeRate !== 1 && p.exchangeRate !== 0;
+
+        const txAmountMXN = isOrigUSD 
+          ? (hasCustomRate 
+              ? (p.amountMXN || (p.originalAmount !== undefined ? p.originalAmount : p.amount) * p.exchangeRate)
+              : ((p.originalAmount !== undefined ? p.originalAmount : p.amount) * averageUsdRate))
+          : (p.amountMXN || p.amount);
+
+        const txAmountUSD = isOrigUSD
+          ? (p.originalAmount !== undefined ? p.originalAmount : p.amount)
+          : (hasCustomRate ? txAmountMXN / p.exchangeRate : txAmountMXN / averageUsdRate);
+
+        return sum + txAmountUSD;
+      }, 0);
+
+      // Pagos de alumnos reales en el listado de payments
+      const instStudentPayments = filteredPayments.filter(p => 
+        p.studentId && instStudentIds.includes(p.studentId)
+      );
+      const totalStudentPagadoUSD = instStudentPayments.reduce((sum, p) => {
+        const rate = p.exchangeRate || averageUsdRate || 18.0;
+        return sum + ((p.finalAmount || p.amount || 0) / rate);
+      }, 0);
+
+      const totalPagado = totalTxPagadoUSD + totalStudentPagadoUSD;
 
       const saldoPendiente = Math.max(0, totalVendido - totalPagado);
       const percentagePending = totalVendido > 0 ? (saldoPendiente / totalVendido) * 100 : 0;
@@ -183,20 +322,48 @@ export function Dashboard() {
         semaforoColor
       };
     });
-  }, [institutions, students, enrollments, classes, financialTransactions]);
+  }, [filteredInstitutions, filteredStudents, filteredEnrollments, filteredFinancialTransactions, filteredPayments, averageUsdRate]);
 
   const sortedCobranzaMetrics = useMemo(() => {
-    return [...collectionMetrics]
-      .sort((a, b) => b.percentagePending - a.percentagePending);
-  }, [collectionMetrics]);
+    const list = collectionMetrics.filter(inst => {
+      const matchesSearch = inst.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            (inst.country?.toLowerCase() || '').includes(searchQuery.toLowerCase());
+      
+      const semaforoColorTranslation: Record<string, string> = {
+        rojo: 'red',
+        amarillo: 'yellow',
+        verde: 'green'
+      };
+      const matchesSemaforo = semaforoFilter === 'all' || inst.semaforoColor === semaforoColorTranslation[semaforoFilter];
+      return matchesSearch && matchesSemaforo;
+    });
+
+    return [...list]
+      .sort((a, b) => {
+        let comparison = 0;
+        if (cobranzaSort.key === 'institucion') {
+          comparison = a.name.localeCompare(b.name);
+        } else if (cobranzaSort.key === 'recaudado') {
+          comparison = (a.totalPagado || 0) - (b.totalPagado || 0);
+        } else if (cobranzaSort.key === 'pendiente') {
+          comparison = (a.saldoPendiente || 0) - (b.saldoPendiente || 0);
+        } else if (cobranzaSort.key === 'percentagePending') {
+          comparison = (a.percentagePending || 0) - (b.percentagePending || 0);
+        }
+
+        return cobranzaSort.direction === 'asc' ? comparison : -comparison;
+      });
+  }, [collectionMetrics, searchQuery, semaforoFilter, cobranzaSort]);
 
   const totalPagadoReal = useMemo(() => {
     return collectionMetrics.reduce((acc, inst) => acc + (inst.totalPagado || 0), 0);
   }, [collectionMetrics]);
 
-  const formattedPagadoReal = totalPagadoReal >= 1000000
-    ? (totalPagadoReal / 1000000).toFixed(2) + 'M'
-    : totalPagadoReal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const formattedPagadoReal = useMemo(() => {
+    return totalPagadoReal >= 1000000
+      ? (totalPagadoReal / 1000000).toFixed(2) + 'M'
+      : totalPagadoReal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  }, [totalPagadoReal]);
 
   // Dynamic monthly income vs expenses computation for Recharts BarChart
   const monthlyFinanceData = useMemo(() => {
@@ -210,40 +377,58 @@ export function Dashboard() {
       const monthKey = `${currentYear}-${String(m + 1).padStart(2, '0')}`;
       monthlyMap[monthKey] = { income: 0, expense: 0 };
     }
+
+    // Dynamic identifier for robust year-month pattern parsing
+    const getYearMonthKey = (dateStr: string): string | null => {
+      if (!dateStr) return null;
+      const clean = dateStr.trim();
+      const parts = clean.includes('/') ? clean.split('/') : clean.split('-');
+      if (parts.length >= 2) {
+        // YYYY-MM-DD or YYYY/MM/DD
+        if (parts[0].length === 4) {
+          return `${parts[0]}-${parts[1].padStart(2, '0')}`;
+        }
+        // DD-MM-YYYY or DD/MM/YYYY
+        if (parts.length >= 3 && parts[2].substring(0, 4).length === 4) {
+          return `${parts[2].substring(0, 4)}-${parts[1].padStart(2, '0')}`;
+        }
+      }
+      return null;
+    };
     
     // Process real transactions
-    financialTransactions.forEach(tx => {
+    filteredFinancialTransactions.forEach(tx => {
       if (!tx.date) return;
-      const dateParts = tx.date.split('-');
-      if (dateParts.length >= 2) {
-        const year = dateParts[0];
-        const month = dateParts[1];
-        const monthKey = `${year}-${month}`;
-        
-        const amount = tx.amountMXN || tx.amount || 0;
+      if (typeof tx.id === 'string' && tx.id.startsWith('tx-init-')) return;
+      const monthKey = getYearMonthKey(tx.date);
+      if (monthKey) {
+        const isOrigUSD = tx.originalCurrency === 'USD' || (tx.currency === 'USD' && !tx.originalCurrency);
+        const hasCustomRate = tx.exchangeRate !== undefined && tx.exchangeRate !== 1 && tx.exchangeRate !== 0;
+
+        const txAmountMXN = isOrigUSD 
+          ? (hasCustomRate 
+              ? (tx.amountMXN || (tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * tx.exchangeRate)
+              : ((tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * averageUsdRate))
+          : (tx.amountMXN || tx.amount);
         
         if (!monthlyMap[monthKey]) {
           monthlyMap[monthKey] = { income: 0, expense: 0 };
         }
         
         if (tx.type === 'income') {
-          monthlyMap[monthKey].income += amount;
+          monthlyMap[monthKey].income += txAmountMXN;
         } else if (tx.type === 'expense') {
-          monthlyMap[monthKey].expense += amount;
+          monthlyMap[monthKey].expense += txAmountMXN;
         }
       }
     });
 
     // Process real student payments as additional incomes/revenues
-    const resolvedPayments = payments || [];
+    const resolvedPayments = filteredPayments || [];
     resolvedPayments.forEach(p => {
       if (!p.date) return;
-      const dateParts = p.date.split('-');
-      if (dateParts.length >= 2) {
-        const year = dateParts[0];
-        const month = dateParts[1];
-        const monthKey = `${year}-${month}`;
-        
+      const monthKey = getYearMonthKey(p.date);
+      if (monthKey) {
         const amount = p.finalAmount || p.amount || 0;
         
         if (!monthlyMap[monthKey]) {
@@ -264,9 +449,11 @@ export function Dashboard() {
     
     // Map to formatted array for Recharts
     const records = sortedKeys.map(key => {
-      const [year, monthNum] = key.split('-');
+      const parts = key.split('-');
+      const year = parts[0];
+      const monthNum = parts[1];
       const monthIdx = parseInt(monthNum, 10) - 1;
-      const label = `${monthsInSpanish[monthIdx]} ${year.substring(2)}`;
+      const label = `${monthsInSpanish[monthIdx] || 'Mes'} ${year.substring(2)}`;
       
       return {
         key,
@@ -277,15 +464,25 @@ export function Dashboard() {
       };
     });
     
+    // Filter records to only show those that have actual transactions (Ingresos or Egresos > 0)
+    const activeRecords = records.filter(r => r.Ingresos > 0 || r.Egresos > 0);
+    
+    // If we have active records with actual data, return them (up to the last 6 months)
+    if (activeRecords.length > 0) {
+      return activeRecords.slice(-6);
+    }
+    
+    // Fallback: If no transactions have been registered yet, show past or present months of the current year
     return records.filter(r => {
-      const hasData = r.Ingresos > 0 || r.Egresos > 0;
       const currentMonth = new Date().getMonth() + 1;
-      const [y, mStr] = r.key.split('-');
+      const parts = r.key.split('-');
+      const y = parts[0];
+      const mStr = parts[1];
       const isCurrentYear = parseInt(y, 10) === currentYear;
       const isPastOrPresentMonth = parseInt(mStr, 10) <= currentMonth;
-      return hasData || (isCurrentYear && isPastOrPresentMonth);
+      return isCurrentYear && isPastOrPresentMonth;
     }).slice(-6);
-  }, [financialTransactions, payments]);
+  }, [filteredFinancialTransactions, filteredPayments, averageUsdRate]);
 
   const currentChartTotals = useMemo(() => {
     let totalIn = 0;
@@ -303,6 +500,110 @@ export function Dashboard() {
 
   return (
     <div className="space-y-8 flex-1 flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      
+      {/* Header and Filter/Ordering Bar */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shrink-0">
+        <div>
+          <h1 className="text-xl font-bold font-sans text-slate-800 tracking-tight">Dashboard General</h1>
+          <p className="text-xs text-slate-500 mt-1">Monitoreo en tiempo real de alumnos, cobranza y balance operativo consolidado.</p>
+        </div>
+        
+        {/* Modern Filter Controls */}
+        <div className="flex flex-col sm:flex-row gap-2.5 w-full md:w-auto items-stretch sm:items-center">
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+            <span className="text-[10px] font-black uppercase text-slate-400 font-mono">Instituto:</span>
+            <select
+              value={selectedInstId}
+              onChange={(e) => setSelectedInstId(e.target.value)}
+              className="bg-transparent border-0 text-xs font-bold text-slate-700 focus:ring-0 outline-none cursor-pointer max-w-[200px]"
+            >
+              <option value="all">🏢 Todos los Institutos ({institutions.length})</option>
+              {[...institutions].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es')).map(inst => (
+                <option key={inst.id} value={inst.id}>
+                  🏢 {inst.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+            <span className="text-[10px] font-black uppercase text-slate-400 font-mono">Ordenar por:</span>
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as any)}
+              className="bg-transparent border-0 text-xs font-bold text-slate-700 focus:ring-0 outline-none cursor-pointer"
+            >
+              <option value="alumnos-desc">👥 Alumnos (Mayor a Menor)</option>
+              <option value="alumnos-asc">👥 Alumnos (Menor a Mayor)</option>
+              <option value="nombre-asc">🔤 Nombre (A-Z)</option>
+              <option value="nombre-desc">🔤 Nombre (Z-A)</option>
+              <option value="ingresos-desc">💰 Ingresos (Mayor a Menor)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Actions Grid Card Segment */}
+      <div className="space-y-3 shrink-0">
+        <h2 className="text-xs font-black uppercase tracking-wider text-slate-400">Acciones Rápidas</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Card 1: Add student */}
+          <div 
+            onClick={() => navigate('/alumnos/nuevo')}
+            className="bg-white hover:bg-slate-50 border border-slate-200/80 hover:border-indigo-400 p-4.5 rounded-2xl shadow-xs hover:shadow-md transition-all duration-300 cursor-pointer group flex items-start space-x-4 select-none"
+          >
+            <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <UserPlus className="w-5 h-5 font-bold" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-slate-800 text-sm group-hover:text-indigo-600 transition-colors">Registrar Alumno</h3>
+              <p className="text-[11px] text-slate-500 leading-normal">Inscribe un nuevo expediente homeschool o regular</p>
+            </div>
+          </div>
+
+          {/* Card 2: Schedule class */}
+          <div 
+            onClick={() => navigate('/clases')}
+            className="bg-white hover:bg-slate-50 border border-slate-200/80 hover:border-emerald-400 p-4.5 rounded-2xl shadow-xs hover:shadow-md transition-all duration-300 cursor-pointer group flex items-start space-x-4 select-none"
+          >
+            <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <CalendarPlus className="w-5 h-5 font-bold" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-slate-800 text-sm group-hover:text-emerald-600 transition-colors">Programar Clases</h3>
+              <p className="text-[11px] text-slate-500 leading-normal">Asigna materias y coordina horarios de profesores</p>
+            </div>
+          </div>
+
+          {/* Card 3: Monthly Reports */}
+          <div 
+            onClick={() => navigate('/reportes')}
+            className="bg-white hover:bg-slate-50 border border-slate-200/80 hover:border-amber-400 p-4.5 rounded-2xl shadow-xs hover:shadow-md transition-all duration-300 cursor-pointer group flex items-start space-x-4 select-none"
+          >
+            <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <FileBarChart2 className="w-5 h-5 font-bold" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-slate-800 text-sm group-hover:text-amber-600 transition-colors">Reportes Mensuales</h3>
+              <p className="text-[11px] text-slate-500 leading-normal">Analiza estadísticas de cobranza y rendimiento académico</p>
+            </div>
+          </div>
+
+          {/* Card 4: Finanzas reconciliation */}
+          <div 
+            onClick={() => navigate('/finanzas')}
+            className="bg-white hover:bg-slate-50 border border-slate-200/80 hover:border-violet-400 p-4.5 rounded-2xl shadow-xs hover:shadow-md transition-all duration-300 cursor-pointer group flex items-start space-x-4 select-none"
+          >
+            <div className="w-10 h-10 bg-violet-50 text-violet-600 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Sparkles className="w-5 h-5 font-bold" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-slate-800 text-sm group-hover:text-violet-600 transition-colors">Escanear Facturas/OCR</h3>
+              <p className="text-[11px] text-slate-500 leading-normal">Sube y extrae transacciones bancarias automáticamente</p>
+            </div>
+          </div>
+        </div>
+      </div>
       
       {/* KPI Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 shrink-0">
@@ -323,14 +624,14 @@ export function Dashboard() {
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest mb-2">Ingresos Esperados</p>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-4xl font-light text-slate-800 tracking-tight">${formattedRevenue}</span>
+            <span className="text-4xl font-light text-slate-800 tracking-tight">${formattedRevenue} <span className="text-xs font-bold text-slate-400">USD</span></span>
             <span className="text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded text-xs font-semibold">Meta 85%</span>
           </div>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest mb-2">Pagos Recibidos (Cobranza)</p>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-4xl font-light text-slate-800 tracking-tight">${formattedPagadoReal}</span>
+            <span className="text-4xl font-light text-slate-800 tracking-tight">${formattedPagadoReal} <span className="text-xs font-bold text-slate-400">USD</span></span>
             <span className="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs font-semibold">
               {totalExpectedRevenue > 0 ? ((totalPagadoReal / totalExpectedRevenue) * 100).toFixed(1) : '0'}%
             </span>
@@ -542,7 +843,7 @@ export function Dashboard() {
                     <th className="px-6 py-4 font-semibold tracking-widest border-b border-slate-100">Ubicación</th>
                     <th className="px-6 py-4 font-semibold tracking-widest text-right border-b border-slate-100">Alumnos</th>
                     <th className="px-6 py-4 font-semibold tracking-widest text-center border-b border-slate-100">Estado Pago</th>
-                    <th className="px-6 py-4 font-semibold tracking-widest text-right border-b border-slate-100">Ingresos Esperados</th>
+                    <th className="px-6 py-4 font-semibold tracking-widest text-right border-b border-slate-100">Ingresos Esperados (USD)</th>
                   </tr>
                 </thead>
                 <tbody className="text-xs">
@@ -554,8 +855,13 @@ export function Dashboard() {
                     </tr>
                   ) : (
                     premiumInstitutionMetrics.map(inst => (
-                      <tr key={inst.id} className="hover:bg-slate-50 transition-colors group">
-                        <td className="px-6 py-3.5 font-semibold text-slate-800 border-b border-slate-50">{inst.name}</td>
+                      <tr 
+                        key={inst.id} 
+                        onClick={() => navigate(`/instituciones/${inst.id}`)}
+                        className="hover:bg-indigo-50/30 transition-colors cursor-pointer group"
+                        title="Ver Perfil de Institución"
+                      >
+                        <td className="px-6 py-3.5 font-semibold text-slate-800 border-b border-slate-50 group-hover:text-indigo-600 group-hover:underline">{inst.name}</td>
                         <td className="px-6 py-3.5 text-slate-500 border-b border-slate-50">{inst.country}</td>
                         <td className="px-6 py-3.5 text-right font-mono text-slate-600 border-b border-slate-50">{inst.alumnosCount.toLocaleString()}</td>
                         <td className="px-6 py-3.5 text-center border-b border-slate-50">
@@ -566,7 +872,7 @@ export function Dashboard() {
                             {inst.status.toUpperCase()}
                           </span>
                         </td>
-                        <td className="px-6 py-3.5 text-right font-mono font-medium text-slate-800 border-b border-slate-50">${inst.revenueValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+                        <td className="px-6 py-3.5 text-right font-mono font-medium text-slate-800 border-b border-slate-50">${inst.revenueValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} USD</td>
                       </tr>
                     ))
                   )}
@@ -577,27 +883,67 @@ export function Dashboard() {
               <table className="w-full text-left border-collapse">
                 <thead className="text-slate-400 text-[10px] uppercase font-bold sticky top-0 bg-white z-10">
                   <tr>
-                    <th className="px-6 py-4 font-semibold tracking-widest border-b border-slate-100">Institución</th>
-                    <th className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-right">Total Vendido</th>
-                    <th className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-right">Recaudado</th>
-                    <th className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-right">Pendiente</th>
-                    <th className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-center">% Pendiente</th>
-                    <th className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-center">Semáforo</th>
+                    <th 
+                      onClick={() => handleCobranzaSort('institucion')}
+                      className="px-6 py-4 font-semibold tracking-widest border-b border-slate-100 cursor-pointer select-none hover:bg-slate-50/80 transition"
+                      title="Ordenar por Institución"
+                    >
+                      <div className="flex items-center gap-1">
+                        Institución
+                        {renderSortIcon('institucion')}
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-right select-none">Total Vendido (USD)</th>
+                    <th 
+                      onClick={() => handleCobranzaSort('recaudado')}
+                      className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-right cursor-pointer select-none hover:bg-slate-50/80 transition"
+                      title="Ordenar por Recaudado"
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        Recaudado (USD)
+                        {renderSortIcon('recaudado')}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleCobranzaSort('pendiente')}
+                      className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-right cursor-pointer select-none hover:bg-slate-50/80 transition"
+                      title="Ordenar por Pendiente"
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        Pendiente (USD)
+                        {renderSortIcon('pendiente')}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleCobranzaSort('percentagePending')}
+                      className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-center cursor-pointer select-none hover:bg-slate-50/80 transition"
+                      title="Ordenar por % Pendiente"
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        % Pendiente
+                        {renderSortIcon('percentagePending')}
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 font-bold tracking-widest border-b border-slate-100 text-center select-none">Semáforo</th>
                   </tr>
                 </thead>
                 <tbody className="text-xs">
-                  {collectionMetrics
-                    .filter(inst => {
-                      const matchesSearch = inst.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                            (inst.country?.toLowerCase() || '').includes(searchQuery.toLowerCase());
-                      const matchesSemaforo = semaforoFilter === 'all' || inst.semaforoColor === semaforoFilter;
-                      return matchesSearch && matchesSemaforo;
-                    })
-                    .sort((a, b) => b.percentagePending - a.percentagePending)
-                    .map(inst => (
-                      <tr key={inst.id} className="hover:bg-slate-50 transition-colors group">
+                  {sortedCobranzaMetrics.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-8 text-center text-slate-400">
+                        No se encontraron instituciones con los criterios seleccionados
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedCobranzaMetrics.map(inst => (
+                      <tr 
+                        key={inst.id} 
+                        onClick={() => navigate(`/instituciones/${inst.id}`)}
+                        className="hover:bg-indigo-50/30 transition-colors cursor-pointer group"
+                        title="Ver Perfil de Institución"
+                      >
                         <td className="px-6 py-3 border-b border-slate-50">
-                          <p className="font-bold text-slate-800 leading-snug">{inst.name}</p>
+                          <p className="font-bold text-slate-800 leading-snug group-hover:text-indigo-650 group-hover:underline">{inst.name}</p>
                           <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-400 font-medium">
                             <span className="font-mono">{inst.country || 'Sin especificar'}</span>
                             <span>•</span>
@@ -605,13 +951,13 @@ export function Dashboard() {
                           </div>
                         </td>
                         <td className="px-6 py-3 font-mono font-bold text-right border-b border-slate-50 text-slate-800">
-                          ${inst.totalVendido.toLocaleString()}
+                          ${inst.totalVendido.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} USD
                         </td>
                         <td className="px-6 py-3 font-mono font-semibold text-right border-b border-slate-50 text-emerald-600">
-                          ${inst.totalPagado.toLocaleString()}
+                          ${inst.totalPagado.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
                         </td>
                         <td className="px-6 py-3 font-mono font-black text-right border-b border-slate-50 text-slate-900 bg-slate-50/40">
-                          ${inst.saldoPendiente.toLocaleString()}
+                          ${inst.saldoPendiente.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
                         </td>
                         <td className="px-6 py-3 border-b border-slate-50 text-center">
                           <div className="flex items-center justify-center gap-2">
@@ -645,7 +991,8 @@ export function Dashboard() {
                           </span>
                         </td>
                       </tr>
-                    ))}
+                    ))
+                  )}
                 </tbody>
               </table>
             )}

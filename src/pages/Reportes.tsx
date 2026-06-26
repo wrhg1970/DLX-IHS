@@ -56,11 +56,16 @@ export function Reportes() {
   const [dateRangeFilter, setDateRangeFilter] = useState({ start: '', end: '' });
   const [studentFilter, setStudentFilter] = useState('');
   const [institutionFilter, setInstitutionFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [accountFilter, setAccountFilter] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
 
   const [dateRange, setDateRange] = useState("year");
+
+  // Selection state for Operation Detail modal (Ver Operación)
+  const [selectedTxForDetail, setSelectedTxForDetail] = useState<any>(null);
 
   // Invoicing helper state
   const [editingTxId, setEditingTxId] = useState<string | null>(null);
@@ -68,6 +73,121 @@ export function Reportes() {
 
   // Facturas sub-filter
   const [activeFacturaFilter, setActiveFacturaFilter] = useState<'Todas' | 'Solicitadas' | 'Facturadas'>('Todas');
+
+  // --- EXCHANGE RATE COMPENSATIONS ---
+  const averageExchangeRate = useMemo(() => {
+    const validRates = financialTransactions
+      .filter(tx => tx.exchangeRate && tx.exchangeRate > 1)
+      .map(tx => tx.exchangeRate);
+    if (validRates.length === 0) return 18.5; // default fallback
+    const sum = validRates.reduce((acc, r) => acc + r, 0);
+    return sum / validRates.length;
+  }, [financialTransactions]);
+
+  const isUSDOrWellsFargoAccount = (ba: any) => {
+    if (!ba) return false;
+    const name = ba.bankName?.toLowerCase() || '';
+    return name.includes('wellsfargo') || name.includes('wells fargo') || ba.currency === 'USD';
+  };
+
+  // --- DYNAMIC DATA COMPUTATIONS FOR THE DASHBOARD TAB ---
+  const dashboardTxs = useMemo(() => {
+    if (dateRange === "all") return financialTransactions;
+
+    const baseDate = new Date("2026-06-10");
+    
+    return financialTransactions.filter(tx => {
+      const txDate = new Date(tx.date);
+      if (isNaN(txDate.getTime())) return true;
+      
+      const diffTime = baseDate.getTime() - txDate.getTime();
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+      
+      if (dateRange === "month") {
+        return diffDays >= 0 && diffDays <= 30;
+      }
+      if (dateRange === "quarter") {
+        return diffDays >= 0 && diffDays <= 90;
+      }
+      if (dateRange === "year") {
+        return txDate.getFullYear() === baseDate.getFullYear();
+      }
+      return true;
+    });
+  }, [financialTransactions, dateRange]);
+
+  const dashboardKPIs = useMemo(() => {
+    let totalIncomeMXN = 0;
+    let totalIncomeUSD = 0;
+    let totalExpenseMXN = 0;
+    let totalExpenseUSD = 0;
+
+    dashboardTxs.forEach(tx => {
+      const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
+      const isUSDAcc = isUSDOrWellsFargoAccount(bankAccount);
+      const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+
+      const finalMXNVal = isUSDAcc
+        ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN)
+        : tx.amountMXN;
+
+      const amountUSD = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rateUsed);
+
+      if (tx.type === "income") {
+        totalIncomeMXN += finalMXNVal;
+        totalIncomeUSD += amountUSD;
+      } else if (tx.type === "expense") {
+        totalExpenseMXN += finalMXNVal;
+        totalExpenseUSD += amountUSD;
+      }
+    });
+
+    const netMarginMXN = totalIncomeMXN - totalExpenseMXN;
+    const netMarginUSD = totalIncomeUSD - totalExpenseUSD;
+
+    return {
+      totalIncomeMXN,
+      totalIncomeUSD,
+      totalExpenseMXN,
+      totalExpenseUSD,
+      netMarginMXN,
+      netMarginUSD
+    };
+  }, [dashboardTxs, bankAccounts, averageExchangeRate]);
+
+  const financialMonthlyData = useMemo(() => {
+    const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+    const incomeCounts: Record<string, number> = {};
+    const expenseCounts: Record<string, number> = {};
+
+    financialTransactions.forEach(tx => {
+      const d = new Date(tx.date);
+      if (!isNaN(d.getTime())) {
+        if (d.getFullYear() === 2026) {
+          const m = months[d.getMonth()];
+          const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
+          const isUSDAcc = isUSDOrWellsFargoAccount(bankAccount);
+          const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+
+          const finalMXNVal = isUSDAcc
+            ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN)
+            : tx.amountMXN;
+
+          if (tx.type === "income") {
+            incomeCounts[m] = (incomeCounts[m] || 0) + finalMXNVal;
+          } else if (tx.type === "expense") {
+            expenseCounts[m] = (expenseCounts[m] || 0) + finalMXNVal;
+          }
+        }
+      }
+    });
+
+    return months.map(m => ({
+      mes: m,
+      Ingresos: incomeCounts[m] || 0,
+      Egresos: expenseCounts[m] || 0
+    }));
+  }, [financialTransactions, bankAccounts, averageExchangeRate]);
 
   // KPI Cards
   const totalStudents = students.length;
@@ -131,12 +251,23 @@ export function Reportes() {
         return student?.institutionId?.toString() === institutionFilter;
       });
     }
+    if (statusFilter) {
+      result = result.filter(tx => tx.status === statusFilter);
+    }
+    if (accountFilter) {
+      if (accountFilter === 'caja') {
+        result = result.filter(tx => !tx.bankAccountId);
+      } else {
+        result = result.filter(tx => tx.bankAccountId?.toString() === accountFilter);
+      }
+    }
     if (searchTerm) {
       const lowerSearch = searchTerm.toLowerCase();
       result = result.filter(tx => {
         const student = students.find(s => s.id === tx.studentId);
         const institution = institutions.find(i => i.id === student?.institutionId);
         const provider = providers.find(p => p.id === tx.providerId);
+        const bankAc = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
         
         return tx.description.toLowerCase().includes(lowerSearch) || 
                student?.name.toLowerCase().includes(lowerSearch) ||
@@ -145,6 +276,7 @@ export function Reportes() {
                provider?.commercialName?.toLowerCase().includes(lowerSearch) ||
                provider?.legalName?.toLowerCase().includes(lowerSearch) ||
                tx.paymentMethod?.toLowerCase().includes(lowerSearch) ||
+               bankAc?.bankName?.toLowerCase().includes(lowerSearch) ||
                tx.bankAccountId?.toString().toLowerCase().includes(lowerSearch);
       });
     }
@@ -166,13 +298,32 @@ export function Reportes() {
     }
 
     return result;
-  }, [financialTransactions, activeTab, dateRangeFilter, studentFilter, institutionFilter, searchTerm, sortConfig, students, institutions, providers]);
+  }, [financialTransactions, activeTab, dateRangeFilter, studentFilter, institutionFilter, statusFilter, accountFilter, searchTerm, sortConfig, students, institutions, providers, bankAccounts]);
 
   const reportStats = useMemo(() => {
     const count = filteredPayments.length;
-    const totalAmount = filteredPayments.reduce((sum, tx) => sum + tx.amountMXN, 0);
-    return { count, totalAmount };
-  }, [filteredPayments]);
+    let totalAmountMXN = 0;
+    let totalAmountUSD = 0;
+
+    filteredPayments.forEach(tx => {
+      const ba = bankAccounts.find(account => account.id.toString() === tx.bankAccountId?.toString());
+      const isUSDAcc = isUSDOrWellsFargoAccount(ba);
+      const rate = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+
+      // Monto MXN calculation
+      const finalMXNVal = isUSDAcc 
+        ? (tx.currency === 'USD' ? tx.amount * rate : tx.amountMXN) 
+        : tx.amountMXN;
+
+      // Monto USD calculation
+      const finalUSDVal = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rate);
+
+      totalAmountMXN += finalMXNVal;
+      totalAmountUSD += finalUSDVal;
+    });
+
+    return { count, totalAmountMXN, totalAmountUSD };
+  }, [filteredPayments, bankAccounts, averageExchangeRate]);
 
   const handleSort = (key: string) => {
     let direction: 'asc' | 'desc' = 'asc';
@@ -194,6 +345,8 @@ export function Reportes() {
     setDateRangeFilter({ start: '', end: '' });
     setStudentFilter('');
     setInstitutionFilter('');
+    setStatusFilter('');
+    setAccountFilter('');
     setAgentFilter('');
     setSearchTerm('');
   };
@@ -392,37 +545,66 @@ export function Reportes() {
     let list = financialTransactions.map(tx => {
       let instId = 0;
       let instName = "Global / Administrativo";
-      let expectedIncome = 0;
+      let expectedIncomeMXN = 0;
 
       if (tx.studentId) {
         const student = students.find(s => s.id === tx.studentId);
         if (student) {
-          instId = student.institutionId;
+          instId = student.institutionId || tx.institutionId || 0;
           const instObj = institutions.find(i => i.id === instId);
           instName = instObj?.name || `Institución #${instId}`;
           
           // Expected is the student's enrollment cost
-          expectedIncome = expectedEnrollmentValues[tx.studentId] || 0;
+          expectedIncomeMXN = expectedEnrollmentValues[tx.studentId] || 0;
         }
+      } else if (tx.institutionId) {
+        instId = tx.institutionId;
+        const instObj = institutions.find(i => i.id === instId);
+        instName = instObj?.name || `Institución #${instId}`;
       }
 
-      const realIncome = tx.type === 'income' ? tx.amountMXN : 0;
-      const expense = tx.type === 'expense' ? tx.amountMXN : 0;
+      const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
+      const isUSDAcc = isUSDOrWellsFargoAccount(bankAccount);
+      const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+
+      const finalMXNVal = isUSDAcc
+        ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN)
+        : tx.amountMXN;
+
+      const finalUSDVal = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rateUsed);
+
+      const expectedIncomeUSD = expectedIncomeMXN / rateUsed;
+
+      const realIncomeMXN = tx.type === 'income' ? finalMXNVal : 0;
+      const realIncomeUSD = tx.type === 'income' ? finalUSDVal : 0;
+
+      const expenseMXN = tx.type === 'expense' ? finalMXNVal : 0;
+      const expenseUSD = tx.type === 'expense' ? finalUSDVal : 0;
       
       // Represent 10% commission of the income transaction if agent is present
-      const commission = tx.type === 'income' ? tx.amountMXN * 0.10 : 0;
-      const margin = realIncome - expense - commission;
+      const commissionMXN = tx.type === 'income' ? finalMXNVal * 0.10 : 0;
+      const commissionUSD = realIncomeUSD * 0.10;
+
+      const marginMXN = realIncomeMXN - expenseMXN - commissionMXN;
+      const marginUSD = realIncomeUSD - expenseUSD - commissionUSD;
 
       return {
         id: tx.id,
         date: tx.date,
         institutionName: instName,
         institutionId: instId,
-        expectedIncome,
-        realIncome,
-        expense,
-        commission,
-        margin,
+        bankAccountId: tx.bankAccountId,
+        status: tx.status || 'Aplicado',
+        expectedIncomeMXN,
+        expectedIncomeUSD,
+        realIncomeMXN,
+        realIncomeUSD,
+        expenseMXN,
+        expenseUSD,
+        commissionMXN,
+        commissionUSD,
+        marginMXN,
+        marginUSD,
         description: tx.description
       };
     });
@@ -436,6 +618,16 @@ export function Reportes() {
     }
     if (institutionFilter) {
       list = list.filter(r => r.institutionId?.toString() === institutionFilter);
+    }
+    if (statusFilter) {
+      list = list.filter(r => r.status === statusFilter);
+    }
+    if (accountFilter) {
+      if (accountFilter === 'caja') {
+        list = list.filter(r => !r.bankAccountId);
+      } else {
+        list = list.filter(r => r.bankAccountId?.toString() === accountFilter);
+      }
     }
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
@@ -464,7 +656,7 @@ export function Reportes() {
     }
 
     return list;
-  }, [financialTransactions, students, institutions, expectedEnrollmentValues, dateRangeFilter, institutionFilter, searchTerm, sortConfig]);
+  }, [financialTransactions, students, institutions, expectedEnrollmentValues, dateRangeFilter, institutionFilter, statusFilter, accountFilter, searchTerm, sortConfig, bankAccounts, averageExchangeRate]);
 
   // --- DYNAMIC HELPERS FOR FACTURAS ---
   const facturasRows = useMemo(() => {
@@ -472,14 +664,21 @@ export function Reportes() {
     let list = financialTransactions.map(tx => {
       let clientOrProvider = "N/A";
       let instName = "N/A";
+      let instId = tx.institutionId;
       
       if (tx.studentId) {
         const student = students.find(s => s.id === tx.studentId);
         if (student) {
           clientOrProvider = `${student.name} ${student.lastName || ''}`;
-          const instObj = institutions.find(i => i.id === student.institutionId);
+          instId = student.institutionId || tx.institutionId;
+          const instObj = institutions.find(i => i.id === instId);
           instName = instObj?.name || 'Global';
         }
+      } else if (tx.institutionId) {
+        instId = tx.institutionId;
+        const instObj = institutions.find(i => i.id === instId);
+        clientOrProvider = instObj?.name || 'Institución Directa';
+        instName = instObj?.name || 'Global';
       } else if (tx.providerId) {
         const provider = providers.find(p => p.id === tx.providerId);
         if (provider) {
@@ -487,15 +686,19 @@ export function Reportes() {
         }
       }
 
+      const amountUSD = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / (tx.exchangeRate || 18.0));
+
       return {
         id: tx.id,
         date: tx.date,
         clientOrProvider,
+        institutionId: instId,
         institutionName: instName,
         description: tx.description,
         amount: tx.amount,
         currency: tx.currency,
         amountMXN: tx.amountMXN,
+        amountUSD,
         taxId: tx.taxId,
         invoiceRequested: !!tx.invoiceRequested,
         categoryId: tx.categoryId,
@@ -518,10 +721,7 @@ export function Reportes() {
       list = list.filter(r => r.date <= dateRangeFilter.end);
     }
     if (institutionFilter) {
-      list = list.filter(r => {
-        const student = students.find(s => s.name + " " + s.lastName === r.clientOrProvider);
-        return student?.institutionId?.toString() === institutionFilter;
-      });
+      list = list.filter(r => r.institutionId?.toString() === institutionFilter);
     }
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
@@ -552,29 +752,46 @@ export function Reportes() {
     let list = financialTransactions.map(tx => {
       let studentName = "N/A";
       let instName = "Global / Administrativo";
+      let instId = tx.institutionId || 0;
       
       if (tx.studentId) {
         const student = students.find(s => s.id === tx.studentId);
         if (student) {
           studentName = `${student.name} ${student.lastName || ''}`;
-          const instObj = institutions.find(i => i.id === student.institutionId);
+          instId = student.institutionId || tx.institutionId || 0;
+          const instObj = institutions.find(i => i.id === instId);
           instName = instObj?.name || 'Global';
         }
+      } else if (tx.institutionId) {
+        instId = tx.institutionId;
+        const instObj = institutions.find(i => i.id === instId);
+        studentName = instObj?.name || 'Institución Directa';
+        instName = instObj?.name || 'Global';
       }
 
       const bankAcc = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
       const accountLabel = bankAcc ? `${bankAcc.bankName} (${bankAcc.accountNumber})` : "Caja General";
 
+      const isUSDAcc = isUSDOrWellsFargoAccount(bankAcc);
+      const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+
+      const finalMXNVal = isUSDAcc
+        ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN)
+        : tx.amountMXN;
+
       return {
         id: tx.id,
         date: tx.date,
         studentName,
+        institutionId: instId,
         institutionName: instName,
         accountName: accountLabel,
+        bankAccountId: tx.bankAccountId,
+        status: tx.status || 'Aplicado',
         paymentMethod: tx.paymentMethod || "Transferencia",
         income: tx.type === 'income' ? tx.amount : 0,
-        exchangeRate: tx.exchangeRate || 1,
-        amountMXN: tx.amountMXN,
+        exchangeRate: rateUsed,
+        amountMXN: finalMXNVal,
         expense: tx.type === 'expense' ? tx.amount : 0,
         currency: tx.currency
       };
@@ -588,10 +805,17 @@ export function Reportes() {
       list = list.filter(r => r.date <= dateRangeFilter.end);
     }
     if (institutionFilter) {
-      list = list.filter(r => {
-        const student = students.find(s => s.name + " " + s.lastName === r.studentName);
-        return student?.institutionId?.toString() === institutionFilter;
-      });
+      list = list.filter(r => r.institutionId?.toString() === institutionFilter);
+    }
+    if (statusFilter) {
+      list = list.filter(r => r.status === statusFilter);
+    }
+    if (accountFilter) {
+      if (accountFilter === 'caja') {
+        list = list.filter(r => !r.bankAccountId);
+      } else {
+        list = list.filter(r => r.bankAccountId?.toString() === accountFilter);
+      }
     }
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
@@ -607,7 +831,7 @@ export function Reportes() {
     // Sort by Date descending by default
     list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     return list;
-  }, [financialTransactions, students, institutions, bankAccounts, dateRangeFilter, institutionFilter, searchTerm]);
+  }, [financialTransactions, students, institutions, bankAccounts, dateRangeFilter, institutionFilter, statusFilter, accountFilter, searchTerm, averageExchangeRate]);
 
   // Client-side Cash Flow export to CSV
   const handleExportCashFlowCSV = () => {
@@ -822,11 +1046,47 @@ export function Reportes() {
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer"
               >
                 <option value="">Todas las instituciones</option>
-                {institutions.map(i => (
+                {[...institutions].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es')).map(i => (
                   <option key={i.id} value={i.id}>{i.name}</option>
                 ))}
               </select>
             </div>
+
+            {/* Status Filter - Dynamic for Payments */}
+            {(activeTab === 'Pagos de Clientes' || activeTab === 'Pagos a Proveedores' || activeTab === 'Estado de Cuenta' || activeTab === 'Cash Flow') && (
+              <div className="w-40">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Estado Pago</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer animate-in fade-in slide-in-from-top-1"
+                >
+                  <option value="">Todos los estados</option>
+                  <option value="Aplicado">Aplicado</option>
+                  <option value="Pendiente">Pendiente</option>
+                  <option value="Pagado">Pagado</option>
+                  <option value="Programado">Programado</option>
+                </select>
+              </div>
+            )}
+
+            {/* Account Filter - Dynamic for Payments */}
+            {(activeTab === 'Pagos de Clientes' || activeTab === 'Pagos a Proveedores' || activeTab === 'Estado de Cuenta' || activeTab === 'Cash Flow') && (
+              <div className="w-48">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Cuenta Origen/Destino</label>
+                <select
+                  value={accountFilter}
+                  onChange={(e) => setAccountFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer animate-in fade-in slide-in-from-top-1"
+                >
+                  <option value="">Todas las cuentas</option>
+                  <option value="caja">Caja General</option>
+                  {bankAccounts.map(ba => (
+                    <option key={ba.id} value={ba.id}>{ba.bankName} ({ba.accountNumber})</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Agent filter - Dynamic for % Comisiones */}
             {activeTab === '% Comisiones' && (
@@ -878,48 +1138,144 @@ export function Reportes() {
             </div>
           </div>
 
-          {/* KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
-              <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
-                <Users className="w-6 h-6" />
+          {/* Financial KPI Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 shrink-0">
+            {/* Ingresos Globales */}
+            <div className="bg-emerald-50/70 border border-emerald-100 p-5 rounded-2xl flex items-center space-x-4 shadow-sm">
+              <div className="w-12 h-12 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-md shadow-emerald-100">
+                <ArrowUpRight className="w-6 h-6" />
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Alumnos</p>
-                <p className="text-2xl font-bold text-slate-800">{totalStudents.toLocaleString()}</p>
+                <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Ingresos Totales ({dateRange === 'all' ? 'Consolidado' : dateRange === 'year' ? 'Año' : dateRange === 'quarter' ? 'Trimestre' : 'Mes'})</p>
+                <p className="text-xl font-black text-slate-800 leading-tight">
+                  ${dashboardKPIs.totalIncomeMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                </p>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  (${dashboardKPIs.totalIncomeUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)
+                </p>
               </div>
             </div>
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
-              <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600">
-                <Building className="w-6 h-6" />
+
+            {/* Egresos Globales */}
+            <div className="bg-rose-50/70 border border-rose-100 p-5 rounded-2xl flex items-center space-x-4 shadow-sm">
+              <div className="w-12 h-12 rounded-xl bg-rose-600 flex items-center justify-center text-white shadow-md shadow-rose-100">
+                <ArrowDownRight className="w-6 h-6" />
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Instituciones</p>
-                <p className="text-2xl font-bold text-slate-800">{totalInstitutions}</p>
+                <p className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Egresos Totales ({dateRange === 'all' ? 'Consolidado' : dateRange === 'year' ? 'Año' : dateRange === 'quarter' ? 'Trimestre' : 'Mes'})</p>
+                <p className="text-xl font-black text-slate-800 leading-tight">
+                  ${dashboardKPIs.totalExpenseMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                </p>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  (${dashboardKPIs.totalExpenseUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)
+                </p>
               </div>
             </div>
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
-              <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600">
-                <BookOpen className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Clases</p>
-                <p className="text-2xl font-bold text-slate-800">{totalClasses}</p>
-              </div>
-            </div>
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
-              <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center text-amber-600">
+
+            {/* Margen Neto */}
+            <div className={`p-5 rounded-2xl flex items-center space-x-4 shadow-sm border ${
+              dashboardKPIs.netMarginMXN >= 0 ? 'bg-indigo-50/70 border-indigo-100' : 'bg-amber-50/70 border-amber-100'
+            }`}>
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white shadow-md ${
+                dashboardKPIs.netMarginMXN >= 0 ? 'bg-indigo-600 shadow-indigo-100' : 'bg-amber-600 shadow-amber-100'
+              }`}>
                 <TrendingUp className="w-6 h-6" />
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Ingresos Globales</p>
-                <p className="text-2xl font-bold text-slate-800">${totalRevenue.toLocaleString()}</p>
+                <p className={`text-[10px] font-bold uppercase tracking-wider ${
+                  dashboardKPIs.netMarginMXN >= 0 ? 'text-indigo-650 text-indigo-700' : 'text-amber-650 text-amber-700'
+                }`}>
+                  Utilidad Neta / Margen ({dateRange === 'all' ? 'Consolidado' : dateRange === 'year' ? 'Año' : dateRange === 'quarter' ? 'Trimestre' : 'Mes'})
+                </p>
+                <p className="text-xl font-black text-slate-800 leading-tight">
+                  ${dashboardKPIs.netMarginMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                </p>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  (${dashboardKPIs.netMarginUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)
+                </p>
               </div>
             </div>
           </div>
 
-          {/* Charts Grid */}
+          {/* Operational KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 shrink-0">
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center space-x-3.5">
+              <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                <Users className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Alumnos</p>
+                <p className="text-lg font-black text-slate-800">{totalStudents.toLocaleString()}</p>
+              </div>
+            </div>
+            
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center space-x-3.5">
+              <div className="w-9 h-9 rounded-lg bg-violet-50 flex items-center justify-center text-violet-600">
+                <Building className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Instituciones</p>
+                <p className="text-lg font-black text-slate-800">{totalInstitutions}</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center space-x-3.5">
+              <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center text-amber-600">
+                <BookOpen className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Clases</p>
+                <p className="text-lg font-black text-slate-800">{totalClasses}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Charts Grid - Bento Style */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            
+            {/* Chart 1: Flujo de Ingresos vs Egresos */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm lg:col-span-2">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="font-bold text-slate-800">Flujo Mensual de Ingresos y Egresos</h3>
+                  <p className="text-xs text-slate-500">Comparativa mensual de entradas y salidas en MXN (Año 2026)</p>
+                </div>
+                <div className="flex items-center space-x-4 text-xs font-semibold">
+                  <div className="flex items-center space-x-1.5">
+                    <span className="w-3 h-3 rounded bg-emerald-500 block"></span>
+                    <span className="text-slate-600">Ingresos</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="w-3 h-3 rounded bg-rose-500 block"></span>
+                    <span className="text-slate-600">Egresos</span>
+                  </div>
+                </div>
+              </div>
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={financialMonthlyData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="mes" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} dy={10} />
+                    <YAxis 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tick={{ fontSize: 12, fill: '#64748b' }} 
+                      dx={-10}
+                      tickFormatter={(value) => `$${(value / 1000).toLocaleString()}k`}
+                    />
+                    <Tooltip 
+                      cursor={{ fill: '#f8fafc' }}
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                      formatter={(value: any) => [`$${parseFloat(value).toLocaleString()} MXN`]}
+                    />
+                    <Bar dataKey="Ingresos" fill="#10b981" radius={[4, 4, 0, 0]} barSize={16} />
+                    <Bar dataKey="Egresos" fill="#f43f5e" radius={[4, 4, 0, 0]} barSize={16} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Chart 2: Evolución de Inscripciones */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between mb-6">
                 <div>
@@ -944,6 +1300,7 @@ export function Reportes() {
               </div>
             </div>
 
+            {/* Chart 3: Alumnos por País */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between mb-6">
                 <div>
@@ -967,6 +1324,7 @@ export function Reportes() {
                 </ResponsiveContainer>
               </div>
             </div>
+
           </div>
         </div>
       )}
@@ -974,7 +1332,7 @@ export function Reportes() {
       {/* CUSTOMER AND PROVIDER PAYMENT REVIEWS (PRESERVED ENDPOINTS) */}
       {(activeTab === 'Pagos de Clientes' || activeTab === 'Pagos a Proveedores') && (
         <div className="flex flex-col flex-1 min-h-0 space-y-4">
-          <div className="flex gap-4 mb-1">
+          <div className="flex flex-wrap gap-4 mb-1">
             <div className="bg-indigo-50 px-5 py-3 rounded-2xl flex items-center space-x-3 border border-indigo-100">
               <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
                 <TrendingUp className="w-4 h-4" />
@@ -989,8 +1347,17 @@ export function Reportes() {
                 <DollarSign className="w-4 h-4" />
               </div>
               <div>
-                <p className="text-[9px] font-black text-emerald-400 uppercase tracking-wider leading-none mb-1">Total Acumulado</p>
-                <p className="text-lg font-black text-emerald-900 leading-none">${reportStats.totalAmount.toLocaleString()} MXN</p>
+                <p className="text-[9px] font-black text-emerald-400 uppercase tracking-wider leading-none mb-1">Total MXN</p>
+                <p className="text-lg font-black text-emerald-900 leading-none">${reportStats.totalAmountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</p>
+              </div>
+            </div>
+            <div className="bg-sky-50 px-5 py-3 rounded-2xl flex items-center space-x-3 border border-sky-100">
+              <div className="w-8 h-8 rounded-lg bg-sky-600 flex items-center justify-center text-white">
+                <DollarSign className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-[9px] font-black text-sky-400 uppercase tracking-wider leading-none mb-1">Total USD Proyectado</p>
+                <p className="text-lg font-black text-sky-900 leading-none">${reportStats.totalAmountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD</p>
               </div>
             </div>
           </div>
@@ -1011,30 +1378,56 @@ export function Reportes() {
                     <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Método</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Estado</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Monto Original</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Monto USD</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Monto MXN</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50 text-slate-700">
                   {filteredPayments.map((tx) => {
                     const student = students.find(s => s.id === tx.studentId);
-                    const institution = institutions.find(i => i.id === student?.institutionId);
+                    const institution = institutions.find(i => i.id === (student?.institutionId || tx.institutionId));
                     const provider = providers.find(p => p.id === tx.providerId);
                     const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
                     
+                    const isUSDAcc = isUSDOrWellsFargoAccount(bankAccount);
+                    const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+                    
+                    const finalMXNVal = isUSDAcc 
+                      ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN)
+                      : tx.amountMXN;
+
+                    const amountUSD = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rateUsed);
+                    
                     return (
-                      <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors text-xs font-semibold">
-                        <td className="px-6 py-4 font-mono font-normal text-slate-400">{tx.date}</td>
+                      <tr 
+                        key={tx.id} 
+                        onClick={() => setSelectedTxForDetail(tx)}
+                        className="hover:bg-indigo-50/40 transition-colors text-xs font-semibold cursor-pointer group"
+                        title="Haga clic para ver el detalle de la operación"
+                      >
+                        <td className="px-6 py-4 font-mono font-normal text-slate-400 group-hover:text-indigo-600 transition-colors">{tx.date}</td>
                         <td className="px-6 py-4 font-bold text-slate-900">
-                          {student ? `${student.name} ${student.lastName || ''}` : provider ? (provider.commercialName || provider.legalName) : "Global"}
+                          <div className="flex flex-col">
+                            <span className="group-hover:text-indigo-600 transition-colors font-bold text-slate-800">
+                              {student ? `${student.name} ${student.lastName || ''}` : institution ? institution.name : provider ? (provider.commercialName || provider.legalName) : "Global"}
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-medium font-mono">ID: {tx.id.substring(0, 8)}...</span>
+                          </div>
                         </td>
                         <td className="px-6 py-4 font-normal text-slate-600">
                           {institution?.name || (provider ? 'Proveedor Registrado' : 'Administración')}
                         </td>
-                        <td className="px-6 py-4 text-slate-500">{bankAccount?.bankName || "Caja General"}</td>
+                        <td className="px-6 py-4 text-slate-500">
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                            isUSDAcc ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'text-slate-600'
+                          }`}>
+                            {bankAccount?.bankName || "Caja General"} {isUSDAcc && "(USD)"}
+                          </span>
+                        </td>
                         <td className="px-6 py-4 font-semibold text-slate-500">{tx.paymentMethod}</td>
                         <td className="px-6 py-4">
                           <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wide border ${
-                            tx.status === 'Aplicado' 
+                            tx.status === 'Aplicado' || tx.status === 'Pagado'
                               ? 'bg-emerald-50 text-emerald-600 border-emerald-100' 
                               : 'bg-amber-50 text-amber-600 border-amber-100'
                           }`}>
@@ -1042,17 +1435,27 @@ export function Reportes() {
                           </span>
                         </td>
                         <td className="px-6 py-4 text-right font-mono font-bold text-slate-500">
-                          {tx.amount.toLocaleString()} {tx.currency}
+                          {tx.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {tx.currency}
+                        </td>
+                        <td className="px-6 py-4 text-right font-mono font-bold text-slate-600">
+                          ${amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
                         </td>
                         <td className="px-6 py-4 text-right font-mono font-black text-slate-950">
-                          ${tx.amountMXN.toLocaleString()} MXN
+                          <div className="flex flex-col items-end">
+                            <span>${finalMXNVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</span>
+                            {isUSDAcc && (
+                              <span className="text-[9px] text-indigo-550 text-indigo-600 font-bold leading-none mt-0.5">
+                                *(T.C. {rateUsed.toFixed(4)})
+                              </span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
                   })}
                   {filteredPayments.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-6 py-16 text-center">
+                      <td colSpan={9} className="px-6 py-16 text-center">
                         <p className="text-slate-400 text-xs font-bold">No se encontraron transacciones representadas bajo esta categoría.</p>
                       </td>
                     </tr>
@@ -1188,23 +1591,48 @@ export function Reportes() {
                     <tr key={row.id || index} className="hover:bg-slate-50/30 transition-colors">
                       <td className="px-5 py-3.5 font-mono text-slate-400">{row.date}</td>
                       <td className="px-5 py-3.5 text-slate-800 break-words max-w-xs">{row.description}</td>
-                      <td className="px-5 py-3.5 text-slate-655 font-bold">{row.institutionName}</td>
-                      <td className="px-5 py-3.5 text-right font-mono text-slate-400">
-                        {row.expectedIncome > 0 ? `$${row.expectedIncome.toLocaleString()}` : '-'}
+                      <td className="px-5 py-3.5 text-slate-600 font-bold">{row.institutionName}</td>
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        {row.expectedIncomeMXN > 0 ? (
+                          <div className="leading-tight">
+                            <div className="text-slate-700 font-bold">${row.expectedIncomeMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+                            <div className="text-[10px] text-slate-400 font-medium">(${row.expectedIncomeUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                          </div>
+                        ) : '-'}
                       </td>
-                      <td className="px-5 py-3.5 text-right font-mono text-emerald-600 font-bold">
-                        {row.realIncome > 0 ? `$${row.realIncome.toLocaleString()}` : '-'}
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        {row.realIncomeMXN > 0 ? (
+                          <div className="leading-tight">
+                            <div className="text-emerald-600 font-bold">${row.realIncomeMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+                            <div className="text-[10px] text-slate-400 font-medium">(${row.realIncomeUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                          </div>
+                        ) : '-'}
                       </td>
-                      <td className="px-5 py-3.5 text-right font-mono text-rose-600">
-                        {row.expense > 0 ? `$${row.expense.toLocaleString()}` : '-'}
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        {row.expenseMXN > 0 ? (
+                          <div className="leading-tight">
+                            <div className="text-rose-600 font-bold">${row.expenseMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+                            <div className="text-[10px] text-slate-400 font-medium">(${row.expenseUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                          </div>
+                        ) : '-'}
                       </td>
-                      <td className="px-5 py-3.5 text-right font-mono text-purple-600">
-                        {row.commission > 0 ? `$${row.commission.toLocaleString()}` : '-'}
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        {row.commissionMXN > 0 ? (
+                          <div className="leading-tight">
+                            <div className="text-purple-600 font-bold">${row.commissionMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+                            <div className="text-[10px] text-slate-400 font-medium">(${row.commissionUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                          </div>
+                        ) : '-'}
                       </td>
-                      <td className={`px-5 py-3.5 text-right font-mono font-black ${
-                        row.margin >= 0 ? "text-emerald-700" : "text-rose-700"
-                      }`}>
-                        ${row.margin.toLocaleString()}
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        <div className="leading-tight">
+                          <div className={`font-black ${row.marginMXN >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                            ${row.marginMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-medium">
+                            (${row.marginUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1264,8 +1692,13 @@ export function Reportes() {
                       <td className="px-6 py-4 text-slate-900 font-bold">{row.clientOrProvider}</td>
                       <td className="px-6 py-4 text-slate-500">{row.institutionName}</td>
                       <td className="px-6 py-4 text-slate-650 font-normal">{row.description}</td>
-                      <td className="px-6 py-4 text-right font-mono font-bold">
-                        ${row.amountMXN.toLocaleString()} MXN
+                      <td className="px-6 py-4 text-right font-mono whitespace-nowrap">
+                        <div className="leading-tight font-black text-slate-900">
+                          ${row.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-medium">
+                          (${row.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)
+                        </div>
                       </td>
                       <td className="px-6 py-4 font-mono text-slate-700">
                         {editingTxId === row.id ? (
@@ -1391,17 +1824,43 @@ export function Reportes() {
                       <td className="px-5 py-3.5 text-slate-600">{row.institutionName}</td>
                       <td className="px-5 py-3.5 text-slate-500 font-normal">{row.accountName}</td>
                       <td className="px-5 py-3.5 text-slate-500">{row.paymentMethod}</td>
-                      <td className="px-5 py-3.5 text-right font-mono font-bold text-emerald-600">
-                        {row.income > 0 ? `${row.income.toLocaleString()} ${row.currency}` : '-'}
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        {row.income > 0 ? (
+                          <div className="leading-tight">
+                            <div className="text-emerald-600 font-bold">
+                              {row.income.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {row.currency}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-medium">
+                              {row.currency === 'USD' 
+                                ? `($${row.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN)` 
+                                : `($${(row.amountMXN / row.exchangeRate).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)`
+                              }
+                            </div>
+                          </div>
+                        ) : '-'}
                       </td>
                       <td className="px-5 py-3.5 text-center font-mono font-normal text-slate-400">
-                        {row.exchangeRate > 1 ? `${row.exchangeRate}` : '1.0'}
+                        {row.exchangeRate > 1 ? `${row.exchangeRate}` : '18.0'}
                       </td>
-                      <td className="px-5 py-3.5 text-right font-mono font-black text-slate-900">
-                        ${row.amountMXN.toLocaleString()}
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        <div className="text-slate-900 font-black">
+                          ${row.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                        </div>
                       </td>
-                      <td className="px-5 py-3.5 text-right font-mono font-bold text-rose-600">
-                        {row.expense > 0 ? `${row.expense.toLocaleString()} ${row.currency}` : '-'}
+                      <td className="px-5 py-3.5 text-right font-mono whitespace-nowrap">
+                        {row.expense > 0 ? (
+                          <div className="leading-tight">
+                            <div className="text-rose-600 font-bold">
+                              {row.expense.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {row.currency}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-medium">
+                              {row.currency === 'USD' 
+                                ? `($${row.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN)` 
+                                : `($${(row.amountMXN / row.exchangeRate).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)`
+                              }
+                            </div>
+                          </div>
+                        ) : '-'}
                       </td>
                     </tr>
                   ))}
@@ -1572,6 +2031,115 @@ export function Reportes() {
 
               </div>
 
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DETALLE DE OPERACIÓN MODAL */}
+      {selectedTxForDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-lg rounded-[2rem] border border-slate-100 shadow-2xl p-7 relative animate-in fade-in zoom-in-95 duration-200 font-sans">
+            <button 
+              onClick={() => setSelectedTxForDetail(null)} 
+              className="absolute top-6 right-6 p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+              title="Cerrar"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                <FileText className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-black text-slate-900 text-base leading-none">Detalle de la Operación</h3>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Transacción #{selectedTxForDetail.id}</p>
+              </div>
+            </div>
+
+            <div className="space-y-4 text-xs font-semibold text-slate-600">
+              <div className="grid grid-cols-2 gap-4 pb-3 border-b border-slate-100">
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Fecha</span>
+                  <span className="text-slate-800 font-bold">{selectedTxForDetail.date}</span>
+                </div>
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Estado de Pago</span>
+                  <span className={`inline-block px-2.5 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wide border ${
+                    selectedTxForDetail.status === 'Aplicado' || selectedTxForDetail.status === 'Pagado'
+                      ? 'bg-emerald-50 text-emerald-600 border-emerald-100' 
+                      : 'bg-amber-50 text-amber-600 border-amber-100'
+                  }`}>
+                    {selectedTxForDetail.status || 'Aplicado'}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Monto Original Capturado</span>
+                <span className="text-sm font-black text-slate-900 block">
+                  {selectedTxForDetail.currency === 'USD' ? 'USD' : '$'} {selectedTxForDetail.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {selectedTxForDetail.currency}
+                </span>
+              </div>
+
+              <div>
+                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5 font-sans">Monto Registrado en Cuenta (MXN)</span>
+                <span className="text-sm font-black text-indigo-600 leading-tight block">
+                  ${selectedTxForDetail.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                </span>
+              </div>
+
+              <div>
+                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Tipo de Cambio / Conversión</span>
+                <span className="text-xs font-mono font-bold text-slate-800 block">
+                  1 USD = {(selectedTxForDetail.exchangeRate || averageExchangeRate).toFixed(4)} MXN
+                </span>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Monto en Pesos (MXN)</span>
+                <span className="text-base font-black text-slate-900">
+                  ${(selectedTxForDetail.currency === 'USD' 
+                    ? selectedTxForDetail.amount * (selectedTxForDetail.exchangeRate || averageExchangeRate) 
+                    : selectedTxForDetail.amountMXN
+                  ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <p className="text-[9px] text-slate-400 font-semibold italic mt-1">* Calculado utilizando el Tipo de Cambio registrado</p>
+              </div>
+
+              <div>
+                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">IVA en USD</span>
+                <span className="text-sm font-black text-slate-800 block">
+                  USD {( (selectedTxForDetail.currency === 'USD' ? selectedTxForDetail.amount : (selectedTxForDetail.amountMXN / (selectedTxForDetail.exchangeRate || averageExchangeRate))) * 0.16 ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+
+              {/* Additional useful details */}
+              <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-4">
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Método de Pago</span>
+                  <span className="text-slate-700 font-bold block">{selectedTxForDetail.paymentMethod}</span>
+                </div>
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Cuenta Bancaria</span>
+                  <span className="text-slate-700 font-bold block">
+                    {(() => {
+                      const ba = bankAccounts.find(account => account.id.toString() === selectedTxForDetail.bankAccountId?.toString());
+                      return ba ? `${ba.bankName} (${ba.accountNumber})` : "Caja General";
+                    })()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-7 flex justify-end">
+              <button 
+                onClick={() => setSelectedTxForDetail(null)}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl transition-all"
+              >
+                Cerrar
+              </button>
             </div>
           </div>
         </div>

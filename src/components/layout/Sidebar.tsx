@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
 import { useAppContext } from "../../context/AppContext";
+import { hasPermission, PermissionMenu } from "../../utils/permissionCheck";
 import {
   Home,
   LayoutDashboard,
@@ -20,7 +21,8 @@ import {
   ChevronDown,
   Landmark,
   Users,
-  Briefcase
+  Briefcase,
+  Sparkles
 } from "lucide-react";
 
 export function Sidebar() {
@@ -61,53 +63,87 @@ export function Sidebar() {
   const activeStudentRef = studentEmailMatch || studentNameMatch;
   const studentIdToUse = activeStudentRef ? activeStudentRef.id : (currentUser?.studentId || 1);
 
-  const navigation = currentUser?.role === 'Alumno' ? [
+  interface NavItem {
+    name: string;
+    href?: string;
+    icon: any;
+    permission?: PermissionMenu;
+    children?: {
+      name: string;
+      href: string;
+      icon: any;
+      permission?: PermissionMenu;
+    }[];
+  }
+
+  const rawNavigation: NavItem[] = currentUser?.role === 'Alumno' ? [
     { name: "Mi Perfil Alumno", href: `/alumnos/${studentIdToUse}`, icon: GraduationCap }
   ] : currentUser?.role === 'Coordinador' ? [
     { name: "Mi Institución", href: `/instituciones/${currentUser.institutionId || 1}`, icon: Building2 },
     { name: "Alumnos de la Institución", href: "/alumnos", icon: GraduationCap }
   ] : [
-    { name: "Inicio", href: "/", icon: Home },
-    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { name: "Agenda", href: "/agenda", icon: CalendarDays },
-    { name: "CRM", href: "/crm", icon: Briefcase },
+    { name: "Inicio", href: "/", icon: Home, permission: "Dashboard" as const },
+    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "Dashboard" as const },
+    { name: "Agenda", href: "/agenda", icon: CalendarDays, permission: "Agenda" as const },
+    { name: "CRM", href: "/crm", icon: Briefcase, permission: "Dashboard" as const },
     {
       name: "Instituciones",
       icon: Building2,
+      permission: "Instituciones" as const,
       children: [
-        { name: "Dashboard de Instituciones", href: "/instituciones/dashboard", icon: LayoutDashboard },
-        { name: "Lista de Instituciones", href: "/instituciones", icon: Building2 },
+        { name: "Dashboard de Instituciones", href: "/instituciones/dashboard", icon: LayoutDashboard, permission: "Instituciones" as const },
+        { name: "Lista de Instituciones", href: "/instituciones", icon: Building2, permission: "Instituciones" as const },
       ]
     },
     {
       name: "Alumnos",
       icon: GraduationCap,
+      permission: "Alumnos" as const,
       children: [
-        { name: "Dashboard de Alumnos", href: "/alumnos/dashboard", icon: LayoutDashboard },
-        { name: "Lista de Alumnos", href: "/alumnos", icon: GraduationCap },
-        { name: "Alumnos por Clase", href: "/alumnos/por-clase", icon: BookOpen },
+        { name: "Dashboard de Alumnos", href: "/alumnos/dashboard", icon: LayoutDashboard, permission: "Alumnos" as const },
+        { name: "Lista de Alumnos", href: "/alumnos", icon: GraduationCap, permission: "Alumnos" as const },
+        { name: "Alumnos por Clase", href: "/alumnos/por-clase", icon: BookOpen, permission: "Alumnos" as const },
       ]
     },
-    { name: "Agentes", href: "/agentes", icon: Users },
+    { name: "Agentes", href: "/agentes", icon: Users, permission: "Dashboard" as const },
     {
       name: "Proveedores",
       icon: Truck,
+      permission: "Proveedores" as const,
       children: [
-        { name: "Proveedores", href: "/proveedores", icon: Truck },
-        { name: "Clases y Créditos", href: "/clases", icon: BookOpen },
+        { name: "Proveedores", href: "/proveedores", icon: Truck, permission: "Proveedores" as const },
+        { name: "Clases y Créditos", href: "/clases", icon: BookOpen, permission: "Clases" as const },
+        { name: "Servicios Extras", href: "/proveedores/servicios-extras", icon: Sparkles, permission: "Proveedores" as const },
       ]
     },
     {
       name: "Administración",
       icon: DollarSign,
+      permission: "Administración" as const,
       children: [
-        { name: "Administración", href: "/administracion", icon: DollarSign },
-        { name: "Finanzas", href: "/finanzas", icon: Landmark },
-        { name: "Reportes", href: "/reportes", icon: BarChart },
+        { name: "Administración", href: "/administracion", icon: DollarSign, permission: "Administración" as const },
+        { name: "Finanzas", href: "/finanzas", icon: Landmark, permission: "Finanzas" as const },
+        { name: "Reportes", href: "/reportes", icon: BarChart, permission: "Reportes" as const },
       ]
     },
-    { name: "Catálogos", href: "/catalogos", icon: List },
+    { name: "Catálogos", href: "/catalogos", icon: List, permission: "Catálogos" as const },
   ];
+
+  // Dynamically filter navigation based on role's view permissions
+  const navigation = currentUser?.role === 'Alumno' || currentUser?.role === 'Coordinador' 
+    ? rawNavigation 
+    : rawNavigation
+        .filter(item => !item.permission || hasPermission(currentUser?.role, item.permission, 'view'))
+        .map(item => {
+          if (item.children) {
+            return {
+              ...item,
+              children: item.children.filter(child => !child.permission || hasPermission(currentUser?.role, child.permission, 'view'))
+            };
+          }
+          return item;
+        })
+        .filter(item => !item.children || item.children.length > 0);
 
   return (
     <nav className="w-64 flex-shrink-0 bg-[#000000] flex flex-col border-r border-[#1a1a1a]">
@@ -227,7 +263,7 @@ export function Sidebar() {
       </div>
       
       <div className="mt-auto p-6 border-t border-[#1a1a1a] relative">
-        {currentUser?.role !== 'Alumno' && currentUser?.role !== 'Coordinador' && (
+        {currentUser?.role !== 'Alumno' && currentUser?.role !== 'Coordinador' && hasPermission(currentUser?.role, "Configuración", "view") && (
           <Link to="/configuracion" className="flex items-center space-x-3 text-[#888888] hover:text-white transition-colors px-3 py-2 rounded-lg hover:bg-[#111111] mb-2">
             <Settings className="h-4 w-4 opacity-70" aria-hidden="true" />
             <span className="text-xs font-medium">Configuración</span>

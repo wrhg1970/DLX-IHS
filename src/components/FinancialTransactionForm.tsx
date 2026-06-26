@@ -14,7 +14,7 @@ interface FinancialTransactionFormProps {
 export function FinancialTransactionForm({ initialType = 'income', initialData, onSuccess, fixedStudentId, fixedProviderId, fixedInstitutionId }: FinancialTransactionFormProps) {
   const { 
     currentUser, addFinancialTransaction, updateFinancialTransaction, 
-    catalogs, providers, students 
+    catalogs, providers, students, institutions, bankAccounts
   } = useAppContext();
 
   const [formType, setFormType] = useState<TransactionType>(initialType);
@@ -23,9 +23,9 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
     description: '',
     amount: '',
     currency: 'MXN' as CurrencyCode,
-    exchangeRate: '18.5',
-    categoryId: '',
-    subcategory: '',
+    exchangeRate: '1.0',
+    categoryId: initialType === 'income' ? 'cat_ingreso_servicios' : '',
+    subcategory: initialType === 'income' ? 'sub_cursos_ingreso' : '',
     paymentMethod: 'Transferencia',
     bankAccountId: '',
     studentId: fixedStudentId?.toString() || '',
@@ -35,14 +35,32 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
     attachmentUrl: ''
   });
 
+  const selectedStudent = formType === 'income' && formData.studentId ? students.find(s => s.id === Number(formData.studentId)) : null;
+  const currentInstitutionId = fixedInstitutionId || selectedStudent?.institutionId || initialData?.institutionId;
+  const currentInstitution = currentInstitutionId ? institutions.find(i => i.id === Number(currentInstitutionId)) : null;
+  const hasIvaEnabled = currentInstitution?.payWithIva === true;
+
+  const isWellsFargo = formData.bankAccountId?.toString().toLowerCase().includes('wellsfargo') ||
+                       formData.bankAccountId?.toString().toLowerCase().includes('wells fargo') ||
+                       formData.bankAccountId?.toString().toLowerCase().includes('wf') ||
+                       formData.bankAccountId === '2';
+
+  const selectedAccount = bankAccounts?.find(
+    a => a.id === Number(formData.bankAccountId) || 
+         a.bankName === formData.bankAccountId ||
+         (formData.bankAccountId === "Banorte" && a.currency === "MXN") ||
+         (formData.bankAccountId === "WellsFargo USA" && a.currency === "USD")
+  );
+  const accountCurrency = isWellsFargo ? 'USD' : (selectedAccount ? (selectedAccount.currency || 'MXN') : formData.currency);
+
   useEffect(() => {
     if (initialData) {
       setFormType(initialData.type || initialType);
       setFormData({
         date: initialData.date || new Date().toISOString().split('T')[0],
         description: initialData.description || '',
-        amount: initialData.amount ? initialData.amount.toString() : '',
-        currency: initialData.currency || 'MXN',
+        amount: initialData.originalAmount !== undefined ? initialData.originalAmount.toString() : (initialData.amount ? initialData.amount.toString() : ''),
+        currency: initialData.originalCurrency || initialData.currency || 'MXN',
         exchangeRate: initialData.exchangeRate ? initialData.exchangeRate.toString() : '18.5',
         categoryId: initialData.categoryId || '',
         subcategory: initialData.subcategory || '',
@@ -57,14 +75,89 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
     }
   }, [initialData, initialType, fixedStudentId, fixedProviderId]);
 
+  useEffect(() => {
+    if (!initialData) {
+      if (formType === 'income') {
+        setFormData(prev => ({
+          ...prev,
+          categoryId: prev.categoryId || 'cat_ingreso_servicios',
+          subcategory: prev.subcategory || 'sub_cursos_ingreso'
+        }));
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          categoryId: prev.categoryId === 'cat_ingreso_servicios' ? '' : prev.categoryId,
+          subcategory: prev.subcategory === 'sub_cursos_ingreso' ? '' : prev.subcategory
+        }));
+      }
+    }
+  }, [formType, initialData]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    const baseAmount = Number(formData.amount || 0);
+    const rate = formData.currency === 'MXN' ? 1 : Number(formData.exchangeRate || 18.00);
+    const formCurrency = formData.currency;
+
+    // Convert base amounts
+    const baseAmountUSD = formCurrency === 'USD' ? baseAmount : (rate !== 0 ? baseAmount / rate : 0);
+    const baseAmountMXN = formCurrency === 'MXN' ? baseAmount : baseAmount * rate;
+
+    // Calculate IVA
+    const ivaUSD = hasIvaEnabled ? baseAmountUSD * 0.16 : 0;
+    const ivaMXN = hasIvaEnabled ? baseAmountMXN * 0.16 : 0;
+
+    // Total amounts (with IVA)
+    const totalUSD = baseAmountUSD + ivaUSD;
+    const totalMXN = baseAmountMXN + ivaMXN;
+
+    const isWellsFargo = formData.bankAccountId?.toString().toLowerCase().includes('wellsfargo') ||
+                         formData.bankAccountId?.toString().toLowerCase().includes('wells fargo') ||
+                         formData.bankAccountId?.toString().toLowerCase().includes('wf') ||
+                         formData.bankAccountId === '2';
+
+    let registeredAmount = baseAmount;
+    let registeredCurrency = formCurrency;
+    let registeredRate = rate;
+    let registeredIva = hasIvaEnabled ? baseAmount * 0.16 : undefined;
+
+    if (isWellsFargo) {
+      registeredAmount = baseAmountUSD;
+      registeredCurrency = 'USD';
+      registeredRate = 1.0;
+      registeredIva = hasIvaEnabled ? ivaUSD : undefined;
+    } else {
+      // Find account and determine account currency
+      const selectedAccount = bankAccounts?.find(
+        a => a.id === Number(formData.bankAccountId) || 
+             a.bankName === formData.bankAccountId ||
+             (formData.bankAccountId === "Banorte" && a.currency === "MXN") ||
+             (formData.bankAccountId === "WellsFargo USA" && a.currency === "USD")
+      );
+      const accountCurrency = selectedAccount ? (selectedAccount.currency || 'MXN') : formCurrency;
+
+      if (accountCurrency === 'MXN') {
+        // Si la cuenta es en MXN el monto que se registra es en MXN incluyendo el IVA.
+        registeredAmount = totalMXN;
+        registeredCurrency = 'MXN';
+        registeredRate = rate;
+        registeredIva = hasIvaEnabled ? ivaMXN : undefined;
+      } else {
+        // Si la cuenta es en USD el monto que se registra es en USD sin el IVA.
+        registeredAmount = baseAmountUSD;
+        registeredCurrency = 'USD';
+        registeredRate = rate;
+        registeredIva = hasIvaEnabled ? ivaUSD : undefined;
+      }
+    }
+
     const commonFields = {
       date: formData.date,
       description: formData.description,
-      amount: Number(formData.amount),
-      currency: formData.currency,
-      exchangeRate: Number(formData.exchangeRate),
+      amount: registeredAmount,
+      currency: registeredCurrency as any,
+      exchangeRate: registeredRate,
       categoryId: formData.categoryId,
       subcategory: formData.subcategory,
       paymentMethod: formData.paymentMethod,
@@ -75,7 +168,10 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
       attachmentUrl: formData.attachmentUrl,
       providerId: formType === 'expense' && formData.providerId ? Number(formData.providerId) : undefined,
       studentId: formType === 'income' && formData.studentId ? Number(formData.studentId) : undefined,
-      institutionId: fixedInstitutionId ? Number(fixedInstitutionId) : (initialData?.institutionId || undefined),
+      institutionId: currentInstitutionId ? Number(currentInstitutionId) : undefined,
+      iva: registeredIva,
+      originalAmount: baseAmount,
+      originalCurrency: formCurrency as any,
     };
 
     if (initialData?.id) {
@@ -157,9 +253,12 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
             <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Alumno / Cliente (Opcional)</label>
             <select value={formData.studentId} onChange={e => setFormData({...formData, studentId: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white" disabled={!!fixedStudentId}>
               <option value="">Ninguno</option>
-              {students.map(s => (
-                <option key={s.id} value={s.id}>{s.name} {s.lastName}</option>
-              ))}
+              {[...students]
+                .filter(s => !fixedInstitutionId || s.institutionId === Number(fixedInstitutionId))
+                .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' }))
+                .map(s => (
+                  <option key={s.id} value={s.id}>{s.name} {s.lastName}</option>
+                ))}
             </select>
           </div>
         ) : (
@@ -175,34 +274,58 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
         )}
       </div>
       
-      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 grid grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+      <div className={`p-4 bg-slate-50 rounded-2xl border border-slate-100 grid grid-cols-2 ${accountCurrency === 'USD' ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-4 mt-4`}>
         <div>
-          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Monto *</label>
+          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Monto de Operación *</label>
           <input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-bold" />
         </div>
         <div>
-          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Moneda</label>
+          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Moneda del Pago</label>
           <select required value={formData.currency} onChange={e => {
               const newCurr = e.target.value as CurrencyCode;
-              setFormData({...formData, currency: newCurr, exchangeRate: newCurr === 'USD' ? '1' : formData.exchangeRate});
+              setFormData({...formData, currency: newCurr, exchangeRate: newCurr === 'MXN' ? '1' : '18.00'});
             }} className="w-full border border-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-bold">
-            <option value="MXN">MXN</option>
-            <option value="USD">USD</option>
+            <option value="MXN">MXN - Pesos</option>
+            <option value="USD">USD - Dólares</option>
           </select>
         </div>
         <div>
           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1" title="Tipo de Cambio">Tipo Cambio *</label>
-          <input required type="number" step="0.0001" value={formData.exchangeRate} onChange={e => setFormData({...formData, exchangeRate: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" disabled={formData.currency === 'USD'} />
+          <input required type="number" step="0.0001" value={formData.exchangeRate} onChange={e => setFormData({...formData, exchangeRate: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-semibold" disabled={formData.currency === 'MXN'} />
         </div>
-        <div className="flex flex-col justify-end">
-          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Monto Final (USD)</div>
-          <div className="font-black text-indigo-600 text-lg">
-            ${(formData.currency === 'USD' ? Number(formData.amount || 0) : (Number(formData.exchangeRate) !== 0 ? Number(formData.amount || 0) / Number(formData.exchangeRate) : 0)).toFixed(2)}
+        {accountCurrency !== 'USD' && (
+          <div className="flex flex-col justify-end">
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+              {formData.currency === 'USD' ? 'Monto Equivalente (MXN)' : 'Monto de Pago'}
+            </div>
+            <div className="font-black text-indigo-600 text-lg">
+              ${(formData.currency === 'USD' ? Number(formData.amount || 0) * Number(formData.exchangeRate || 18.00) : Number(formData.amount || 0)).toFixed(2)} MXN
+            </div>
           </div>
-        </div>
+        )}
       </div>
       
-      <div className="grid grid-cols-2 gap-4 mt-4">
+      {hasIvaEnabled && (
+        <div className="p-4 bg-emerald-50/50 rounded-2xl border border-emerald-200/70 grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+          <div className="col-span-1">
+            <label className="block text-[10px] font-bold text-emerald-800 uppercase tracking-wider mb-1">IVA (16% Calculado)</label>
+            <input 
+              type="text" 
+              readOnly 
+              value={new Intl.NumberFormat('es-MX', { style: 'currency', currency: formData.currency }).format(Number(formData.amount || 0) * 0.16)} 
+              className="w-full border border-emerald-200 rounded-lg p-2.5 text-sm bg-white font-extrabold text-emerald-800 tracking-wide outline-none cursor-not-allowed" 
+            />
+          </div>
+          <div className="col-span-1 md:col-span-2 flex flex-col justify-center">
+            <span className="text-[10px] font-bold uppercase text-emerald-800 tracking-wider block">Fijación de IVA Requerida</span>
+            <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed font-semibold">
+              La institución <strong className="font-extrabold text-slate-700">{currentInstitution?.name}</strong> tiene habilitada la opción de pago con IVA. Se aplica el 16% automaticamente.
+            </p>
+          </div>
+        </div>
+      )}
+      
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mt-4">
          <div>
           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Método de Pago</label>
           <select value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
@@ -216,9 +339,12 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Cuenta de Pago</label>
           <select value={formData.bankAccountId} onChange={e => setFormData({...formData, bankAccountId: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
             <option value="">No aplica / Otra</option>
-            <option value="Banorte">Banorte</option>
-            <option value="WellsFargo USA">WellsFargo USA</option>
-            {catalogs['Cuentas bancarias']?.map(c => (
+            {bankAccounts?.map(a => (
+              <option key={a.id} value={a.id}>
+                {a.bankName} - {a.accountName} ({a.currency || 'MXN'})
+              </option>
+            ))}
+            {catalogs['Cuentas bancarias']?.filter(c => !bankAccounts?.some(a => a.bankName === c.name)).map(c => (
               <option key={c.id} value={c.name}>
                 {c.name} {c.companyName ? `(${c.companyName})` : ''}
               </option>
@@ -243,6 +369,46 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
             <div className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 flex items-center text-slate-500">
               <UploadCloud className="w-4 h-4 mr-2" />
               <span className="truncate">{formData.attachmentUrl || 'Subir archivo...'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Resumen detallado de Registro Contable */}
+      <div className="p-4 bg-slate-55 bg-indigo-50/30 border border-slate-200/60 rounded-xl space-y-3 mt-4">
+        <h4 className="text-[10px] font-black text-indigo-500 uppercase tracking-widest border-b border-indigo-100/50 pb-1.5">Detalle Contable del Pago</h4>
+        <div className="grid grid-cols-2 gap-4 text-xs">
+          <div>
+            <span className="text-slate-405 text-[10px] uppercase font-bold text-slate-500 block">Cuenta Destino</span>
+            <span className="font-extrabold text-slate-800">
+              {selectedAccount ? `${selectedAccount.bankName} (${accountCurrency})` : `Sin cuenta vinculada (${accountCurrency})`}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-405 text-[10px] uppercase font-bold text-slate-500 block">Estatus de IVA</span>
+            <span className={`font-extrabold ${hasIvaEnabled ? 'text-emerald-600' : 'text-slate-500'}`}>
+              {hasIvaEnabled ? '16% IVA Aplicable' : 'Exento / Sin IVA'}
+            </span>
+          </div>
+          
+          <div className="col-span-2 pt-2 border-t border-slate-200/50 flex flex-wrap justify-between items-center bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+            <div>
+              <span className="text-slate-405 text-[9px] uppercase font-bold text-indigo-600 block">Monto total a Registrar en Cuenta ({accountCurrency})</span>
+              <p className="text-[11px] text-slate-500 mt-0.5 font-semibold">
+                {accountCurrency === 'MXN' 
+                  ? 'La cuenta es en MXN: se registra la cantidad con el IVA incluido.' 
+                  : 'La cuenta es en USD: se registra la cantidad sin el IVA.'
+                }
+              </p>
+            </div>
+            <div className="text-right">
+              <span className="text-sm font-black text-indigo-700 block text-lg">
+                {new Intl.NumberFormat('es-MX', { style: 'currency', currency: accountCurrency }).format(
+                  accountCurrency === 'MXN'
+                    ? (formData.currency === 'MXN' ? Number(formData.amount || 0) * (hasIvaEnabled ? 1.16 : 1) : Number(formData.amount || 0) * (hasIvaEnabled ? 1.16 : 1) * Number(formData.exchangeRate || 18))
+                    : (formData.currency === 'USD' ? Number(formData.amount || 0) : Number(formData.amount || 0) / Number(formData.exchangeRate || 18))
+                )}
+              </span>
             </div>
           </div>
         </div>

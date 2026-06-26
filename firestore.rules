@@ -68,6 +68,10 @@ service cloud.firestore {
       return data.description is string && data.description.size() > 0 && data.description.size() <= 500;
     }
 
+    function isValidAuditLog(data) {
+      return data.description is string && data.description.size() > 0 && data.entityType is string;
+    }
+
     function isValidFinancialTransaction(data) {
       return data.amount is number;
     }
@@ -80,12 +84,53 @@ service cloud.firestore {
       return data.name is string && data.name.size() > 0 && data.email is string && data.email.size() > 0;
     }
 
+    function isValidProviderProductService(data) {
+      return data.providerId != null && data.productType is string;
+    }
+
+    function isValidProviderSpecificProduct(data) {
+      return data.providerId != null && data.name is string;
+    }
+
     function isValidEmailId(email) {
       return email is string && email.size() <= 150 && email.matches('^[a-zA-Z0-9_\\.\\-]+@[a-zA-Z0-9_\\.\\-]+$');
     }
 
     function isValidOTPRequest(data) {
       return data.code is string && data.code.size() == 6 && data.expiresAt is string;
+    }
+
+    // Relaxed ID check to support Spanish accented characters, spaces, and brackets for catalogs
+    function isValidCatalogId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function isValidCompanyDocument(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+    }
+
+    function isValidFinanceCategory(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 100;
+    }
+
+    function isValidAccountStatement(data) {
+      return true;
+    }
+
+    function isValidStatementTransaction(data) {
+      return true;
+    }
+
+    function isValidCompanyInfo(data) {
+      return data.commercialName is string && data.commercialName.size() > 0 && data.commercialName.size() <= 200;
+    }
+
+    function isValidCatalog(data) {
+      return data.items is list && data.items.size() <= 200;
+    }
+
+    function isValidBackup(data) {
+      return data.date is string && data.type is string && data.size is string;
     }
 
     // Match pathways configurations
@@ -155,6 +200,12 @@ service cloud.firestore {
       allow delete: if isValidId(id);
     }
 
+    match /auditLogs/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidAuditLog(incoming());
+      allow delete: if isValidId(id);
+    }
+
     match /financialTransactions/{id} {
       allow read: if true;
       allow create, update: if isValidId(id) && isValidFinancialTransaction(incoming());
@@ -167,12 +218,65 @@ service cloud.firestore {
       allow delete: if isValidId(id);
     }
 
+    match /providerProductServices/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidProviderProductService(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /providerSpecificProducts/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidProviderSpecificProduct(incoming());
+      allow delete: if isValidId(id);
+    }
+
     match /temporary_otps/{email} {
-      allow read, write: if isValidEmailId(email) && isValidOTPRequest(incoming());
       // Handled via single-document operations, allowing get / create / update / delete for client-side OTP matching
       allow get: if isValidEmailId(email);
       allow create, update: if isValidEmailId(email) && isValidOTPRequest(incoming());
       allow delete: if isValidEmailId(email);
+    }
+
+    match /companyInfo/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidCompanyInfo(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /companyDocuments/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidCompanyDocument(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /financeCategories/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidFinanceCategory(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /accountStatements/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidAccountStatement(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /statementTransactions/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidStatementTransaction(incoming());
+      allow delete: if isValidId(id);
+    }
+
+    match /catalogs/{id} {
+      allow read: if true;
+      allow create, update: if isValidCatalogId(id) && isValidCatalog(incoming());
+      allow delete: if isValidCatalogId(id);
+    }
+
+    match /app_backups/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidBackup(incoming());
+      allow delete: if isValidId(id);
     }
   }
 }

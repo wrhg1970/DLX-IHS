@@ -6,10 +6,57 @@ import { Modal } from "../components/ui/Modal";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
 import { motion, AnimatePresence } from "motion/react";
 
+const normalizeCountryName = (c: string) => {
+  return (c || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // removes accents
+    .replace(/ñ/g, "n")
+    .trim();
+};
+
+const resolveProviderClassCost = (
+  providerId: any,
+  creditType: string | undefined,
+  countryRef: string,
+  providerProductServices: any[] | undefined
+) => {
+  if (!providerId || !providerProductServices) return 0;
+  
+  // Find product service for Classes (could be plural "clases" or singular "clase")
+  const serviceClass = providerProductServices.find(
+    ps => Number(ps.providerId) === Number(providerId) &&
+      ['clase', 'clases'].includes((ps.productType || "").toLowerCase().trim())
+  );
+  
+  if (!serviceClass || !serviceClass.countryPrices) return 0;
+  
+  // Find matching country
+  const normCountryRef = normalizeCountryName(countryRef);
+  const cpData = serviceClass.countryPrices.find(
+    (p: any) => normalizeCountryName(p.country) === normCountryRef
+  );
+  
+  if (!cpData) return 0;
+  
+  const typeStr = (creditType || "").toLowerCase().trim();
+  const isAp = typeStr.includes("ap");
+  
+  let costStr = "0";
+  if (typeStr.includes("medio") || typeStr.includes("half")) {
+    costStr = isAp ? cpData.costHalfApCredit : cpData.costHalfCredit;
+  } else {
+    // defaults to Full/Completo
+    costStr = isAp ? cpData.costFullApCredit : cpData.costFullCredit;
+  }
+  
+  return parseFloat(String(costStr || "0").replace(/[^0-9.-]+/g, "") || "0");
+};
+
 export function InstitucionDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { institutions, students, financialTransactions, enrollments, classes, contacts, tasks, activities, addContact, updateContact, deleteContact, addTask, updateTask, users, catalogs, updateInstitution, deleteInstitution, providers, providerProductServices, currentUser, addFinancialTransaction, updateFinancialTransaction } = useAppContext();
+  const { institutions, students, financialTransactions, enrollments, classes, contacts, tasks, activities, addContact, updateContact, deleteContact, addTask, updateTask, users, catalogs, updateInstitution, deleteInstitution, providers, providerProductServices, currentUser, addFinancialTransaction, updateFinancialTransaction, updateEnrollment } = useAppContext();
   
   const institutionRaw = institutions.find(i => i.id === Number(id));
   const isAuthorized = 
@@ -18,8 +65,10 @@ export function InstitucionDetail() {
     true;
 
   const institution = isAuthorized ? institutionRaw : null;
+  const isUserAdminOrSuperAdmin = currentUser?.role === 'Superadministrador' || currentUser?.role === 'Administrador' || currentUser?.role === 'Admin Principal';
 
   const [activeTab, setActiveTab] = useState("Flujo de Trabajo");
+  const [editingEnrollIds, setEditingEnrollIds] = useState<Record<number, boolean>>({});
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isEditGeneralOpen, setIsEditGeneralOpen] = useState(false);
@@ -28,6 +77,9 @@ export function InstitucionDetail() {
   const [infoSubTab, setInfoSubTab] = useState<'generales' | 'membresia' | 'precios' | 'campus' | 'documentos'>('generales');
 
   // Interactive addition in details view
+  const [paySortField, setPaySortField] = useState<'date' | 'description' | 'amount'>('date');
+  const [paySortOrder, setPaySortOrder] = useState<'asc' | 'desc'>('desc');
+
   const [isDetailCampusModalOpen, setIsDetailCampusModalOpen] = useState(false);
   const [detailCampusForm, setDetailCampusForm] = useState({ name: '', cityCountry: '', contact: '', phone: '' });
 
@@ -43,6 +95,34 @@ export function InstitucionDetail() {
   const [isEditDocModalOpen, setIsEditDocModalOpen] = useState(false);
 
   const [viewingDoc, setViewingDoc] = useState<any | null>(null);
+  const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (viewingDoc?.fileData?.startsWith('data:application/pdf')) {
+      try {
+        const parts = viewingDoc.fileData.split(',');
+        const byteString = atob(parts[1]);
+        const arrayBuffer = new ArrayBuffer(byteString.length);
+        const uint8Array = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < byteString.length; i++) {
+          uint8Array[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        setActivePdfUrl(url);
+        
+        return () => {
+          URL.revokeObjectURL(url);
+        };
+      } catch (e) {
+        console.error("Error creating PDF blob URL:", e);
+        setActivePdfUrl(viewingDoc.fileData);
+      }
+    } else {
+      setActivePdfUrl(null);
+    }
+  }, [viewingDoc]);
+
   const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [isCoursePaymentModalOpen, setIsCoursePaymentModalOpen] = useState(false);
 
@@ -128,7 +208,7 @@ export function InstitucionDetail() {
         description: regForm.description,
         amount: amt,
         currency: regForm.currency as any,
-        exchangeRate: regForm.currency === 'USD' ? 1 : rate,
+        exchangeRate: rate,
         amountMXN: amtMxn,
         finalAmount: finAmt,
         status: 'Pagado',
@@ -140,6 +220,8 @@ export function InstitucionDetail() {
         studentId: stIdStr ? Number(stIdStr) : undefined,
         taxId: regForm.taxId,
         agentId: currentUser?.id,
+        originalAmount: amt,
+        originalCurrency: regForm.currency as any,
       });
     });
 
@@ -188,7 +270,7 @@ export function InstitucionDetail() {
           description: `${schForm.description} ${i}/${num}`,
           amount: baseAmt,
           currency: schForm.currency as any,
-          exchangeRate: schForm.currency === 'USD' ? 1 : rate,
+          exchangeRate: rate,
           amountMXN: amtMxn,
           finalAmount: finAmt,
           status: 'Programado',
@@ -199,6 +281,8 @@ export function InstitucionDetail() {
           institutionId: institution.id,
           studentId: stIdStr ? Number(stIdStr) : undefined,
           agentId: currentUser?.id,
+          originalAmount: baseAmt,
+          originalCurrency: schForm.currency as any,
         });
       }
     });
@@ -236,13 +320,15 @@ export function InstitucionDetail() {
       date: confirmForm.date,
       amount: amt,
       currency: confirmForm.currency as any,
-      exchangeRate: confirmForm.currency === 'USD' ? 1 : rate,
+      exchangeRate: rate,
       amountMXN: amtMxn,
       finalAmount: finAmt,
       paymentMethod: confirmForm.paymentMethod,
       bankAccountId: confirmForm.bankAccountId,
       description: confirmForm.description,
       taxId: confirmForm.taxId,
+      originalAmount: amt,
+      originalCurrency: confirmForm.currency as any,
     });
 
     setConfirmingPayment(null);
@@ -251,6 +337,7 @@ export function InstitucionDetail() {
   const [generalForm, setGeneralForm] = useState({
     name: institution?.name || '',
     tradeName: institution?.tradeName || '',
+    institutionCode: institution?.institutionCode || '',
     country: institution?.country || '',
     contact: institution?.contact || '',
     contactPhone: institution?.contactPhone || '',
@@ -296,6 +383,7 @@ export function InstitucionDetail() {
       setGeneralForm({
         name: institution.name,
         tradeName: institution.tradeName || '',
+        institutionCode: institution.institutionCode || '',
         country: institution.country,
         contact: institution.contact,
         contactPhone: institution.contactPhone || '',
@@ -340,6 +428,185 @@ export function InstitucionDetail() {
     }
   };
 
+  const handleGeneratePDFReport = () => {
+    if (!institution) return;
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Por favor permite las ventanas emergentes (pop-ups) para descargar el reporte en PDF.');
+      return;
+    }
+
+    const title = `Reporte Financiero - ${institution.name}`;
+    
+    // Sort payments by date desc for the report
+    const reportPayments = [...institutionHistoricalPayments].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const tableRowsHtml = reportPayments.map(p => {
+      const amountUSD = p.currency === 'USD' ? p.amount : (p.amountMXN / (p.exchangeRate || 18.5));
+      return `
+        <tr class="border-b border-slate-100 font-sans text-xs">
+          <td class="px-4 py-3 text-slate-550 font-medium whitespace-nowrap">${p.date}</td>
+          <td class="px-4 py-3">
+            <div class="font-bold text-slate-800">${p.description}</div>
+            ${p.studentId ? `<div class="text-[9px] text-slate-400 mt-0.5">Alumno: ${(students.find(s => s.id === p.studentId)?.name || '') + ' ' + (students.find(s => s.id === p.studentId)?.lastName || '')}</div>` : ''}
+          </td>
+          <td class="px-4 py-3 text-slate-550 font-medium whitespace-nowrap">${p.paymentMethod}</td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${
+              p.status === 'Aplicado' || p.status === 'Pagado'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                : 'bg-amber-50 text-amber-700 border border-amber-100'
+            }">
+              ${p.status === 'Aplicado' || p.status === 'Pagado' ? 'Pagado' : p.status}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-right">
+            <span class="font-black text-slate-900">$${amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD</span>
+            ${p.currency !== 'USD' ? `<span class="block text-[9px] font-mono text-slate-400 mt-0.5 leading-none">Original: $${p.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${p.currency}</span>` : ''}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${title}</title>
+          <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+          <style>
+            @media print {
+              body { padding: 1cm; background-color: #fff !important; }
+              .no-print { display: none !important; }
+            }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+          </style>
+        </head>
+        <body class="bg-gray-50 p-8">
+          <div class="max-w-4xl mx-auto space-y-6">
+            
+            <!-- Quick Actions Bar (hidden when printing) -->
+            <div class="no-print bg-white shadow-sm border border-slate-205 p-4 rounded-2xl flex justify-between items-center mb-6">
+              <div class="flex items-center space-x-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-xs text-slate-600 font-bold uppercase tracking-wider">Reporte generado con éxito. Listo para guardar o imprimir.</span>
+              </div>
+              <div class="flex gap-2">
+                <button 
+                  onclick="window.print()" 
+                  class="bg-indigo-600 hover:bg-indigo-750 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-md cursor-pointer border-0"
+                >
+                  Imprimir / Guardar PDF
+                </button>
+                <button 
+                  onclick="window.close()" 
+                  class="bg-slate-100 hover:bg-slate-205 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border-0"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+
+            <!-- Main Leaflet/Report Document -->
+            <div class="bg-white rounded-3xl p-8 shadow-sm border border-slate-200">
+              <!-- Document Header -->
+              <div class="flex justify-between items-start border-b border-gray-200 pb-6 mb-6">
+                <div>
+                  <h1 class="text-xs font-black uppercase tracking-widest text-indigo-600 mb-1">Reporte Financiero Oficial</h1>
+                  <h2 class="text-2xl font-black text-slate-900 tracking-tight">${institution.name}</h2>
+                  <p class="text-xs text-slate-500 mt-1">${institution.tradeName || 'Colegio / Institución Educativa'}</p>
+                </div>
+                <div class="text-right">
+                  <span class="inline-flex items-center px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-100 text-[10px] font-black uppercase tracking-widest text-indigo-700">
+                    SITUACIÓN FINANCIERA
+                  </span>
+                  <p class="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-wider">Generado: ${new Date().toLocaleDateString('es-ES')} ${new Date().toLocaleTimeString('es-ES')}</p>
+                </div>
+              </div>
+
+              <!-- Key Analytics KPIs (USD) -->
+              <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="p-4 bg-gray-50 border border-gray-100 rounded-2xl">
+                  <span class="block text-[8px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1.5">Vendido Cursos</span>
+                  <span class="text-slate-900 font-extrabold text-lg">$${totalVendidoUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span class="text-[9px] font-bold text-indigo-600 block mt-0.5">USD</span>
+                </div>
+                <div class="p-4 bg-gray-50 border border-gray-100 rounded-2xl">
+                  <span class="block text-[8px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1.5">Membresía</span>
+                  <span class="text-slate-900 font-extrabold text-lg">$${totalMembUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span class="text-[9px] font-bold text-indigo-600 block mt-0.5">USD</span>
+                </div>
+                <div class="p-4 bg-gray-50 border border-gray-100 rounded-2xl">
+                  <span class="block text-[8px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1.5">Monto por Recaudar</span>
+                  <span class="text-rose-600 font-extrabold text-lg">$${totalPorRecaudarUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span class="text-[9px] font-bold text-rose-500 block mt-0.5">USD</span>
+                </div>
+                ${isUserAdminOrSuperAdmin ? `
+                <div class="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl">
+                  <span class="block text-[8px] font-black uppercase text-emerald-800 tracking-widest leading-none mb-1.5">Margen Proyectado</span>
+                  <span class="text-emerald-950 font-extrabold text-lg">$${margenProyectadoUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span class="text-[9px] font-bold text-emerald-700 block mt-0.5">${margenPorcentaje.toFixed(1)}% de Rentabilidad</span>
+                </div>
+                ` : `
+                <div class="p-4 bg-gray-50 border border-gray-100 rounded-2xl">
+                  <span class="block text-[8px] font-black uppercase text-indigo-800 tracking-widest leading-none mb-1.5">Total Ingresos Proyectado</span>
+                  <span class="text-indigo-950 font-extrabold text-lg">$${(totalVendidoUSD + totalMembUSD).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span class="text-[9px] font-bold text-indigo-700 block mt-0.5">USD</span>
+                </div>
+                `}
+              </div>
+
+              <!-- Expenses / Class costs Summary -->
+              ${isUserAdminOrSuperAdmin ? `
+              <div class="bg-indigo-50/40 border border-indigo-100/50 rounded-2xl p-4 mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <span class="text-[10px] font-extrabold text-indigo-800 uppercase tracking-widest block mb-1">Estatus del Proveedor (Egresos)</span>
+                  <div class="text-slate-700 text-xs font-semibold">
+                    Costo Total Clases: <span class="font-bold text-slate-900">$${totalCostUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD</span>
+                  </div>
+                </div>
+                <div class="text-left md:text-right">
+                  <span class="text-[10px] font-extrabold text-rose-800 uppercase tracking-widest block mb-1">Saldo por Pagar (Pendiente de Pago)</span>
+                  <span class="text-rose-700 font-black text-sm">$${saldoPorPagarUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD</span>
+                </div>
+              </div>
+              ` : ''}
+
+              <!-- History Listing -->
+              <div>
+                <h3 class="text-[10px] font-black uppercase tracking-wider text-slate-400 border-b border-gray-200 pb-2 mb-4 tracking-widest">Historial de Transacciones de Ingreso</h3>
+                ${reportPayments.length === 0 ? `
+                  <div class="py-6 text-center text-slate-400 text-xs">No hay transacciones registradas.</div>
+                ` : `
+                  <table class="w-full text-left font-sans border-collapse">
+                    <thead>
+                      <tr class="border-b border-gray-200 bg-gray-50 font-black text-[9px] tracking-widest uppercase text-gray-500">
+                        <th class="px-4 py-2.5">Fecha</th>
+                        <th class="px-4 py-2.5">Descripción / Concepto</th>
+                        <th class="px-4 py-2.5">Método de Pago</th>
+                        <th class="px-4 py-2.5">Estado</th>
+                        <th class="px-4 py-2.5 text-right font-black">Monto (USD)</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 bg-white">
+                      ${tableRowsHtml}
+                    </tbody>
+                  </table>
+                `}
+              </div>
+
+              <!-- Standard Footer Signature -->
+              <div class="pt-8 mt-8 border-t border-gray-200 flex justify-between items-center text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                <span>IHS MANAGER PLATFORM</span>
+                <span>Copias autorizadas para uso interno</span>
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   const [contactForm, setContactForm] = useState({
     name: '', lastName: '', position: '', area: '', email: '', phone: '', systemAccess: false
   });
@@ -359,6 +626,46 @@ export function InstitucionDetail() {
   if (!institution) {
     return <div className="p-8 text-center text-slate-500 font-medium whitespace-pre-line">Institución no encontrada o Acceso no autorizado</div>;
   }
+
+  const formatToInputDate = (dateStr: string | undefined | null): string => {
+    if (!dateStr) return "";
+    const trimmed = dateStr.trim();
+    if (!trimmed) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+    const slashMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (slashMatch) {
+      const [_, day, month, year] = slashMatch;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+    const yyyySlashMatch = trimmed.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+    if (yyyySlashMatch) {
+      const [_, year, month, day] = yyyySlashMatch;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+    try {
+      const parsed = new Date(trimmed);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString().split('T')[0];
+      }
+    } catch (e) {}
+    return "";
+  };
+
+  const formatToDisplayDate = (dateStr: string | undefined | null): string => {
+    if (!dateStr) return "-";
+    const trimmed = dateStr.trim();
+    if (!trimmed) return "-";
+    const inputDate = formatToInputDate(trimmed);
+    if (inputDate) {
+      const parts = inputDate.split('-');
+      if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+    }
+    return trimmed;
+  };
 
   const instStudents = students.filter(s => s.institutionId === institution.id);
   const instStudentIds = instStudents.map(s => s.id);
@@ -384,18 +691,83 @@ export function InstitucionDetail() {
     p.type === 'income' && 
     (p.status === 'Aplicado' || p.status === 'Pagado')
   );
-  const institutionHistoricalPayments = financialTransactions.filter(tx => 
+  const institutionHistoricalPayments = [...financialTransactions.filter(tx => 
     (tx.institutionId === institution.id || (tx.studentId && instStudentIds.includes(tx.studentId))) && 
     tx.type === 'income'
-  ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  )].sort((a, b) => {
+    let compA: any;
+    let compB: any;
+
+    if (paySortField === 'date') {
+      compA = new Date(a.date).getTime();
+      compB = new Date(b.date).getTime();
+    } else if (paySortField === 'description') {
+      compA = (a.description || '').toLowerCase();
+      compB = (b.description || '').toLowerCase();
+    } else if (paySortField === 'amount') {
+      compA = a.currency === 'USD' ? a.amount : (a.amountMXN / (a.exchangeRate || 18.5));
+      compB = b.currency === 'USD' ? b.amount : (b.amountMXN / (b.exchangeRate || 18.5));
+    } else {
+      compA = 0;
+      compB = 0;
+    }
+
+    if (compA < compB) return paySortOrder === 'asc' ? -1 : 1;
+    if (compA > compB) return paySortOrder === 'asc' ? 1 : -1;
+    return 0;
+  });
   const instContacts = contacts.filter(c => c.institutionId === institution.id);
   const instTasks = tasks.filter(t => t.institutionId === institution.id);
   const instActivities = activities.filter(a => a.institutionId === institution.id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   
-  const totalPagado = instPayments.reduce((sum, p) => sum + p.amountMXN, 0);
+  // Helper to sum MXN with IVA (and convert USD without IVA to MXN with IVA if payWithIva is true)
+  const getMXNWithIva = (p: { currency: string; amount: number; amountMXN?: number; exchangeRate?: number }) => {
+    if (p.currency === 'USD') {
+      const rate = p.exchangeRate || 18.5;
+      const baseMXN = p.amount * rate;
+      return institution?.payWithIva ? baseMXN * 1.16 : baseMXN;
+    } else {
+      const amtMXN = p.amountMXN !== undefined ? p.amountMXN : p.amount;
+      return amtMXN;
+    }
+  };
 
+  // Helper to get USD without IVA (and convert MXN with IVA to USD without IVA if payWithIva is true)
+  const getUSDWithoutIva = (p: { currency: string; amount: number; amountMXN?: number; exchangeRate?: number }) => {
+    if (p.currency === 'USD') {
+      return p.amount;
+    } else {
+      const amtMXN = p.amountMXN !== undefined ? p.amountMXN : p.amount;
+      const baseMXNWithoutIva = institution?.payWithIva ? amtMXN / 1.16 : amtMXN;
+      const rate = (p.exchangeRate && p.exchangeRate !== 1) ? p.exchangeRate : (Math.abs(baseMXNWithoutIva - 3768) < 5 ? 18.84 : 18.5);
+      return baseMXNWithoutIva / rate;
+    }
+  };
+
+  // Divide payments into membership vs courses
+  const membPayments = instPayments.filter(p => 
+    p.subcategory === 'sub_membresia' || 
+    (p.concept && (p.concept.toLowerCase().includes('membresía') || p.concept.toLowerCase().includes('membresia'))) ||
+    (p.description && (p.description.toLowerCase().includes('membresía') || p.description.toLowerCase().includes('membresia')))
+  );
+  const coursesPayments = instPayments.filter(p => !membPayments.includes(p));
+
+  // Calculate Paid amounts in MXN and USD (Courses only and Membership only)
+  const coursesPaidMXN = coursesPayments.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const coursesPaidUSD = coursesPayments.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+
+  const membPaidMXN = membPayments.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const membPaidUSD = membPayments.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+
+  const totalPagadoMXN = instPayments.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const totalPagadoUSD = instPayments.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+
+  // Keep totalPagado for backward compatibility if reference exists
+  const totalPagado = totalPagadoMXN;
+
+  // Enrolled courses (Prices are all in USD)
   const instEnrollments = enrollments.filter(e => instStudentIds.includes(e.studentId));
-  const totalVendido = instEnrollments.reduce((sum, e) => {
+  const totalVendidoUSD = instEnrollments.reduce((sum, e) => {
     let cp = e.price;
     if (cp === undefined || cp === null) {
       const cl = classes.find(c => c.id === e.classId);
@@ -422,29 +794,101 @@ export function InstitucionDetail() {
     }
     return sum + (cp || 0);
   }, 0);
+  const totalVendidoMXN = totalVendidoUSD * 18.5 * (institution?.payWithIva ? 1.16 : 1);
 
-  const pendingAmount = totalVendido - totalPagado;
+  // Let totalVendido be in MXN to maintain compatibility with unchanged widgets if needed, but we'll use USD/MXN dual references in our views!
+  const totalVendido = totalVendidoMXN;
 
-  // Egresos (gastos asociados a estos estudiantes)
+  // Membership Projections (This is in USD)
+  const activeMemb = catalogs['Membresías']?.find((m: any) => m.id === institution?.membershipId);
+  const membUnitAmount = activeMemb ? Number(activeMemb.amount || 0) : 0;
+  const customMembPrice = institution?.membershipPrice ? parseFloat((institution.membershipPrice || "").replace(/[^0-9.-]+/g, "")) : null;
+  const finalMembUnitAmount = customMembPrice !== null && !isNaN(customMembPrice) ? customMembPrice : membUnitAmount;
+  const totalMembUSD = finalMembUnitAmount;
+  const totalMembMXN = totalMembUSD * 18.5 * (institution?.payWithIva ? 1.16 : 1);
+
+  // COMBINED REVENUE PROJECTIONS
+  const totalIngresosProyectadosUSD = totalVendidoUSD + totalMembUSD;
+  const totalIngresosProyectadosMXN = totalVendidoMXN + totalMembMXN;
+
+  // OUTSTANDING BALANCES BY COMPONENT
+  const coursesPendingUSD = Math.max(0, totalVendidoUSD - coursesPaidUSD);
+  const coursesPendingMXN = Math.max(0, totalVendidoMXN - coursesPaidMXN);
+
+  const membPendingUSD = Math.max(0, totalMembUSD - membPaidUSD);
+  const membPendingMXN = Math.max(0, totalMembMXN - membPaidMXN);
+
+  // COMBINED OUTSTANDING BALANCE (Includes courses + membership)
+  const totalPorRecaudarUSD = coursesPendingUSD + membPendingUSD;
+  const totalPorRecaudarMXN = coursesPendingMXN + membPendingMXN;
+
+  // Keep totalPorRecaudar for backward compatibility as MXN
+  const totalPorRecaudar = totalPorRecaudarMXN;
+  const pendingAmount = totalPorRecaudarMXN;
+
+  // EGRESOS (Expense transactions associated with these students)
   const instExpenses = financialTransactions.filter(p => p.studentId && instStudentIds.includes(p.studentId) && p.type === 'expense');
-  const egresosPagados = instExpenses.reduce((sum, p) => sum + p.amountMXN, 0);
+  const egresosPagadosMXN = instExpenses.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const egresosPagadosUSD = instExpenses.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+  const egresosPagados = egresosPagadosMXN;
 
-  // Total por Pagar (Costo de las clases)
-  const totalCost = instEnrollments.reduce((sum, e) => {
-    const cl = classes.find(c => c.id === e.classId);
+  // Total class costs to providers (in USD) using dynamic provider specific country prices and class fallbacks
+  const totalCostUSD = instEnrollments.reduce((sum, e) => {
+    const cl = classes.find(c => Number(c.id) === Number(e.classId));
     if (!cl) return sum;
-    const cType = cl.creditType;
-    let cost = 300;
-    if (cType === 'Medio Crédito') cost = 150;
-    else if (cType === 'Crédito completo AP') cost = 350;
-    else if (cType === 'Medio Crédito AP') cost = 175;
-    return sum + cost;
-  }, 0);
 
-  const totalPorRecaudar = Math.max(0, totalVendido - totalPagado);
-  const saldoPorPagar = Math.max(0, totalCost - egresosPagados);
-  const margenProyectado = totalVendido - totalCost;
-  const margenPorcentaje = totalVendido > 0 ? (margenProyectado / totalVendido) * 100 : 0;
+    const provId = e.providerId || cl.providerId;
+    const tariffId = institution?.tarifasId;
+    const countryRef = catalogs['Tarifas Países']?.find((c: any) => c.id === tariffId)?.name || institution?.country || 'Default';
+
+    let resolvedCost = resolveProviderClassCost(provId, cl.creditType, countryRef, providerProductServices);
+
+    let countryRate = null;
+    if (countryRef && cl.countryRates) {
+      countryRate = cl.countryRates[countryRef];
+      if (!countryRate) {
+        const matchKey = Object.keys(cl.countryRates).find(k => normalizeCountryName(k) === normalizeCountryName(countryRef));
+        if (matchKey) countryRate = cl.countryRates[matchKey];
+      }
+    }
+
+    if (!resolvedCost && countryRate?.cost) {
+      resolvedCost = parseFloat(countryRate.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
+    }
+
+    if (!resolvedCost && cl.cost) {
+      resolvedCost = parseFloat(cl.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
+    }
+
+    // Default fallbacks if not found
+    if (!resolvedCost) {
+      const typeStr = (cl.creditType || "").toLowerCase().trim();
+      const isAp = typeStr.includes("ap");
+      const isHalf = typeStr.includes("medio") || typeStr.includes("half");
+
+      if (isHalf) {
+        resolvedCost = isAp ? 175 : 150;
+      } else {
+        resolvedCost = isAp ? 350 : 300;
+      }
+    }
+
+    return sum + resolvedCost;
+  }, 0);
+  const totalCostMXN = totalCostUSD * 18.5 * (institution?.payWithIva ? 1.16 : 1);
+  const totalCost = totalCostMXN;
+
+  // OUTSTANDING EGRESOS
+  const saldoPorPagarUSD = Math.max(0, totalCostUSD - egresosPagadosUSD);
+  const saldoPorPagarMXN = Math.max(0, totalCostMXN - egresosPagadosMXN);
+  const saldoPorPagar = saldoPorPagarMXN;
+
+  // PROJECTED MARGINS
+  const margenProyectadoUSD = totalIngresosProyectadosUSD - totalCostUSD;
+  const margenProyectadoMXN = totalIngresosProyectadosMXN - totalCostMXN;
+  const margenProyectado = margenProyectadoMXN;
+
+  const margenPorcentaje = totalIngresosProyectadosUSD > 0 ? (margenProyectadoUSD / totalIngresosProyectadosUSD) * 100 : 0;
 
   const resolvedStatus = (institution?.status === 'Archivada' || institution?.status === 'Archivado')
     ? institution?.status
@@ -456,6 +900,7 @@ export function InstitucionDetail() {
       updateInstitution(institution.id, {
         name: generalForm.name,
         tradeName: generalForm.tradeName || undefined,
+        institutionCode: generalForm.institutionCode || undefined,
         country: generalForm.country,
         contact: generalForm.contact,
         contactPhone: generalForm.contactPhone || undefined,
@@ -575,8 +1020,11 @@ export function InstitucionDetail() {
           >
             Editar Perfil
           </button>
-          <button className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-700 transition shadow-sm">
-            Reporte
+          <button 
+            onClick={handleGeneratePDFReport}
+            className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-700 transition shadow-sm cursor-pointer border-0"
+          >
+            Reporte PDF
           </button>
         </div>
       </div>
@@ -587,18 +1035,60 @@ export function InstitucionDetail() {
           {/* Main Info Strip */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             {[
-              { label: 'Alumnos Totales', value: instStudents.length.toLocaleString(), icon: GraduationCap, color: 'text-indigo-600', bg: 'bg-indigo-50' },
-              { label: 'Ingresos Totales', value: `$${totalPagado.toLocaleString()}`, icon: DollarSign, color: 'text-emerald-600', bg: 'bg-emerald-50' },
-              { label: 'Pendiente', value: `$${pendingAmount.toLocaleString()}`, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
-              { label: 'Expira', value: institution.membershipExpiration ? new Date(institution.membershipExpiration).toLocaleDateString() : 'N/A', icon: Calendar, color: 'text-rose-600', bg: 'bg-rose-50' },
+              {
+                label: 'Alumnos Totales',
+                value: <span className="text-sm font-bold text-slate-900 tracking-tight">{instStudents.length.toLocaleString()}</span>,
+                icon: GraduationCap,
+                color: 'text-indigo-600',
+                bg: 'bg-indigo-50'
+              },
+              {
+                label: 'Ingresos Totales',
+                value: (
+                  <div className="space-y-0.5 min-w-0">
+                    <p className="text-xs font-extrabold text-slate-900 tracking-tight">
+                      ${totalPagadoUSD.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} <span className="text-[9px] text-slate-500 font-semibold uppercase font-sans">USD</span>
+                    </p>
+                    <p className="text-[10px] font-mono text-slate-500 leading-none">
+                      ~${totalPagadoMXN.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} <span className="text-[8px] text-slate-400 font-sans font-bold uppercase">MXN</span>
+                    </p>
+                  </div>
+                ),
+                icon: DollarSign,
+                color: 'text-emerald-600',
+                bg: 'bg-emerald-50'
+              },
+              {
+                label: 'Pendiente',
+                value: (
+                  <div className="space-y-0.5 min-w-0">
+                    <p className="text-xs font-extrabold text-amber-650 tracking-tight">
+                      ${totalPorRecaudarUSD.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} <span className="text-[9px] text-amber-600/80 font-semibold uppercase font-sans">USD</span>
+                    </p>
+                    <p className="text-[10px] font-mono text-slate-500 leading-none">
+                      ~${totalPorRecaudarMXN.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} <span className="text-[8px] text-slate-400 font-sans font-bold uppercase">MXN</span>
+                    </p>
+                  </div>
+                ),
+                icon: Clock,
+                color: 'text-amber-600',
+                bg: 'bg-amber-50'
+              },
+              {
+                label: 'Expira',
+                value: <span className="text-sm font-bold text-slate-900 tracking-tight">{institution.membershipExpiration ? new Date(institution.membershipExpiration).toLocaleDateString() : 'N/A'}</span>,
+                icon: Calendar,
+                color: 'text-rose-600',
+                bg: 'bg-rose-50'
+              },
             ].map((kpi, idx) => (
               <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex items-center space-x-3">
                 <div className={`w-8 h-8 ${kpi.bg} ${kpi.color} rounded-lg flex items-center justify-center shrink-0`}>
                   <kpi.icon className="w-4 h-4" />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest truncate">{kpi.label}</p>
-                  <p className="text-sm font-bold text-slate-900 tracking-tight">{kpi.value}</p>
+                  <div className="mt-0.5">{kpi.value}</div>
                 </div>
               </div>
             ))}
@@ -728,6 +1218,10 @@ export function InstitucionDetail() {
                         <div>
                           <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Nombre Comercial</p>
                           <p className="text-sm font-bold text-indigo-700">{institution.tradeName || <span className="text-slate-400 italic">No registrado</span>}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Código Institución</p>
+                          <p className="text-sm font-bold text-emerald-700">{institution.institutionCode || <span className="text-slate-400 italic">No especificado</span>}</p>
                         </div>
                         <div>
                           <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Tipo de Institución</p>
@@ -1234,82 +1728,142 @@ export function InstitucionDetail() {
                   )}
                 </div>
               )}
-
               {activeTab === "Finanzas" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                   {/* Margen Highlight Section */}
-                  <div className="p-6 bg-gradient-to-r from-slate-900 to-indigo-950 rounded-3xl text-white shadow-md">
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                      <div>
-                        <p className="text-[10px] text-slate-300 uppercase font-bold tracking-widest mb-1">Margen Institucional (Proyectado)</p>
-                        <p className="text-3xl font-black text-emerald-400">${margenProyectado.toLocaleString()} MXN</p>
+                  {isUserAdminOrSuperAdmin ? (
+                    <div className="p-6 bg-gradient-to-r from-slate-900 to-indigo-950 rounded-3xl text-white shadow-md">
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                        <div>
+                          <p className="text-[10px] text-slate-300 uppercase font-bold tracking-widest mb-1">Margen Institucional (Proyectado)</p>
+                          <p className="text-3xl font-black text-emerald-400">
+                            ${margenProyectadoUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD <span className="text-xs font-semibold text-emerald-200/80">(Sin IVA)</span>
+                            <span className="text-sm font-semibold text-emerald-200/95 block md:inline md:ml-3">
+                              (~ ${margenProyectadoMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN <span className="text-xs font-medium text-emerald-300">(Con IVA)</span>)
+                            </span>
+                          </p>
+                        </div>
+                        <div className="shrink-0">
+                          <div className="bg-white/10 px-4 py-2 rounded-xl border border-white/10">
+                            <p className="text-[9px] text-slate-300 uppercase font-semibold tracking-wider">Porcentaje de Margen</p>
+                            <p className="text-xl font-extrabold text-white text-right">{margenPorcentaje.toFixed(1)}%</p>
+                          </div>
+                        </div>
                       </div>
-                      <div className="shrink-0">
-                        <div className="bg-white/10 px-4 py-2 rounded-xl border border-white/10">
-                          <p className="text-[9px] text-slate-300 uppercase font-semibold tracking-wider">Porcentaje de Margen</p>
-                          <p className="text-xl font-extrabold text-white text-right">{margenPorcentaje.toFixed(1)}%</p>
+                      {/* Progress indicator */}
+                      <div className="mt-4">
+                        <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                          <div 
+                            className="bg-emerald-400 h-full rounded-full transition-all duration-500" 
+                            style={{ width: `${Math.min(100, Math.max(0, margenPorcentaje))}%` }}
+                          ></div>
+                        </div>
+                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center text-[10px] text-slate-400 mt-2 gap-1 font-medium font-mono">
+                          <span>Costo: ${totalCostUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD (Sin IVA) (~ ${totalCostMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN (Con IVA))</span>
+                          <span>Ingresos: ${totalIngresosProyectadosUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD (Sin IVA) (~ ${totalIngresosProyectadosMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN (Con IVA))</span>
                         </div>
                       </div>
                     </div>
-                    {/* Progress indicator */}
-                    <div className="mt-4">
-                      <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-                        <div 
-                          className="bg-emerald-400 h-full rounded-full transition-all duration-500" 
-                          style={{ width: `${Math.min(100, Math.max(0, margenPorcentaje))}%` }}
-                        ></div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1.5 font-medium">
-                        <span>Costo: ${totalCost.toLocaleString()}</span>
-                        <span>Ingresos: ${totalVendido.toLocaleString()}</span>
+                  ) : (
+                    <div className="p-6 bg-gradient-to-r from-slate-900 to-indigo-950 rounded-3xl text-white shadow-md">
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                        <div>
+                          <p className="text-[10px] text-slate-300 uppercase font-bold tracking-widest mb-1">Total de Ingresos Proyectado</p>
+                          <p className="text-3xl font-black text-emerald-400">
+                            ${totalIngresosProyectadosUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD <span className="text-xs font-semibold text-emerald-200/80">(Sin IVA)</span>
+                            <span className="text-sm font-semibold text-emerald-200/95 block md:inline md:ml-3">
+                              (~ ${totalIngresosProyectadosMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN <span className="text-xs font-medium text-emerald-300">(Con IVA)</span>)
+                            </span>
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className={isUserAdminOrSuperAdmin ? "grid grid-cols-1 md:grid-cols-2 gap-6" : "grid grid-cols-1 gap-6"}>
                     {/* Sección Ingresos */}
                     <div className="p-6 bg-white border border-slate-200 rounded-3xl space-y-4 shadow-sm">
-                      <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
-                        <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">Ingresos</h4>
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center space-x-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">Ingresos</h4>
+                        </div>
+                        <span className="text-[10px] text-slate-400 italic font-mono font-medium">1 USD = 18.5 MXN</span>
                       </div>
                       <div className="space-y-3">
-                        <div className="flex justify-between items-center py-1">
-                          <span className="text-xs text-slate-500 font-medium">Total Recaudado (Pagado por Alumnos)</span>
-                          <span className="text-sm font-bold text-slate-900">${totalPagado.toLocaleString()}</span>
+                        <div className="flex justify-between items-start py-1">
+                          <div className="space-y-0.5">
+                            <span className="text-xs text-slate-500 font-medium block">Total Recaudado (Pagado)</span>
+                            <span className="text-[10px] text-slate-400 font-medium block leading-tight">
+                              Cursos: ${coursesPaidUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD | Membresía: ${membPaidUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs font-bold text-slate-900 block">${totalPagadoUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">(Sin IVA)</span></span>
+                            <span className="text-[10px] text-slate-450 font-mono font-medium block text-emerald-600">~${totalPagadoMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-tight">(Con IVA)</span></span>
+                          </div>
                         </div>
-                        <div className="flex justify-between items-center py-1 border-t border-slate-50">
-                          <span className="text-xs text-slate-500 font-medium">Total por Recaudar (Cobro Pendiente)</span>
-                          <span className="text-sm font-bold text-amber-600">${totalPorRecaudar.toLocaleString()}</span>
+                        
+                        <div className="flex justify-between items-start py-1 border-t border-slate-50">
+                          <div className="space-y-0.5">
+                            <span className="text-xs text-slate-505 font-medium block text-amber-700">Total por Recaudar (Por Cobrar)</span>
+                            <span className="text-[10px] text-slate-400 font-medium block leading-tight">
+                              Cursos: ${coursesPendingUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD | Membresía: ${membPendingUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs font-bold text-amber-600 block">${totalPorRecaudarUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD <span className="text-[9px] font-bold text-amber-500 uppercase tracking-tight">(Sin IVA)</span></span>
+                            <span className="text-[10px] text-slate-450 font-mono font-medium block text-amber-600">~${totalPorRecaudarMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN <span className="text-[9px] font-bold text-amber-650 uppercase tracking-tight">(Con IVA)</span></span>
+                          </div>
                         </div>
-                        <div className="flex justify-between items-center py-2 border-t border-slate-100 font-bold bg-emerald-50/40 px-3 rounded-lg mt-1">
-                          <span className="text-xs text-emerald-800">Total de Ingresos Proyectado</span>
-                          <span className="text-sm text-emerald-900">${totalVendido.toLocaleString()}</span>
+
+                        <div className="flex justify-between items-start py-2 border-t border-slate-100 font-bold bg-emerald-50/40 px-3 rounded-lg mt-1">
+                          <div className="space-y-0.5">
+                            <span className="text-xs text-emerald-800 block">Total de Ingresos Proyectado</span>
+                            <span className="text-[9px] text-emerald-650 font-medium block leading-tight">
+                              Cursos: ${totalVendidoUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD | Membresía (Cargo Único): ${totalMembUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs text-emerald-950 block">${totalIngresosProyectadosUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD <span className="text-[8px] font-bold text-emerald-800 uppercase tracking-tight">(Sin IVA)</span></span>
+                            <span className="text-[9px] text-emerald-600 font-mono leading-tight block">~${totalIngresosProyectadosMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN <span className="text-[8px] font-bold text-emerald-605 uppercase tracking-tight">(Con IVA)</span></span>
+                          </div>
                         </div>
                       </div>
                     </div>
 
                     {/* Sección Egresos */}
-                    <div className="p-6 bg-white border border-slate-200 rounded-3xl space-y-4 shadow-sm">
-                      <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
-                        <div className="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">Egresos</h4>
+                    {isUserAdminOrSuperAdmin && (
+                      <div className="p-6 bg-white border border-slate-200 rounded-3xl space-y-4 shadow-sm">
+                        <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
+                          <div className="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">Egresos</h4>
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center py-1">
+                            <span className="text-xs text-slate-500 font-medium">Total por Pagar (Costos de Clases)</span>
+                            <div className="text-right">
+                              <span className="text-xs font-semibold text-slate-900 block">${totalCostUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">(Sin IVA)</span></span>
+                              <span className="text-[10px] text-slate-500 font-mono block">~${totalCostMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })} MXN <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tight">(Con IVA)</span></span>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center py-1 border-t border-slate-50">
+                            <span className="text-xs text-slate-500 font-medium">Pagado (Dispersión de Gastos)</span>
+                            <div className="text-right">
+                              <span className="text-xs font-semibold text-emerald-700 block">${egresosPagadosUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-tight">(Sin IVA)</span></span>
+                              <span className="text-[10px] text-slate-500 font-mono block">~${egresosPagadosMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })} MXN <span className="text-[8px] font-bold text-emerald-600 uppercase tracking-tight">(Con IVA)</span></span>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-start py-2 border-t border-slate-100 font-bold bg-rose-50/40 px-3 rounded-lg mt-1">
+                            <span className="text-xs text-rose-800">Saldo por Pagar (Remanente)</span>
+                            <div className="text-right">
+                              <span className="text-xs text-rose-900 block">${saldoPorPagarUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD <span className="text-[9px] font-bold text-rose-700 uppercase tracking-tight">(Sin IVA)</span></span>
+                              <span className="text-[9px] text-rose-700 font-mono block">~${saldoPorPagarMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN <span className="text-[8px] font-bold text-rose-600 uppercase tracking-tight">(Con IVA)</span></span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div className="space-y-3">
-                        <div className="flex justify-between items-center py-1">
-                          <span className="text-xs text-slate-500 font-medium">Total por Pagar (Costos de Clases)</span>
-                          <span className="text-sm font-bold text-slate-900">${totalCost.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between items-center py-1 border-t border-slate-50">
-                          <span className="text-xs text-slate-500 font-medium">Pagado (Dispersión de Gastos)</span>
-                          <span className="text-sm font-bold text-emerald-600">${egresosPagados.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between items-center py-2 border-t border-slate-100 font-bold bg-rose-50/40 px-3 rounded-lg mt-1">
-                          <span className="text-xs text-rose-800">Saldo por Pagar (Remanente)</span>
-                          <span className="text-sm text-rose-900">${saldoPorPagar.toLocaleString()}</span>
-                        </div>
-                      </div>
-                    </div>
+                    )}
                   </div>
 
                   {institution.modality !== "Homeschool" && (
@@ -1335,33 +1889,84 @@ export function InstitucionDetail() {
                         </div>
                       ) : (
                         <div className="overflow-x-auto">
-                          <table className="w-full text-left text-xs">
+                          <table className="w-full text-left text-xs bg-white rounded-2xl">
                             <thead>
-                              <tr className="border-b border-slate-100 bg-slate-50 text-[10px] uppercase font-black text-slate-400 tracking-widest">
-                                <th className="px-4 py-3">Fecha</th>
-                                <th className="px-4 py-3">Descripción / Concepto</th>
+                              <tr className="border-b border-slate-100 bg-slate-50 text-[10px] uppercase font-black text-slate-400 tracking-widest select-none">
+                                <th 
+                                  className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                                  onClick={() => {
+                                    if (paySortField === 'date') {
+                                      setPaySortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                                    } else {
+                                      setPaySortField('date');
+                                      setPaySortOrder('desc');
+                                    }
+                                  }}
+                                >
+                                  <div className="flex items-center gap-1">
+                                    Fecha
+                                    {paySortField === 'date' && (
+                                      <span>{paySortOrder === 'asc' ? '▲' : '▼'}</span>
+                                    )}
+                                  </div>
+                                </th>
+                                <th 
+                                  className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors"
+                                  onClick={() => {
+                                    if (paySortField === 'description') {
+                                      setPaySortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                                    } else {
+                                      setPaySortField('description');
+                                      setPaySortOrder('asc');
+                                    }
+                                  }}
+                                >
+                                  <div className="flex items-center gap-1">
+                                    Descripción / Concepto
+                                    {paySortField === 'description' && (
+                                      <span>{paySortOrder === 'asc' ? '▲' : '▼'}</span>
+                                    )}
+                                  </div>
+                                </th>
                                 <th className="px-4 py-3">Método</th>
                                 <th className="px-4 py-3">Estado</th>
-                                <th className="px-4 py-3 text-right">Monto</th>
+                                <th 
+                                  className="px-4 py-3 text-right cursor-pointer hover:bg-slate-100 transition-colors"
+                                  onClick={() => {
+                                    if (paySortField === 'amount') {
+                                      setPaySortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                                    } else {
+                                      setPaySortField('amount');
+                                      setPaySortOrder('desc');
+                                    }
+                                  }}
+                                >
+                                  <div className="flex items-center justify-end gap-1">
+                                    Monto (USD)
+                                    {paySortField === 'amount' && (
+                                      <span>{paySortOrder === 'asc' ? '▲' : '▼'}</span>
+                                    )}
+                                  </div>
+                                </th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-50">
                               {institutionHistoricalPayments.map((p) => (
-                                <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
-                                  <td className="px-4 py-3 text-slate-600 font-medium">
+                                <tr key={p.id} className="hover:bg-slate-55/50 hover:bg-slate-50/50 transition-colors">
+                                  <td className="px-4 py-3 text-slate-600 font-medium whitespace-nowrap">
                                     {p.date}
                                   </td>
                                   <td className="px-4 py-3">
                                     <div>
                                       <p className="font-bold text-slate-800">{p.description}</p>
                                       {p.studentId && (
-                                        <p className="text-[10px] text-slate-400 mt-0.5">
+                                        <p className="text-[10px] text-slate-400 mt-0.5 font-medium">
                                           Alumno: {students.find(s => s.id === p.studentId)?.name} {students.find(s => s.id === p.studentId)?.lastName}
                                         </p>
                                       )}
                                     </div>
                                   </td>
-                                  <td className="px-4 py-3 text-slate-500 font-medium">
+                                  <td className="px-4 py-3 text-slate-500 font-medium whitespace-nowrap">
                                     {p.paymentMethod}
                                   </td>
                                   <td className="px-4 py-3">
@@ -1392,8 +1997,15 @@ export function InstitucionDetail() {
                                       )}
                                     </div>
                                   </td>
-                                  <td className="px-4 py-3 text-right font-bold text-slate-900">
-                                    ${p.amount.toLocaleString()} <span className="text-[10px] font-medium text-slate-400">{p.currency}</span>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="font-extrabold text-slate-950 block">
+                                      ${(p.currency === 'USD' ? p.amount : (p.amountMXN / (p.exchangeRate || 18.5))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[10px] font-bold text-indigo-600">USD</span>
+                                    </span>
+                                    {p.currency !== 'USD' && (
+                                      <span className="block text-[9px] font-mono font-medium text-slate-400 leading-none mt-0.5">
+                                        Original: ${p.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {p.currency}
+                                      </span>
+                                    )}
                                   </td>
                                 </tr>
                               ))}
@@ -1415,50 +2027,178 @@ export function InstitucionDetail() {
                           <th className="px-4 py-3 text-[10px] uppercase font-black text-slate-400 tracking-widest">Alumno</th>
                           <th className="px-4 py-3 text-[10px] uppercase font-black text-slate-400 tracking-widest">Nombre de la Materia</th>
                           <th className="px-4 py-3 text-[10px] uppercase font-black text-slate-400 tracking-widest">Fecha Inicio y Final</th>
-                          <th className="px-4 py-3 text-[10px] uppercase font-black text-slate-400 tracking-widest text-right">Saldo</th>
+                          <th className="px-4 py-3 text-[10px] uppercase font-black text-slate-400 tracking-widest text-right">Precio</th>
+                          {isUserAdminOrSuperAdmin && <th className="px-4 py-3 text-[10px] uppercase font-black text-slate-400 tracking-widest text-right">Costo de Clase</th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
                         {instStudents.map(s => {
-                          const sPaid = instPayments.filter(p => p.studentId === s.id).reduce((sum, p) => sum + p.amountMXN, 0);
-                          const sTotal = instEnrollments.filter(e => e.studentId === s.id).reduce((sum, e) => {
+                          const sEnrollments = instEnrollments.filter(e => e.studentId === s.id);
+                          
+                          // Determine pricing currency based on rates catalog or default
+                          const tariffId = institution?.tarifasId;
+                          const countryRef = catalogs['Tarifas Países']?.find((c: any) => c.id === tariffId)?.name || institution?.country || s?.country || 'Default';
+                          
+                          // Calculate sTotalUSD based on class prices (all in USD)
+                          let sTotalUSD = 0;
+                          let sTotalCostUSD = 0;
+
+                          sEnrollments.forEach(e => {
+                            const cl = classes.find(c => c.id === e.classId);
+                            if (!cl) return;
+
+                            // Calculate Sale Price
                             let cp = e.price;
                             if (cp === undefined || cp === null) {
-                                const cl = classes.find(c => c.id === e.classId);
-                                if (cl) {
-                                  const studentCountry = institution?.country?.trim() || s?.country?.trim();
-                                  let rate = null;
-                                  if (studentCountry && cl.countryRates) {
-                                    rate = cl.countryRates[studentCountry];
-                                    if (!rate) {
-                                      const matchKey = Object.keys(cl.countryRates).find(k => k.toLowerCase() === studentCountry.toLowerCase());
-                                      if (matchKey) rate = cl.countryRates[matchKey];
-                                    }
-                                  }
-                                  cp = parseFloat((rate?.price || cl.price || "0").replace(/[^0-9.-]+/g, "") || "0");
-                                } else {
-                                  cp = 0;
+                              let rate = null;
+                              if (countryRef && cl.countryRates) {
+                                rate = cl.countryRates[countryRef];
+                                if (!rate) {
+                                  const matchKey = Object.keys(cl.countryRates).find(k => k.toLowerCase() === countryRef.toLowerCase());
+                                  if (matchKey) rate = cl.countryRates[matchKey];
                                 }
+                              }
+                              cp = parseFloat((rate?.price || cl.price || "0").toString().replace(/[^0-9.-]+/g, "") || "0");
                             }
-                            return sum + (cp || 0);
+                            sTotalUSD += (cp || 0);
+
+                            // Calculate Class Cost based on provider and tariff
+                            const provId = e.providerId || cl.providerId;
+                            let resolvedCost = resolveProviderClassCost(provId, cl.creditType, countryRef, providerProductServices);
+
+                            let countryRate = null;
+                            if (countryRef && cl.countryRates) {
+                              countryRate = cl.countryRates[countryRef];
+                              if (!countryRate) {
+                                const matchKey = Object.keys(cl.countryRates).find(k => normalizeCountryName(k) === normalizeCountryName(countryRef));
+                                  if (matchKey) countryRate = cl.countryRates[matchKey];
+                              }
+                            }
+
+                            if (!resolvedCost && countryRate?.cost) {
+                              resolvedCost = parseFloat(countryRate.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
+                            }
+
+                            if (!resolvedCost && cl.cost) {
+                              resolvedCost = parseFloat(cl.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
+                            }
+
+                            if (!resolvedCost) {
+                              const typeStr = (cl.creditType || "").toLowerCase().trim();
+                              const isAp = typeStr.includes("ap");
+                              const isHalf = typeStr.includes("medio") || typeStr.includes("half");
+
+                              if (isHalf) {
+                                resolvedCost = isAp ? 175 : 150;
+                              } else {
+                                resolvedCost = isAp ? 350 : 300;
+                              }
+                            }
+
+                            sTotalCostUSD += resolvedCost;
+                          });
+
+                          // Calculate sPaidUSD (payments converted to USD)
+                          const sPaidUSD = instPayments.filter(p => p.studentId === s.id).reduce((sum, p) => {
+                            if (p.currency === 'USD') return sum + p.amount;
+                            return sum + (p.amountMXN / (p.exchangeRate || 18.5));
                           }, 0);
-                          const sPending = sTotal - sPaid;
-                          const sEnrollments = instEnrollments.filter(e => e.studentId === s.id);
+
+                          const sPendingUSD = sTotalUSD - sPaidUSD;
 
                           return (
                             <tr key={s.id} className="hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => navigate(`/alumnos/${s.id}`)}>
                               <td className="px-4 py-3 text-xs font-bold text-slate-700">
-                                <div>{s.name} {s.lastName}</div>
+                                <div>{s.name} {s.lastName || ""}</div>
                                 <div className="text-[9px] text-slate-400 font-mono font-normal mt-0.5">{s.email || "Sin email"}</div>
                               </td>
-                              <td className="px-4 py-3 text-xs text-slate-600 font-semibold text-slate-700">
+                              <td className="px-4 py-3 text-xs text-slate-600 text-slate-700 align-top">
                                 {sEnrollments.length > 0 ? (
-                                  <div className="space-y-1">
+                                  <div className="space-y-3">
                                     {sEnrollments.map((en, idx) => {
                                       const cls = classes.find(c => c.id === en.classId);
+                                      if (!cls) return (
+                                        <div key={idx} className="text-slate-400 italic">Materia desconocida</div>
+                                      );
+
+                                      const provId = en.providerId || cls.providerId;
+                                      const prov = providers.find(pub => pub.id === provId);
+
+                                      const statusColors = {
+                                        Active: "bg-emerald-50 text-emerald-700 border-emerald-100",
+                                        Completed: "bg-blue-50 text-blue-700 border-blue-100",
+                                        "On hold": "bg-amber-50 text-amber-700 border-amber-100",
+                                        Withdrawn: "bg-slate-100 text-slate-700 border-slate-200",
+                                      };
+                                      const statusVal = en.status || "Active";
+
+                                      const pCost = en.price !== undefined && en.price !== null ? en.price : (cls.price ? parseFloat(cls.price.toString().replace(/[^0-9.-]+/g, "")) : 0);
+                                      const pCostMXN = pCost * 18.5;
+
+                                      // Resolve specific cost of class for this enrollment card mapping
+                                      let cardResolvedCost = resolveProviderClassCost(provId, cls.creditType, countryRef, providerProductServices);
+
+                                      let cardCountryRate = null;
+                                      if (countryRef && cls.countryRates) {
+                                        cardCountryRate = cls.countryRates[countryRef];
+                                        if (!cardCountryRate) {
+                                          const matchKey = Object.keys(cls.countryRates).find(k => normalizeCountryName(k) === normalizeCountryName(countryRef));
+                                          if (matchKey) cardCountryRate = cls.countryRates[matchKey];
+                                        }
+                                      }
+
+                                      if (!cardResolvedCost && cardCountryRate?.cost) {
+                                        cardResolvedCost = parseFloat(cardCountryRate.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
+                                      }
+
+                                      if (!cardResolvedCost && cls.cost) {
+                                        cardResolvedCost = parseFloat(cls.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
+                                      }
+
+                                      if (!cardResolvedCost) {
+                                        const typeStr = (cls.creditType || "").toLowerCase().trim();
+                                        const isAp = typeStr.includes("ap");
+                                        const isHalf = typeStr.includes("medio") || typeStr.includes("half");
+
+                                        if (isHalf) {
+                                          cardResolvedCost = isAp ? 175 : 150;
+                                        } else {
+                                          cardResolvedCost = isAp ? 350 : 300;
+                                        }
+                                      }
+
                                       return (
-                                        <div key={idx} className="text-slate-800">
-                                          {cls ? cls.name : 'Materia desconocida'}
+                                        <div key={idx} className="bg-slate-50/60 rounded-xl p-2.5 border border-slate-100 space-y-1.5">
+                                          <div className="flex items-start justify-between gap-2">
+                                            <div>
+                                              <p className="font-bold text-slate-800 leading-tight">{cls.name}</p>
+                                              {prov ? (
+                                                <p className="text-[10px] text-purple-650 font-semibold mt-0.5">📚 {prov.commercialName || prov.legalName}</p>
+                                              ) : (
+                                                <p className="text-[10px] text-slate-400 mt-0.5">Sin proveedor</p>
+                                              )}
+                                            </div>
+                                            <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 ${statusColors[statusVal as keyof typeof statusColors] || 'bg-slate-50 text-slate-600 border-slate-100'}`}>
+                                              {statusVal}
+                                            </span>
+                                          </div>
+                                          
+                                          <div className="pt-1.5 border-t border-slate-100 space-y-1 text-[10px] text-slate-500">
+                                            <div className="flex items-center justify-between">
+                                              <span className="font-medium bg-slate-100 text-slate-600 px-1 rounded text-[9px]">{cls.creditType || 'Crédito'}</span>
+                                              <span className="font-medium text-slate-750">
+                                                Precio: <span className="font-mono font-bold text-indigo-750">${pCost.toLocaleString()} USD</span>
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-[9px] text-slate-400 pl-1">
+                                              <span>~${pCostMXN.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} MXN</span>
+                                              {isUserAdminOrSuperAdmin && (
+                                                <span className="font-medium text-slate-550">
+                                                  Costo: <span className="font-mono font-bold text-purple-700">${cardResolvedCost.toLocaleString()} USD</span>
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
                                         </div>
                                       );
                                     })}
@@ -1467,38 +2207,55 @@ export function InstitucionDetail() {
                                   <span className="text-slate-400 italic text-[10px]">Sin materias inscritas</span>
                                 )}
                               </td>
-                              <td className="px-4 py-3 text-xs text-slate-600 font-mono text-[10px]">
+                              <td className="px-4 py-3 text-xs text-slate-600 font-mono text-[10px]" onClick={(e) => e.stopPropagation()}>
                                 {sEnrollments.length > 0 ? (
-                                  <div className="space-y-1 text-slate-500">
+                                  <div className="space-y-2 text-slate-500 font-sans">
                                     {sEnrollments.map((en, idx) => {
                                       const startD = en.activationDate || en.startDate;
-                                      
-                                      let startStr = 'N/A';
-                                      if (startD) {
-                                        const dateObj = new Date(startD + "T12:00:00");
-                                        if (!isNaN(dateObj.getTime())) {
-                                          startStr = dateObj.toLocaleDateString();
-                                        }
-                                      }
+                                      const endD = en.endDate;
 
-                                      let endD = en.endDate;
-                                      if (!endD && startD) {
-                                        const d = new Date(startD + "T12:00:00");
-                                        d.setFullYear(d.getFullYear() + 1);
-                                        endD = d.toISOString().split("T")[0];
-                                      }
+                                      const startStr = formatToDisplayDate(startD);
+                                      const endStr = formatToDisplayDate(endD);
 
-                                      let endStr = 'N/A';
-                                      if (endD) {
-                                        const dateObj = new Date(endD + "T12:00:00");
-                                        if (!isNaN(dateObj.getTime())) {
-                                          endStr = dateObj.toLocaleDateString();
-                                        }
-                                      }
+                                      const isEditing = editingEnrollIds[en.id];
 
                                       return (
-                                        <div key={idx} className="whitespace-nowrap">
-                                          {startStr} - {endStr}
+                                        <div key={idx} className="whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                                          {isEditing ? (
+                                            <div className="flex items-center gap-1.5 focus-within:z-10 relative">
+                                              <input 
+                                                type="date" 
+                                                value={formatToInputDate(en.startDate || en.activationDate)} 
+                                                onChange={(evt) => updateEnrollment(en.id, { startDate: evt.target.value, activationDate: evt.target.value })} 
+                                                className="border border-slate-200 rounded px-1.5 py-0.5 text-[10px] bg-white font-sans focus:border-indigo-500 outline-none w-[110px] text-slate-700 font-medium"
+                                              />
+                                              <span className="text-slate-400 text-xs">-</span>
+                                              <input 
+                                                type="date" 
+                                                value={formatToInputDate(en.endDate)} 
+                                                onChange={(evt) => updateEnrollment(en.id, { endDate: evt.target.value })} 
+                                                className="border border-slate-200 rounded px-1.5 py-0.5 text-[10px] bg-white font-sans focus:border-indigo-500 outline-none w-[110px] text-slate-700 font-medium"
+                                              />
+                                              <button 
+                                                onClick={() => setEditingEnrollIds(prev => ({...prev, [en.id]: false}))}
+                                                className="p-1 bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 rounded-lg transition shrink-0"
+                                                title="Completar edición"
+                                              >
+                                                <Check className="w-3 h-3" />
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <div className="flex items-center gap-2 group/date py-0.5">
+                                              <span className="font-semibold text-slate-700 text-xs font-mono">{startStr} - {endStr}</span>
+                                              <button 
+                                                onClick={() => setEditingEnrollIds(prev => ({...prev, [en.id]: true}))}
+                                                className="p-0.5 text-indigo-600 hover:bg-indigo-50 hover:text-indigo-800 rounded transition opacity-85 group-hover/date:opacity-100"
+                                                title="Editar fecha de inicio y fin"
+                                              >
+                                                <Edit2 className="w-3 h-3" />
+                                              </button>
+                                            </div>
+                                          )}
                                         </div>
                                       );
                                     })}
@@ -1507,7 +2264,23 @@ export function InstitucionDetail() {
                                   <span className="text-slate-400">-</span>
                                 )}
                               </td>
-                              <td className="px-4 py-3 text-xs font-bold text-slate-900 text-right">${sPending.toLocaleString()}</td>
+                              <td className="px-4 py-3 text-xs text-right align-top">
+                                <span className="font-extrabold text-slate-900 block">
+                                  ${sTotalUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[10px] font-bold text-indigo-600">USD</span>
+                                </span>
+                                {sPendingUSD !== sTotalUSD && sPendingUSD > 0 && (
+                                  <span className="block text-[10px] font-medium text-rose-700 mt-0.5 leading-none">
+                                    Saldo: ${sPendingUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                                  </span>
+                                )}
+                              </td>
+                              {isUserAdminOrSuperAdmin && (
+                                <td className="px-4 py-3 text-xs text-right align-top">
+                                  <span className="font-extrabold text-purple-700 block">
+                                    ${sTotalCostUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[10px] font-bold text-purple-500">USD</span>
+                                  </span>
+                                </td>
+                              )}
                             </tr>
                           );
                         })}
@@ -1979,7 +2752,7 @@ export function InstitucionDetail() {
                     <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Identificadores Principales</h3>
                   </div>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-sans">Nombre Legal de la Institución</label>
                       <input required type="text" value={generalForm.name} onChange={e => setGeneralForm({...generalForm, name: e.target.value})} className="w-full border border-slate-200 bg-white rounded-xl px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none hover:border-slate-300 transition-all font-medium text-slate-800 shadow-sm" />
@@ -1987,6 +2760,10 @@ export function InstitucionDetail() {
                     <div>
                       <label className="block text-[11px] font-bold text-indigo-600 uppercase tracking-wider mb-1.5 font-sans">Nombre Comercial</label>
                       <input type="text" value={generalForm.tradeName} onChange={e => setGeneralForm({...generalForm, tradeName: e.target.value})} className="w-full border border-indigo-100 bg-white rounded-xl px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none hover:border-indigo-200 transition-all font-semibold text-indigo-900 shadow-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-sans">Código Institución</label>
+                      <input type="text" value={generalForm.institutionCode} onChange={e => setGeneralForm({...generalForm, institutionCode: e.target.value})} className="w-full border border-slate-200 bg-white rounded-xl px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none hover:border-slate-300 transition-all font-medium text-slate-800 shadow-sm" placeholder="Código de la institución" />
                     </div>
                   </div>
 
@@ -2075,16 +2852,16 @@ export function InstitucionDetail() {
                     <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Comunicación & Catálogos</h3>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                    <div>
+                  <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                    <div className="md:col-span-2">
                       <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-sans">Teléfono Inst.</label>
                       <input type="tel" value={generalForm.phone || ''} onChange={e => setGeneralForm({...generalForm, phone: e.target.value})} className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono hover:border-slate-300 transition-all shadow-sm" />
                     </div>
-                    <div>
+                    <div className="md:col-span-2">
                       <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-sans">Correo Gral.</label>
                       <input type="email" value={generalForm.email || ''} onChange={e => setGeneralForm({...generalForm, email: e.target.value})} className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none hover:border-slate-300 transition-all shadow-sm" />
                     </div>
-                    <div>
+                    <div className="md:col-span-2">
                       <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-sans">Modalidad</label>
                       <select value={generalForm.modality || ''} onChange={e => setGeneralForm({...generalForm, modality: e.target.value})} className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer hover:border-slate-300 transition-all shadow-sm bg-white font-medium text-slate-700">
                         <option value="">Seleccionar...</option>
@@ -2093,7 +2870,7 @@ export function InstitucionDetail() {
                         ))}
                       </select>
                     </div>
-                    <div>
+                    <div className="md:col-span-3">
                       <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-sans font-medium">Tarifas (País)</label>
                       <select value={generalForm.tarifasId || ''} onChange={e => setGeneralForm({...generalForm, tarifasId: e.target.value})} className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer hover:border-slate-300 transition-all shadow-sm bg-white font-medium text-slate-700">
                         <option value="">Seleccionar...</option>
@@ -2102,7 +2879,7 @@ export function InstitucionDetail() {
                         ))}
                       </select>
                     </div>
-                    <div>
+                    <div className="md:col-span-3">
                       <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-sans font-medium">Proveedor Principal</label>
                       <select 
                         value={generalForm.mainProviderId || ''} 
@@ -2768,7 +3545,7 @@ export function InstitucionDetail() {
               const rSize = viewingDoc.fileSize || "1.4 MB";
               const rId = viewingDoc.id ? `ID-DOC-${viewingDoc.id}` : "REG-GENERIC-99";
               
-              const pdfUrl = viewingDoc.fileData || "data:text/html;charset=utf-8," + encodeURIComponent(`
+              const pdfUrl = activePdfUrl || "data:text/html;charset=utf-8," + encodeURIComponent(`
                 <!DOCTYPE html>
                 <html>
                   <head>
@@ -3007,12 +3784,66 @@ export function InstitucionDetail() {
               `);
 
               return (
-                <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner animate-in fade-in duration-300">
-                  <iframe
-                    src={pdfUrl}
-                    className="w-full h-full border-0"
-                    title={`PDF ${viewingDoc.name}`}
-                  />
+                <div className="w-full flex flex-col space-y-3 animate-in fade-in duration-300">
+                  {/* Barra de herramientas para asegurar que visualicen el PDF si el iframe se bloquea */}
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm text-xs">
+                    <div className="flex items-center space-x-2.5 text-left">
+                      <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-700">Previsualizador de PDF</p>
+                        <p className="text-[10px] text-slate-400">Si el visor no carga en tu dispositivo, haz clic en el botón de la derecha para abrirlo.</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      {(activePdfUrl || pdfUrl) && (
+                        <a 
+                          href={activePdfUrl || pdfUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-bold transition flex items-center space-x-1 border border-indigo-200"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                          <span>Pantalla Completa</span>
+                        </a>
+                      )}
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          const link = document.createElement('a');
+                          link.href = activePdfUrl || pdfUrl;
+                          link.download = rFileName;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[10px] font-bold transition flex items-center space-x-1 border border-slate-200"
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span>Descargar PDF</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Visor integrado confiable con etiqueta object y fallback iframe */}
+                  <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner relative">
+                    <object
+                      data={activePdfUrl || pdfUrl}
+                      type="application/pdf"
+                      className="w-full h-full border-0"
+                    >
+                      <iframe
+                        src={activePdfUrl || pdfUrl}
+                        className="w-full h-full border-0"
+                        title={`PDF ${rTitle}`}
+                      />
+                    </object>
+                  </div>
                 </div>
               );
             })() : (
@@ -3093,232 +3924,25 @@ export function InstitucionDetail() {
 
           {/* TAB 1: Dar de alta un pago */}
           {coursePaymentTab === 'register' && (
-            <form onSubmit={handleRegisterPayment} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Fecha de Pago</label>
-                  <input
-                    type="date"
-                    required
-                    value={regForm.date}
-                    onChange={(e) => setRegForm(prev => ({ ...prev, date: e.target.value }))}
-                    className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Concepto / Descripción</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej. Liquidación Colegiatura Semestral"
-                    value={regForm.description}
-                    onChange={(e) => setRegForm(prev => ({ ...prev, description: e.target.value }))}
-                    className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Moneda</label>
-                  <select
-                    value={regForm.currency}
-                    onChange={(e) => setRegForm(prev => ({ ...prev, currency: e.target.value }))}
-                    className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                  >
-                    <option value="MXN">Pesos Mexicanos (MXN)</option>
-                    <option value="USD">Dólares Americanos (USD)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Monto</label>
-                  <input
-                    type="number"
-                    step="any"
-                    required
-                    placeholder="Monto pagado"
-                    value={regForm.amount}
-                    onChange={(e) => setRegForm(prev => ({ ...prev, amount: e.target.value }))}
-                    className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                  />
-                </div>
-
-                {regForm.currency === 'MXN' && (
-                  <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Tipo de Cambio</label>
-                    <input
-                      type="number"
-                      step="any"
-                      required
-                      value={regForm.exchangeRate}
-                      onChange={(e) => setRegForm(prev => ({ ...prev, exchangeRate: e.target.value }))}
-                      className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                    />
-                  </div>
-                )}
-
-                {regForm.amount && regForm.currency === 'MXN' && (
-                  <div className="bg-indigo-50/60 rounded-xl p-3 border border-indigo-100 flex items-center justify-between">
-                    <div>
-                      <span className="block text-[10px] font-bold text-indigo-800 uppercase tracking-widest leading-none">Monto Final</span>
-                      <span className="text-slate-500 text-[9px] mt-0.5 block font-medium">Monto / Tipo de Cambio</span>
-                    </div>
-                    <span className="text-sm font-black text-indigo-900">
-                      ${(Number(regForm.amount) / (parseFloat(regForm.exchangeRate) || 1)).toLocaleString(undefined, { maximumFractionDigits: 2 })} USD
-                    </span>
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Forma de Pago</label>
-                  <select
-                    value={regForm.paymentMethod}
-                    onChange={(e) => setRegForm(prev => ({ ...prev, paymentMethod: e.target.value }))}
-                    className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                  >
-                    {catalogs['Métodos de Pago']?.map((m: any) => (
-                      <option key={m.id} value={m.name}>{m.name}</option>
-                    )) || (
-                      <>
-                        <option value="Transferencia">Transferencia</option>
-                        <option value="Tarjeta de Credito">Tarjeta de Crédito</option>
-                        <option value="Cheque">Cheque</option>
-                        <option value="Efectivo">Efectivo</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Cuenta de Pago</label>
-                  <select
-                    value={regForm.bankAccountId}
-                    onChange={(e) => setRegForm(prev => ({ ...prev, bankAccountId: e.target.value }))}
-                    className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                  >
-                    <option value="">No aplica / Sin especificar</option>
-                    {catalogs['Cuentas bancarias']?.map((b: any) => (
-                      <option key={b.id} value={b.name}>{b.name} {b.companyName ? `(${b.companyName})` : ''}</option>
-                    )) || (
-                      <>
-                        <option value="Banorte">Banorte</option>
-                        <option value="WellsFargo USA">WellsFargo USA</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-
-                <div className="col-span-1 md:col-span-2">
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider mb-1">Alumnos Asociados (Opcional - Selecciona uno o varios)</label>
-                  <div className="border border-slate-200 rounded-xl bg-slate-50/50 p-3 space-y-2">
-                    <div className="flex gap-2 items-center">
-                      <input
-                        type="text"
-                        placeholder="Buscar alumno..."
-                        className="flex-1 rounded-lg border-slate-200 bg-white text-xs px-2.5 py-1.5 focus:border-indigo-500 focus:ring-indigo-500 outline-none"
-                        value={regStudentSearch}
-                        onChange={(e) => setRegStudentSearch(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const filteredIds = instStudents
-                            .filter(s => `${s.name} ${s.lastName}`.toLowerCase().includes(regStudentSearch.toLowerCase()))
-                            .map(s => s.id.toString());
-                          setRegForm(prev => {
-                            const union = Array.from(new Set([...prev.studentIds, ...filteredIds]));
-                            return { ...prev, studentIds: union };
-                          });
-                        }}
-                        className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded-lg border-0 cursor-pointer"
-                      >
-                        Seleccionar filtrados
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRegForm(prev => ({ ...prev, studentIds: [] }))}
-                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold rounded-lg border-0 cursor-pointer"
-                      >
-                        Limpiar
-                      </button>
-                    </div>
-
-                    <div className="max-h-32 overflow-y-auto space-y-1 pr-1 border-t border-slate-200/50 pt-2">
-                      {instStudents.filter(s => `${s.name} ${s.lastName}`.toLowerCase().includes(regStudentSearch.toLowerCase())).length === 0 ? (
-                        <span className="text-[10px] text-slate-400 italic block py-1">No se encontraron alumnos</span>
-                      ) : (
-                        instStudents
-                          .filter(s => `${s.name} ${s.lastName}`.toLowerCase().includes(regStudentSearch.toLowerCase()))
-                          .map((s) => {
-                            const isChecked = regForm.studentIds.includes(s.id.toString());
-                            return (
-                              <label key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white border border-transparent hover:border-slate-200/50 cursor-pointer transition text-xs text-slate-705">
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={() => {
-                                    setRegForm(prev => {
-                                      const exists = prev.studentIds.includes(s.id.toString());
-                                      const nextIds = exists
-                                        ? prev.studentIds.filter(id => id !== s.id.toString())
-                                        : [...prev.studentIds, s.id.toString()];
-                                      return { ...prev, studentIds: nextIds };
-                                    });
-                                  }}
-                                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                                />
-                                <span className="font-semibold text-slate-700">{s.name} {s.lastName}</span>
-                                <span className="text-[9px] text-slate-400 font-mono ml-auto">({s.email || 'sin email'})</span>
-                              </label>
-                            );
-                          })
-                      )}
-                    </div>
-                    {regForm.studentIds.length > 0 && (
-                      <div className="text-[10px] font-semibold text-indigo-700 bg-indigo-50/50 px-2.5 py-1 rounded-lg inline-block">
-                        {regForm.studentIds.length} {regForm.studentIds.length === 1 ? 'alumno seleccionado' : 'alumnos seleccionados'}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">ID de Factura / Tax ID (Opcional)</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. FAC-99052"
-                    value={regForm.taxId}
-                    onChange={(e) => setRegForm(prev => ({ ...prev, taxId: e.target.value }))}
-                    className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsCoursePaymentModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-50 transition-all border-0"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-md transition-all border-0 cursor-pointer"
-                >
-                  Registrar Pago
-                </button>
-              </div>
-            </form>
+            <div className="mt-2">
+              <FinancialTransactionForm 
+                fixedInstitutionId={institution.id} 
+                initialType="income" 
+                onSuccess={() => { 
+                  setIsCoursePaymentModalOpen(false); 
+                }} 
+              />
+            </div>
           )}
 
           {/* TAB 2: Programar un pago */}
           {coursePaymentTab === 'schedule' && (() => {
             const activeMemb = catalogs['Membresías']?.find((m: any) => m.id === institution?.membershipId);
             const membUnitAmount = activeMemb ? Number(activeMemb.amount || 0) : 0;
+            const customMembPrice = institution?.membershipPrice ? parseFloat((institution.membershipPrice || "").replace(/[^0-9.-]+/g, "")) : null;
+            const finalMembUnitAmount = customMembPrice !== null && !isNaN(customMembPrice) ? customMembPrice : membUnitAmount;
             const membCurrency = activeMemb ? (activeMemb.currency || 'USD') : 'USD';
-            const totalStudents = instStudents.length;
-            const totalMembAmountValue = membUnitAmount * totalStudents;
+            const totalMembAmountValue = finalMembUnitAmount;
 
             return (
               <form onSubmit={handleSchedulePayments} className="space-y-4">
@@ -3354,11 +3978,11 @@ export function InstitucionDetail() {
                       <div className="grid grid-cols-3 gap-2 pt-1">
                         <div className="bg-white/80 p-2.5 rounded-xl border border-amber-200/50">
                           <p className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider">Costo Membresía</p>
-                          <p className="text-xs font-black text-slate-800 mt-1">{membUnitAmount > 0 ? `$${membUnitAmount.toLocaleString()} ${membCurrency}` : 'Sin costo'}</p>
+                          <p className="text-xs font-black text-slate-800 mt-1">{finalMembUnitAmount > 0 ? `$${finalMembUnitAmount.toLocaleString()} ${membCurrency}` : 'Sin costo'}</p>
                         </div>
                         <div className="bg-white/80 p-2.5 rounded-xl border border-amber-200/50">
-                          <p className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider">Alumnos Activos</p>
-                          <p className="text-xs font-black text-slate-800 mt-1">{totalStudents} {totalStudents === 1 ? 'Alumno' : 'Alumnos'}</p>
+                          <p className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider">Tipo Cargo</p>
+                          <p className="text-xs font-black text-slate-800 mt-1">Cargo Único</p>
                         </div>
                         <div className="bg-white/90 p-2.5 rounded-xl border border-indigo-100 bg-indigo-50/20">
                           <p className="text-[9px] text-indigo-900 font-black uppercase tracking-wider">Monto Total a Pagar</p>

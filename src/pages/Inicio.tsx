@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { 
   Clock, 
@@ -36,7 +36,8 @@ export function Inicio() {
     students, 
     institutions, 
     users, 
-    financialTransactions 
+    financialTransactions,
+    payments
   } = useAppContext();
 
   // Selected date indicator
@@ -124,10 +125,87 @@ export function Inicio() {
   const pendingFilteredTasks = filteredTasks.filter(t => t.status === "Pendiente");
   const completedFilteredTasks = filteredTasks.filter(t => t.status === "Completada");
 
-  // Dynamic values calculation
-  const totalIncomeMXN = financialTransactions
-    .filter(t => t.type === 'income')
-    .reduce((acc, t) => acc + (t.amountMXN || 0), 0);
+  const averageUsdRate = useMemo(() => {
+    const usdRates = (financialTransactions || [])
+      .map(t => {
+        if (t.exchangeRate && t.exchangeRate > 1) {
+          return t.exchangeRate;
+        }
+        if ((t.currency === 'USD' || t.originalCurrency === 'USD') && t.amount > 0 && t.amountMXN > t.amount) {
+          return t.amountMXN / t.amount;
+        }
+        return null;
+      })
+      .filter((r): r is number => r !== null && r > 1);
+
+    return usdRates.length > 0
+      ? usdRates.reduce((acc, val) => acc + val, 0) / usdRates.length
+      : 18.0;
+  }, [financialTransactions]);
+
+  const realIncomeTransactions = useMemo(() => {
+    return financialTransactions
+      .filter(tx => tx.type === 'income' && !(typeof tx.id === 'string' && tx.id.startsWith('tx-init-')))
+      .reduce((acc, tx) => {
+        const isOrigUSD = tx.originalCurrency === 'USD' || (tx.currency === 'USD' && !tx.originalCurrency);
+        const hasCustomRate = tx.exchangeRate !== undefined && tx.exchangeRate !== 1 && tx.exchangeRate !== 0;
+
+        const txAmountMXN = isOrigUSD 
+          ? (hasCustomRate 
+              ? (tx.amountMXN || (tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * tx.exchangeRate)
+              : ((tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * averageUsdRate))
+          : (tx.amountMXN || tx.amount);
+
+        return acc + txAmountMXN;
+      }, 0);
+  }, [financialTransactions, averageUsdRate]);
+
+  const realIncomeTransactionsUSD = useMemo(() => {
+    return financialTransactions
+      .filter(tx => tx.type === 'income' && !(typeof tx.id === 'string' && tx.id.startsWith('tx-init-')))
+      .reduce((acc, tx) => {
+        const isOrigUSD = tx.originalCurrency === 'USD' || (tx.currency === 'USD' && !tx.originalCurrency);
+        const hasCustomRate = tx.exchangeRate !== undefined && tx.exchangeRate !== 1 && tx.exchangeRate !== 0;
+
+        const txAmountMXN = isOrigUSD 
+          ? (hasCustomRate 
+              ? (tx.amountMXN || (tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * tx.exchangeRate)
+              : ((tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * averageUsdRate))
+          : (tx.amountMXN || tx.amount);
+
+        const txAmountUSD = isOrigUSD
+          ? (tx.originalAmount !== undefined ? tx.originalAmount : tx.amount)
+          : (hasCustomRate 
+              ? (txAmountMXN / tx.exchangeRate)
+              : (txAmountMXN / averageUsdRate));
+
+        return acc + txAmountUSD;
+      }, 0);
+  }, [financialTransactions, averageUsdRate]);
+
+  const realStudentPayments = (payments || [])
+    .reduce((acc, p) => acc + (p.finalAmount || p.amount || 0), 0);
+
+  const realStudentPaymentsUSD = (payments || [])
+    .reduce((acc, p) => acc + ((p.finalAmount || p.amount || 0) / (p.exchangeRate || averageUsdRate)), 0);
+
+  const totalIncomeMXN = realIncomeTransactions + realStudentPayments;
+  const totalIncomeUSD = realIncomeTransactionsUSD + realStudentPaymentsUSD;
+
+  const totalFinancialFlujoMXN = useMemo(() => {
+    return (financialTransactions || []).reduce((acc, tx) => {
+      const isOrigUSD = tx.originalCurrency === 'USD' || (tx.currency === 'USD' && !tx.originalCurrency);
+      const hasCustomRate = tx.exchangeRate !== undefined && tx.exchangeRate !== 1 && tx.exchangeRate !== 0;
+
+      const txAmountMXN = isOrigUSD 
+        ? (hasCustomRate 
+            ? (tx.amountMXN || (tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * tx.exchangeRate)
+            : ((tx.originalAmount !== undefined ? tx.originalAmount : tx.amount) * averageUsdRate))
+        : (tx.amountMXN || tx.amount);
+
+      return acc + (txAmountMXN || 0);
+    }, 0);
+  }, [financialTransactions, averageUsdRate]);
 
   const expiringInstitutionsList = institutions.filter(inst => {
     if (!inst.membershipExpiration) return false;
@@ -256,17 +334,20 @@ export function Inicio() {
           
           <div className="relative z-10 p-6 flex flex-col justify-between h-full w-full">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-450">Ingresos Totales (MXN)</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-450">Ingresos Totales</span>
               <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center font-bold shadow-sm shadow-emerald-500/10">
                 <DollarSign className="w-5 h-5" strokeWidth={2.5} />
               </div>
             </div>
-            <div className="mt-4 space-y-1">
-              <h4 className="text-2xl md:text-3xl font-black text-slate-800 font-mono tracking-tight leading-none">
-                ${totalIncomeMXN.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <div className="mt-2 space-y-1">
+              <h4 className="text-xl md:text-2xl font-black text-slate-800 font-mono tracking-tight leading-none">
+                ${totalIncomeMXN.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-xs text-slate-500 font-bold font-sans">MXN</span>
               </h4>
-              <div className="flex items-center text-[10px] font-bold text-emerald-600">
-                <TrendingUp className="w-3.5 h-3.5 mr-1" />
+              <p className="text-xs text-emerald-600 font-black font-mono leading-none">
+                ≈ ${totalIncomeUSD.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[9px] font-black font-sans uppercase">USD</span>
+              </p>
+              <div className="flex items-center text-[9px] font-bold text-slate-400 pt-1">
+                <TrendingUp className="w-3 h-3 mr-1 text-emerald-500" />
                 <span>Ver flujos de caja y ledger general</span>
               </div>
             </div>
@@ -874,7 +955,7 @@ export function Inicio() {
                 </div>
                 <div className="p-2.5 bg-slate-950/40 border border-slate-800 rounded-xl">
                   <span className="block font-black text-slate-350 font-mono">
-                    ${(financialTransactions.reduce((acc, t) => acc + (t.amountMXN || 0), 0) / 1000).toFixed(0)}k
+                    ${(totalFinancialFlujoMXN / 1000).toFixed(0)}k
                   </span>
                   <span className="block text-[9px] text-slate-500 uppercase tracking-wide font-semibold mt-0.5">MXN Flujo</span>
                 </div>
@@ -954,7 +1035,7 @@ export function Inicio() {
                 className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
               >
                 <option value="">Ninguna</option>
-                {institutions.map(inst => (
+                {[...institutions].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es')).map(inst => (
                   <option key={inst.id} value={inst.id.toString()}>{inst.name}</option>
                 ))}
               </select>

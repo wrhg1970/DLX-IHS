@@ -225,7 +225,7 @@ export function AlumnosDashboard() {
               className="w-full text-xs font-semibold border border-slate-200 rounded-lg p-2.5 bg-slate-50 hover:bg-slate-100/70 transition outline-none text-slate-700"
             >
               <option value="all">Todas las Instituciones (Global)</option>
-              {institutions.map(inst => (
+              {[...institutions].sort((a, b) => (a.commercialName || a.name || '').localeCompare(b.commercialName || b.name || '', 'es')).map(inst => (
                 <option key={inst.id} value={inst.id}>{inst.commercialName || inst.name}</option>
               ))}
             </select>

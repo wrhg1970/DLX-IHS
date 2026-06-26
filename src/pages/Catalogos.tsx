@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { List, Plus, Edit2, Trash2, X } from "lucide-react";
 import { useAppContext, CatalogTypes, CatalogItem } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
@@ -25,6 +25,17 @@ export function Catalogos() {
   const [formSwift, setFormSwift] = useState("");
   const [formAba, setFormAba] = useState("");
   const [formNotes, setFormNotes] = useState("");
+
+  useEffect(() => {
+    if (selectedCatalog === 'Cuentas bancarias') {
+      const isWF = formName.toLowerCase().includes('wellsfargo') ||
+                   formName.toLowerCase().includes('wells fargo') ||
+                   formName.toLowerCase().includes('wf');
+      if (isWF && formCurrency !== 'USD') {
+        setFormCurrency('USD');
+      }
+    }
+  }, [formName, selectedCatalog, formCurrency]);
 
   const catalogKeys: CatalogTypes[] = [
     'Tarifas Países', 
@@ -56,14 +67,14 @@ export function Catalogos() {
       setFormSwift(item.swift || "");
       setFormAba(item.aba || "");
       setFormNotes(item.notes || "");
-      setFormProviderIds(item.providerIds || []);
+      setFormProviderIds((item.providerIds || []).map(Number));
     } else {
       setEditingItem(null);
       setFormName("");
       setFormDescription("");
       setFormType(selectedCatalog === 'Categorías' ? 'income' : 'anual');
       setFormAmount("");
-      setFormCurrency("");
+      setFormCurrency(selectedCatalog === 'Cuentas bancarias' ? 'MXN' : "");
       setFormParentId("");
       setFormCompanyName("");
       setFormAccountNumber("");
@@ -120,6 +131,7 @@ export function Catalogos() {
       data.swift = formSwift;
       data.aba = formAba;
       data.notes = formNotes;
+      data.currency = formCurrency || 'MXN';
     }
 
     if (selectedCatalog === 'Tipo de Producto') {
@@ -236,6 +248,16 @@ export function Catalogos() {
                             <span className="text-slate-700 font-bold">{item.companyName}</span>
                           </div>
                         )}
+                        <div className="flex items-start text-xs">
+                          <span className="font-bold text-slate-400 w-20 shrink-0">Moneda:</span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-black tracking-wide border ${
+                            item.currency === 'USD' 
+                              ? 'bg-amber-100 text-amber-800 border-amber-200' 
+                              : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          }`}>
+                            {item.currency || 'MXN'}
+                          </span>
+                        </div>
                         {item.accountNumber && (
                           <div className="flex items-start text-xs">
                             <span className="font-bold text-slate-400 w-20 shrink-0">Cuenta:</span>
@@ -279,9 +301,9 @@ export function Catalogos() {
                               </span>
                             ) : (
                               item.providerIds.map(pid => {
-                                const prov = providers?.find(p => p.id === pid);
+                                const prov = providers?.find(p => String(p.id) === String(pid));
                                 return (
-                                  <span key={pid} className="bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-md px-1.5 py-0.5 text-[10px] uppercase font-bold">
+                                  <span key={String(pid)} className="bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-md px-1.5 py-0.5 text-[10px] uppercase font-bold">
                                     {prov ? prov.commercialName : `ID: ${pid}`}
                                   </span>
                                 );
@@ -357,6 +379,18 @@ export function Catalogos() {
                         className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
                         placeholder="Nombre de la Empresa o Razón Social"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Moneda <span className="text-rose-500">*</span></label>
+                      <select 
+                        required
+                        value={formCurrency}
+                        onChange={(e) => setFormCurrency(e.target.value)}
+                        className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white font-bold"
+                      >
+                        <option value="MXN">MXN - Peso Mexicano</option>
+                        <option value="USD">USD - Dólar Estadounidense</option>
+                      </select>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Cuenta <span className="text-rose-500">*</span></label>
@@ -496,7 +530,7 @@ export function Catalogos() {
                     <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1.5 bg-slate-50/50">
                       {providers && providers.length > 0 ? (
                         providers.map((p) => {
-                          const isChecked = formProviderIds.includes(p.id);
+                          const isChecked = formProviderIds.map(Number).includes(Number(p.id));
                           return (
                             <label 
                               key={p.id} 
@@ -507,9 +541,9 @@ export function Catalogos() {
                                 checked={isChecked}
                                 onChange={(e) => {
                                   if (e.target.checked) {
-                                    setFormProviderIds([...formProviderIds, p.id]);
+                                    setFormProviderIds([...formProviderIds.map(Number), Number(p.id)]);
                                   } else {
-                                    setFormProviderIds(formProviderIds.filter(id => id !== p.id));
+                                    setFormProviderIds(formProviderIds.map(Number).filter(id => id !== Number(p.id)));
                                   }
                                 }}
                                 className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 w-4 h-4 cursor-pointer"

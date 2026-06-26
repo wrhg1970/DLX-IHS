@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import multer from 'multer';
 import { GoogleGenAI, Type } from '@google/genai';
 import path from 'path';
+import * as XLSX from 'xlsx';
 import nodemailer from 'nodemailer';
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -240,31 +240,97 @@ async function startServer() {
         }
       });
 
-      const prompt = `You are an expert financial data extractor and OCR parser. I am providing you with a bank statement file (PDF, CSV, Excel, or image).
-Extract all the financial transactions present in this document. 
+      const fileName = req.file.originalname || '';
+      const mime = req.file.mimetype || '';
+      
+      // Resolve robust mimeType to bypass generic stream issues in some operating systems & environments
+      let resolvedMime = mime;
+      const lowerName = fileName.toLowerCase();
+      if (lowerName.endsWith('.pdf')) {
+        resolvedMime = 'application/pdf';
+      } else if (lowerName.endsWith('.png')) {
+        resolvedMime = 'image/png';
+      } else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) {
+        resolvedMime = 'image/jpeg';
+      } else if (lowerName.endsWith('.csv')) {
+        resolvedMime = 'text/csv';
+      } else if (lowerName.endsWith('.xlsx')) {
+        resolvedMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      } else if (lowerName.endsWith('.xls')) {
+        resolvedMime = 'application/vnd.ms-excel';
+      }
 
-For each transaction, determine:
-1. date (YYYY-MM-DD format, e.g. "2024-03-15")
-2. description (clean up the text, preserving the vendor or description name, and convert to uppercase)
-3. amount (absolute positive numeric value of the transaction, e.g. 1500.50, never negative)
-4. type ('income' or 'expense' depending on whether it is an deposit/credit or withdrawal/charge/debit)
+      const isSpreadsheet = 
+        lowerName.endsWith('.xlsx') || 
+        lowerName.endsWith('.xls') || 
+        lowerName.endsWith('.csv') || 
+        resolvedMime.includes('sheet') || 
+        resolvedMime.includes('excel') || 
+        resolvedMime.includes('csv');
 
-Important guidelines:
-- If a transaction is an intake, deposit, credit, transfer in, yield/interest, set type as 'income'.
-- If a transaction is a charge, payment, transfer out, withdraw, fee, tax, set type as 'expense'.
-- Ensure amount is always a positive number (absolute value).`;
+      let parsedTextContent = '';
+
+      if (isSpreadsheet) {
+        try {
+          const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const csvText = XLSX.utils.sheet_to_csv(worksheet);
+          parsedTextContent = `Filename: ${fileName}\nSheet: ${firstSheetName || 'Default'}\n\nCSV Content:\n${csvText}`;
+        } catch (excelErr: any) {
+          console.error("XLSX library failed parsing, falling back to basic text encoding:", excelErr);
+          parsedTextContent = req.file.buffer.toString('utf-8');
+        }
+      }
+
+      // Streamlined prompt addressing real-world bank statements focusing on direct column mappings (Mexican, European, US banks like Banorte, BBVA, Citibanamex, etc.)
+      const prompt = `You are an elite financial ledger audit agent and expert OCR document extractor.
+I am providing you with a bank statement PDF. Your goal is to extract ALL individual granular financial transactions from the ledger tables starting on Page 2 and continuing to Page 3 and Page 4, and return them as a strictly structured list of objects.
+
+Follow these rules for perfect extraction accuracy:
+
+1. DATE PARSING & CORRECTION (CRITICAL):
+   - Dates are written in the format "DD-MMM-YY" (e.g., "02-ENE-26", "05-ENE-26", "17-ENE-26").
+   - Due to tight layout spacing in tables, dates often get merged/concatenated with following transaction IDs or descriptions (e.g. "05-ENE-2608590421" is date "05-ENE-26" and description/ID starts with "08590421...").
+   - You MUST identify the "DD-MMM-YY" boundary pattern and parse it cleanly into "YYYY-MM-DD" format.
+     * Translate the Spanish 3-letter month abbreviations:
+       "ENE" -> "-01-", "FEB" -> "-02-", "MAR" -> "-03-", "ABR" -> "-04-",
+       "MAY" -> "-05-", "JUN" -> "-06-", "JUL" -> "-07-", "AGO" -> "-08-",
+       "SEP" -> "-09-", "OCT" -> "-10-", "NOV" -> "-11-", "DIC" -> "-12-".
+     * E.g. "05-ENE-26" converts to "2026-01-05".
+   - Use the statement period's year (2026) for transactions listed in Enero.
+
+2. TRANSACTION DESCRIPTION CLEANUP:
+   - Descriptions often split across multiple wrapped lines. Merge sequential lines belonging to the same transaction row.
+   - Keep key names, student names, vendor names, reference numbers (e.g. "fact 272" or "parcialidad Alexa Nunez Jimenez"), SPEI codes, and other details.
+   - Transcribe descriptions in Upper Case.
+
+3. AMOUNT & TYPE IDENTIFICATION:
+   - Read the transaction columns. The document has columns for Deposits ("MONTO DEL DEPOSITO") and Withdrawals/Fees ("MONTO DEL RETIRO").
+   - Extract the active amount for each row as a positive float number.
+   - Set the type of the transaction:
+     * If the amount is found in the Deposit column (or represents a credit/deposit/abono/SPEI Recibido), set "type" to "income".
+     * If the amount is found in the Withdrawal column (or represents a withdrawal/payment/fee/cargo/retiro), set "type" to "expense".
+
+4. STRICT FILTERING:
+   - Exclude summary headers, initial balance rows ("SALDO ANTERIOR" represents starting state, do not extract it as a transaction item), totals, summary pages, or page footers.
+   - Extract only the granular individual transactions. Do not invent or skip transactions.`;
+
+      const parts: any[] = [{ text: prompt }];
+      if (parsedTextContent) {
+        parts.push({ text: `Format: CSV Spreadsheet Table\nProcessed Content:\n${parsedTextContent}` });
+      } else {
+        parts.push({
+          inlineData: {
+            data: req.file.buffer.toString('base64'),
+            mimeType: resolvedMime || 'application/pdf',
+          }
+        });
+      }
 
       const response = await ai.models.generateContent({
         model: 'gemini-3.5-flash',
-        contents: [
-          prompt,
-          {
-            inlineData: {
-              data: req.file.buffer.toString('base64'),
-              mimeType: req.file.mimetype || 'application/pdf',
-            }
-          }
-        ],
+        contents: { parts },
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -278,7 +344,7 @@ Important guidelines:
                 },
                 description: {
                   type: Type.STRING,
-                  description: "Name of the entity, vendor, or description/concept"
+                  description: "Name of the entity, vendor, or description/concept in UPPERCASE"
                 },
                 amount: {
                   type: Type.NUMBER,
@@ -286,7 +352,7 @@ Important guidelines:
                 },
                 type: {
                   type: Type.STRING,
-                  description: "Must be 'income' if it's a deposit/credit, or 'expense' if it's a payment/withdrawal/charge"
+                  description: "Must be 'income' if it's a deposit/credit/receiving, or 'expense' if it's a payment/withdrawal/charge/sent"
                 }
               },
               required: ["date", "description", "amount", "type"]
@@ -310,14 +376,15 @@ Important guidelines:
       }
       
       res.json(data);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error parsing statement:", error);
-      res.status(500).json({ error: 'Failed to process document' });
+      res.status(500).json({ error: error.message || String(error), details: error.stack || "" });
     }
   });
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

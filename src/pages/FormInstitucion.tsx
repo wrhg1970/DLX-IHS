@@ -21,6 +21,7 @@ export function FormInstitucion() {
   // Form State
   const [name, setName] = useState("");
   const [tradeName, setTradeName] = useState("");
+  const [institutionCode, setInstitutionCode] = useState("");
   const [country, setCountry] = useState("");
   const [contact, setContact] = useState("");
   const [contactPhone, setContactPhone] = useState("");
@@ -82,6 +83,7 @@ export function FormInstitucion() {
     const newInstId = addInstitution({
       name: name || "Nueva Institución",
       tradeName: tradeName || undefined,
+      institutionCode: institutionCode || undefined,
       country: country || "Desconocido",
       contact: contact || "Pendiente",
       contactEmail: contactEmail || undefined,
@@ -238,7 +240,7 @@ export function FormInstitucion() {
           
           {activeTab === "Información General" && (
             <div className="max-w-3xl space-y-6">
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Nombre Legal de la Institución <span className="text-rose-500">*</span></label>
                   <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" required placeholder="Ej. Universidad Tecnológica de México" />
@@ -246,6 +248,10 @@ export function FormInstitucion() {
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Nombre Comercial</label>
                   <input type="text" value={tradeName} onChange={e => setTradeName(e.target.value)} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Nombre comercial o acrónimo" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Código Institución</label>
+                  <input type="text" value={institutionCode} onChange={e => setInstitutionCode(e.target.value)} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Opcional - Código único" />
                 </div>
               </div>
               

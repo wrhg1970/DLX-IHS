@@ -59,9 +59,9 @@ export function InstitucionesDashboard() {
     const instStudentIds = instStudents.map(s => s.id);
     const instContacts = contacts.filter(c => c.institutionId === instId);
 
-    // Ingresos Totales (Vendido)
+    // Ingresos Totales (Vendido) - treating class prices in USD converted to MXN
     const instEnrollments = enrollments.filter(e => instStudentIds.includes(e.studentId));
-    const totalVendido = instEnrollments.reduce((sum, e) => {
+    const totalVendidoUSD = instEnrollments.reduce((sum, e) => {
       let cp = e.price;
       if (cp === undefined || cp === null) {
         const cl = classes.find(c => c.id === e.classId);
@@ -90,8 +90,21 @@ export function InstitucionesDashboard() {
       }
       return sum + (cp || 0);
     }, 0);
+    const totalVendidoMXN = totalVendidoUSD * 18.5;
 
-    // Ingresos Recibidos (Pagado)
+    // Membership in USD converted to MXN
+    const inst = institutions.find(i => i.id === instId);
+    const activeMemb = catalogs['Membresías']?.find((m: any) => m.id === inst?.membershipId);
+    const membUnitAmount = activeMemb ? Number(activeMemb.amount || 0) : 0;
+    const customMembPrice = inst?.membershipPrice ? parseFloat((inst.membershipPrice || "").replace(/[^0-9.-]+/g, "")) : null;
+    const finalMembUnitAmount = customMembPrice !== null && !isNaN(customMembPrice) ? customMembPrice : membUnitAmount;
+    const totalMembUSD = finalMembUnitAmount;
+    const totalMembMXN = totalMembUSD * 18.5;
+
+    // Combined Projected Ingresos in MXN
+    const totalVendido = totalVendidoMXN + totalMembMXN;
+
+    // Ingresos Recibidos (Pagado) - always in MXN
     const instPayments = financialTransactions.filter(p => 
       (p.institutionId === instId || (p.studentId && instStudentIds.includes(p.studentId))) && 
       p.type === 'income' && 
@@ -99,8 +112,8 @@ export function InstitucionesDashboard() {
     );
     const totalPagado = instPayments.reduce((sum, p) => sum + p.amountMXN, 0);
 
-    // Costo Clases (Cargos)
-    const totalCost = instEnrollments.reduce((sum, e) => {
+    // Costo Clases to providers (USD converted to MXN)
+    const totalCostUSD = instEnrollments.reduce((sum, e) => {
       const cl = classes.find(c => c.id === e.classId);
       if (!cl) return sum;
       const cType = cl.creditType;
@@ -110,6 +123,7 @@ export function InstitucionesDashboard() {
       else if (cType === 'Medio Crédito AP') cost = 175;
       return sum + cost;
     }, 0);
+    const totalCost = totalCostUSD * 18.5;
 
     const instExpenses = financialTransactions.filter(p => p.studentId && instStudentIds.includes(p.studentId) && p.type === 'expense');
     const egresosPagados = instExpenses.reduce((sum, p) => sum + p.amountMXN, 0);

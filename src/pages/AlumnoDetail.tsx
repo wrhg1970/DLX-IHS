@@ -27,9 +27,10 @@ import {
   DollarSign,
   Bell,
   Search,
+  Users,
 } from "lucide-react";
 import React, { useState, useRef } from "react";
-import { useAppContext, resolveCreditPrices } from "../context/AppContext";
+import { useAppContext, resolveCreditPrices, generateUniqueId } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
 
@@ -56,6 +57,7 @@ export function AlumnoDetail() {
     providerProductServices,
     addFinancialTransaction,
     updateFinancialTransaction,
+    users,
   } = useAppContext();
 
   const studentRaw = students.find((s) => s.id === Number(id));
@@ -177,7 +179,7 @@ export function AlumnoDetail() {
         description: regForm.description,
         amount: amt,
         currency: regForm.currency as any,
-        exchangeRate: regForm.currency === 'USD' ? 1 : rate,
+        exchangeRate: rate,
         amountMXN: amtMxn,
         finalAmount: finAmt,
         status: 'Pagado',
@@ -188,7 +190,9 @@ export function AlumnoDetail() {
         institutionId: student.institutionId || undefined,
         studentId: stIdStr ? Number(stIdStr) : undefined,
         taxId: regForm.taxId,
-        agentId: currentUser?.id,
+        agentId: student.agentId || currentUser?.id,
+        originalAmount: amt,
+        originalCurrency: regForm.currency as any,
       });
     });
 
@@ -237,7 +241,7 @@ export function AlumnoDetail() {
           description: `${schForm.description} ${i}/${num}`,
           amount: baseAmt,
           currency: schForm.currency as any,
-          exchangeRate: schForm.currency === 'USD' ? 1 : rate,
+          exchangeRate: rate,
           amountMXN: amtMxn,
           finalAmount: finAmt,
           status: 'Programado',
@@ -247,7 +251,9 @@ export function AlumnoDetail() {
           bankAccountId: schForm.bankAccountId,
           institutionId: student.institutionId || undefined,
           studentId: stIdStr ? Number(stIdStr) : undefined,
-          agentId: currentUser?.id,
+          agentId: student.agentId || currentUser?.id,
+          originalAmount: baseAmt,
+          originalCurrency: schForm.currency as any,
         });
       }
     });
@@ -285,13 +291,15 @@ export function AlumnoDetail() {
       date: confirmForm.date,
       amount: amt,
       currency: confirmForm.currency as any,
-      exchangeRate: confirmForm.currency === 'USD' ? 1 : rate,
+      exchangeRate: rate,
       amountMXN: amtMxn,
       finalAmount: finAmt,
       paymentMethod: confirmForm.paymentMethod,
       bankAccountId: confirmForm.bankAccountId,
       description: confirmForm.description,
       taxId: confirmForm.taxId,
+      originalAmount: amt,
+      originalCurrency: confirmForm.currency as any,
     });
 
     setConfirmingPayment(null);
@@ -304,6 +312,7 @@ export function AlumnoDetail() {
   const [timelineSortOrder, setTimelineSortOrder] = useState<'desc' | 'asc'>('desc');
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
+  const [enrollModalType, setEnrollModalType] = useState<"Academic" | "Service">("Academic");
   const [editingPayment, setEditingPayment] = useState<any>(null);
   const [paymentToDelete, setPaymentToDelete] = useState<string | null>(null);
   const [editingEnrollment, setEditingEnrollment] = useState<any>(null);
@@ -329,6 +338,16 @@ export function AlumnoDetail() {
     status: "Active" as "Active" | "Completed" | "On hold" | "Withdrawn",
     price: 0,
     notes: "",
+    curp: "",
+    lugar: "Escuela" as "Escuela" | "Casa",
+    resultadoUrl: "",
+    resultadoFileName: "",
+    email: "",
+    birthDate: "",
+    usuario: "",
+    contrasena: "",
+    area: "",
+    destino: "",
   });
 
   const [newActivityText, setNewActivityText] = useState("");
@@ -341,6 +360,34 @@ export function AlumnoDetail() {
   const [editingDoc, setEditingDoc] = useState<any>(null);
   const [editingDocName, setEditingDocName] = useState("");
   const [viewingDoc, setViewingDoc] = useState<any>(null);
+  const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (viewingDoc?.fileData?.startsWith('data:application/pdf')) {
+      try {
+        const parts = viewingDoc.fileData.split(',');
+        const byteString = atob(parts[1]);
+        const arrayBuffer = new ArrayBuffer(byteString.length);
+        const uint8Array = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < byteString.length; i++) {
+          uint8Array[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        setActivePdfUrl(url);
+        
+        return () => {
+          URL.revokeObjectURL(url);
+        };
+      } catch (e) {
+        console.error("Error creating student PDF blob URL:", e);
+        setActivePdfUrl(viewingDoc.fileData);
+      }
+    } else {
+      setActivePdfUrl(null);
+    }
+  }, [viewingDoc]);
+
   const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -388,7 +435,7 @@ export function AlumnoDetail() {
       updatedExtras = [
         ...currentExtras,
         {
-          id: Date.now().toString(),
+          id: generateUniqueId().toString(),
           name: extraForm.name,
           cost: Number(extraForm.cost) || 0,
           currency: extraForm.currency,
@@ -455,22 +502,68 @@ export function AlumnoDetail() {
 
   // Calculations
   const studentEnrollments = enrollments.filter(
-    (e) => e.studentId === student.id,
+    (e) => Number(e.studentId) === Number(student.id),
   );
+
+  const isExtraServiceClass = (name: string) => {
+    if (!name) return false;
+    return (
+      name.startsWith("Servicio Extra -") ||
+      ["certificación de inglés", "certificación ingles", "university admission", "centro de idiomas digital", "schmoop", "iivvo"].includes(name.trim().toLowerCase())
+    );
+  };
+
+  const getServiceTypeFromClassName = (name: string) => {
+    if (!name) return "";
+    const n = name.trim().toLowerCase();
+    if (n.includes("centro de idiomas digital") || n === "centro_idiomas_digital") return "centro_idiomas_digital";
+    if (n.includes("schmoop") || n === "schmoop") return "schmoop";
+    if (n.includes("university admission") || n === "university_admission") return "university_admission";
+    if (n.includes("certificación de inglés") || n.includes("certificación ingles") || n === "certificacion_ingles") return "certificacion_ingles";
+    if (n.includes("iivvo") || n === "iivvo") return "iivvo";
+    return "";
+  };
+
+  const regularEnrollments = studentEnrollments.filter((env) => {
+    const c = classes.find((cls) => cls.id === env.classId);
+    return c ? !isExtraServiceClass(c.name) : true;
+  });
+
+  const extraServiceEnrollments = studentEnrollments.filter((env) => {
+    const c = classes.find((cls) => cls.id === env.classId);
+    return c ? isExtraServiceClass(c.name) : false;
+  });
+
   const enrolledClasses = studentEnrollments
-    .map((e) => classes.find((c) => c.id === e.classId))
+    .map((e) => classes.find((c) => Number(c.id) === Number(e.classId)))
     .filter(Boolean);
 
-  const totalCredits = enrolledClasses.reduce(
-    (sum, c) => {
-      let val = 0;
-      if (c?.creditType === 'Medio Crédito' || c?.creditType === 'Medio Crédito AP') val = 0.5;
-      else if (c?.creditType === 'Crédito completo' || c?.creditType === 'Crédito completo AP') val = 1.0;
-      else val = Number(c?.credits) || 0;
-      return sum + val;
-    },
-    0,
-  );
+  let standardCredits = 0;
+  let apCredits = 0;
+
+  enrolledClasses.forEach((cl) => {
+    if (!cl) return;
+    const typeStr = (cl.creditType || "").toLowerCase().trim();
+    const isAp = typeStr.includes("ap");
+    
+    let val = 0;
+    if (typeStr.includes("medio") || typeStr.includes("half")) {
+      val = 0.5;
+    } else if (typeStr.includes("completo") || typeStr.includes("full") || typeStr === "crédito" || typeStr === "credito") {
+      val = 1.0;
+    } else {
+      const parsedNum = parseFloat(String(cl.credits || ""));
+      val = !isNaN(parsedNum) ? parsedNum : 1.0;
+    }
+
+    if (isAp) {
+      apCredits += val;
+    } else {
+      standardCredits += val;
+    }
+  });
+
+  const totalCredits = standardCredits + apCredits;
   const extraServicesTotal = (student.extraServices || []).reduce(
     (sum, ex) => sum + (ex.cost || 0),
     0,
@@ -479,7 +572,7 @@ export function AlumnoDetail() {
     studentEnrollments.reduce((sum, e) => {
       let cp = e.price;
       if (cp === undefined || cp === null) {
-        const cl = classes.find((c) => c.id === e.classId);
+        const cl = classes.find((c) => Number(c.id) === Number(e.classId));
         if (cl) {
           const cType = cl.creditType;
           let valStr = "";
@@ -622,6 +715,16 @@ export function AlumnoDetail() {
       status: enrollForm.status,
       price: Number(enrollForm.price),
       notes: enrollForm.notes,
+      curp: enrollForm.curp,
+      lugar: enrollForm.lugar,
+      resultadoUrl: enrollForm.resultadoUrl,
+      resultadoFileName: enrollForm.resultadoFileName,
+      email: enrollForm.email,
+      birthDate: enrollForm.birthDate,
+      usuario: enrollForm.usuario,
+      contrasena: enrollForm.contrasena,
+      area: enrollForm.area,
+      destino: enrollForm.destino,
     };
 
     if (editingEnrollment) {
@@ -674,30 +777,91 @@ export function AlumnoDetail() {
       status: "Active",
       price: 0,
       notes: "",
+      curp: "",
+      lugar: "Escuela",
+      resultadoUrl: "",
+      resultadoFileName: "",
+      email: "",
+      birthDate: "",
+      usuario: "",
+      contrasena: "",
+      area: "",
+      destino: "",
     });
     setEditingEnrollment(null);
+  };
+
+  const formatToInputDate = (dateStr: string | undefined | null): string => {
+    if (!dateStr) return "";
+    const trimmed = dateStr.trim();
+    if (!trimmed) return "";
+
+    // If already in YYYY-MM-DD format, return it
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+
+    // Handle DD/MM/YYYY or DD-MM-YYYY
+    const slashMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (slashMatch) {
+      const [_, day, month, year] = slashMatch;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+
+    // Handle YYYY/MM/DD
+    const yyyySlashMatch = trimmed.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+    if (yyyySlashMatch) {
+      const [_, year, month, day] = yyyySlashMatch;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+
+    // Try standard Date parsing as fallback
+    try {
+      const parsed = new Date(trimmed);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString().split('T')[0];
+      }
+    } catch (e) {
+      // Ignore error
+    }
+
+    return "";
   };
 
   const handleOpenEnrollForEdit = (env: any) => {
     const classItem = classes.find((c) => c.id === env.classId);
     const resolvedProviderId = env.providerId || classItem?.providerId || "";
 
+    const isService = classItem ? isExtraServiceClass(classItem.name) : false;
+    setEnrollModalType(isService ? "Service" : "Academic");
+
     setEditingEnrollment(env);
     setEnrollForm({
       providerId: String(resolvedProviderId),
       classId: env.classId.toString(),
-      enrollmentDate: env.enrollmentDate || "",
-      activationDate: env.activationDate || env.startDate || "",
-      endDate: env.endDate || "",
+      enrollmentDate: formatToInputDate(env.enrollmentDate),
+      activationDate: formatToInputDate(env.activationDate || env.startDate),
+      endDate: formatToInputDate(env.endDate),
       status: env.status || "Active",
       price: env.price || 0,
       notes: env.notes || "",
+      curp: env.curp || "",
+      lugar: env.lugar || "Escuela",
+      resultadoUrl: env.resultadoUrl || "",
+      resultadoFileName: env.resultadoFileName || "",
+      email: env.email || "",
+      birthDate: env.birthDate || "",
+      usuario: env.usuario || "",
+      contrasena: env.contrasena || "",
+      area: env.area || "",
+      destino: env.destino || "",
     });
     setIsEnrollModalOpen(true);
   };
 
   const handleOpenEnrollForCreate = () => {
     setEditingEnrollment(null);
+    setEnrollModalType("Academic");
     const defaultProvId = institution?.mainProviderId ? institution.mainProviderId.toString() : "";
     setEnrollForm({
       providerId: defaultProvId,
@@ -708,6 +872,42 @@ export function AlumnoDetail() {
       status: "Active",
       price: 0,
       notes: "",
+      curp: "",
+      lugar: "Escuela",
+      resultadoUrl: "",
+      resultadoFileName: "",
+      email: "",
+      birthDate: "",
+      usuario: "",
+      contrasena: "",
+      area: "",
+      destino: "",
+    });
+    setIsEnrollModalOpen(true);
+  };
+
+  const handleOpenServiceEnrollForCreate = () => {
+    setEditingEnrollment(null);
+    setEnrollModalType("Service");
+    setEnrollForm({
+      providerId: "",
+      classId: "",
+      enrollmentDate: "",
+      activationDate: "",
+      endDate: "",
+      status: "Active",
+      price: 0,
+      notes: "",
+      curp: "",
+      lugar: "Escuela",
+      resultadoUrl: "",
+      resultadoFileName: "",
+      email: "",
+      birthDate: "",
+      usuario: "",
+      contrasena: "",
+      area: "",
+      destino: "",
     });
     setIsEnrollModalOpen(true);
   };
@@ -748,7 +948,7 @@ export function AlumnoDetail() {
 
   // Ensure active tab is valid
   React.useEffect(() => {
-    if (activeTab === "Pagos" && !isHomeschool) {
+    if ((activeTab === "Pagos" || activeTab === "Timeline Financiero") && !isHomeschool) {
       setActiveTab("Datos Generales");
     }
   }, [activeTab, isHomeschool]);
@@ -756,7 +956,7 @@ export function AlumnoDetail() {
   const mainTabs = [
     { name: "Datos Generales", icon: User },
     { name: "Historial Académico", icon: BookOpen },
-    { name: "Timeline Financiero", icon: Calendar },
+    ...(isHomeschool ? [{ name: "Timeline Financiero", icon: Calendar }] : []),
     ...(isHomeschool ? [{ name: "Pagos", icon: CreditCard }] : []),
     { name: "Documentos", icon: FileText },
     { name: "Bitácora", icon: ClipboardList },
@@ -870,12 +1070,17 @@ export function AlumnoDetail() {
               </>
             )}
             <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex items-center space-x-3">
-              <div className="w-8 h-8 bg-indigo-50 text-indigo-650 text-indigo-600 rounded-lg flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center shrink-0">
                 <GraduationCap className="w-4 h-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest truncate">Créditos</p>
-                <p className="text-sm font-bold text-slate-900 tracking-tight">{totalCredits} <span className="text-[10px] font-medium text-slate-400">CR</span></p>
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest truncate">Créditos Totales</p>
+                <p className="text-sm font-bold text-slate-900 tracking-tight">
+                  {totalCredits} <span className="text-[10px] font-medium text-slate-400">CR</span>
+                </p>
+                <p className="text-[9px] text-slate-500 font-bold mt-0.5 whitespace-nowrap">
+                  Créditos: <span className="text-indigo-650 font-mono font-black">{standardCredits}</span> | AP Créditos: <span className="text-indigo-650 font-mono font-black">{apCredits}</span>
+                </p>
               </div>
             </div>
           </div>
@@ -1062,6 +1267,22 @@ export function AlumnoDetail() {
                         </p>
                       </div>
                     </div>
+                    {/* Agente para Homeschool */}
+                    {student.agentId && (
+                      <div className="flex space-x-4 animate-in fade-in duration-200">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0 border border-indigo-200 text-indigo-600">
+                          <Users className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
+                            Agente de Comisión
+                          </p>
+                          <p className="text-sm font-bold text-indigo-650 text-indigo-600">
+                            {users.find(u => u.id === student.agentId)?.name || `Agente #${student.agentId}`}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {/* Año Escolar */}
                     <div className="flex space-x-4">
                       <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center shrink-0 border border-amber-200 text-amber-600">
@@ -2129,7 +2350,7 @@ export function AlumnoDetail() {
                 )}
               </div>
 
-              {studentEnrollments.length > 0 ? (
+              {regularEnrollments.length > 0 ? (
                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                   <table className="w-full text-left table-auto">
                     <thead className="bg-slate-50 border-b border-slate-200">
@@ -2155,7 +2376,7 @@ export function AlumnoDetail() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {studentEnrollments.map((env) => {
+                      {regularEnrollments.map((env) => {
                         const c = classes.find((cls) => cls.id === env.classId);
                         if (!c) return null;
                         const provId = env.providerId || c.providerId;
@@ -2285,125 +2506,227 @@ export function AlumnoDetail() {
                 </div>
               )}
 
-              {/* SERVICIOS EXTRAS SECTION */}
+              {/* SERVICIOS DE PLATAFORMAS Y CERTIFICACIONES EXTERNAS */}
               <div className="mt-12 pt-8 border-t border-slate-200">
-                <div className="flex justify-between items-center mb-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                   <div>
                     <h3 className="text-lg font-bold text-slate-900">
-                      Servicios Extras
+                      Servicios de Plataformas y Certificaciones Externas
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Servicios de valor agregado asignados al estudiante
-                      (seguros adicionales, tutorías especiales, transportación,
-                      etc.)
+                      Licencias de plataformas educativas, preparación, admisiones universitarias y certificaciones.
                     </p>
                   </div>
-                  <button
-                    onClick={() => {
-                      setEditingExtraId(null);
-                      setExtraForm({
-                        name: "",
-                        cost: "",
-                        currency: "USD",
-                        notes: "",
-                      });
-                      setIsExtraModalOpen(true);
-                    }}
-                    className="bg-indigo-600 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center shadow-sm hover:bg-slate-900 transition self-start sm:self-auto font-sans"
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Añadir Servicio Extra
-                  </button>
+                  {canEditAcademicHistory && (
+                    <button
+                      onClick={handleOpenServiceEnrollForCreate}
+                      className="bg-indigo-600 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center shadow-sm transition self-start sm:self-auto font-sans"
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Inscribir en Servicio
+                    </button>
+                  )}
                 </div>
 
-                {(student.extraServices || []).length > 0 ? (
-                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                    <table className="w-full text-left">
-                      <thead className="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                          <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                            Servicio
-                          </th>
-                          <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                            Notas
-                          </th>
-                          <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">
-                            Costo
-                          </th>
-                          <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">
-                            Acción
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {(student.extraServices || []).map((ex) => (
-                          <tr
-                            key={ex.id}
-                            className="hover:bg-slate-50 transition-colors"
-                          >
-                            <td className="px-6 py-4 font-semibold text-slate-900 text-sm">
-                              {ex.name}
-                            </td>
-                            <td className="px-6 py-4 text-xs text-slate-500">
-                              {ex.notes || "-"}
-                            </td>
-                            <td className="px-6 py-4 text-right font-mono font-bold text-slate-800 text-sm">
-                              ${ex.cost ? ex.cost.toLocaleString() : "0.00"}{" "}
-                              {ex.currency}
-                            </td>
-                            <td className="px-6 py-4 text-right">
-                              <div className="flex gap-2 justify-end">
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setEditingExtraId(ex.id);
-                                    setExtraForm({
-                                      name: ex.name,
-                                      cost: ex.cost.toString(),
-                                      currency: ex.currency,
-                                      notes: ex.notes || "",
-                                    });
-                                    setIsExtraModalOpen(true);
-                                  }}
-                                  className="text-xs text-indigo-600 hover:text-indigo-805 font-bold uppercase tracking-wide"
-                                >
-                                  Editar
-                                </button>
-                                <span className="text-slate-300">|</span>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (
-                                      confirm(
-                                        `¿Estás seguro de eliminar el servicio "${ex.name}"?`,
-                                      )
-                                    ) {
-                                      handleDeleteExtraService(ex.id);
-                                    }
-                                  }}
-                                  className="text-xs text-rose-600 hover:text-rose-805 font-bold uppercase tracking-wide"
-                                >
-                                  Eliminar
-                                </button>
+                {extraServiceEnrollments.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {extraServiceEnrollments.map((env) => {
+                      const c = classes.find((cls) => cls.id === env.classId);
+                      if (!c) return null;
+                      const provId = env.providerId || c.providerId;
+                      const prov = providers.find((p) => p.id === provId);
+                      const serviceType = getServiceTypeFromClassName(c.name);
+
+                      // Style variants
+                      let cardBorder = "border-slate-200 hover:border-slate-350";
+                      let headerBg = "bg-slate-50 text-slate-800";
+
+                      if (serviceType === "certificacion_ingles") {
+                        cardBorder = "border-blue-200 hover:border-blue-400";
+                        headerBg = "bg-blue-50/50 text-blue-800";
+                      } else if (serviceType === "university_admission") {
+                        cardBorder = "border-purple-200 hover:border-purple-400";
+                        headerBg = "bg-purple-50/50 text-purple-800";
+                      } else if (serviceType === "centro_idiomas_digital") {
+                        cardBorder = "border-rose-200 hover:border-rose-400";
+                        headerBg = "bg-rose-50/50 text-rose-800";
+                      } else if (serviceType === "schmoop") {
+                        cardBorder = "border-amber-200 hover:border-amber-400";
+                        headerBg = "bg-amber-50/55 text-amber-800";
+                      } else if (serviceType === "iivvo") {
+                        cardBorder = "border-emerald-200 hover:border-emerald-400";
+                        headerBg = "bg-emerald-50/50 text-emerald-800";
+                      }
+
+                      const statusColors: Record<string, string> = {
+                        Active: "bg-emerald-50 text-emerald-700 border-emerald-100",
+                        Completed: "bg-blue-50 text-blue-700 border-blue-100",
+                        "On hold": "bg-amber-50 text-amber-700 border-amber-100",
+                        Withdrawn: "bg-slate-100 text-slate-700 border-slate-200",
+                      };
+                      const statusVal = env.status || "Active";
+
+                      return (
+                        <div
+                          key={env.id}
+                          className={`bg-white border rounded-xl shadow-xs overflow-hidden transition-all duration-200 flex flex-col ${cardBorder}`}
+                        >
+                          {/* Card Header */}
+                          <div className={`px-4 py-3 border-b border-inherit flex justify-between items-start gap-2 ${headerBg}`}>
+                            <div className="min-w-0">
+                              <span className="text-[9px] font-bold tracking-widest uppercase block opacity-85">
+                                {prov?.commercialName || prov?.legalName || "Plataforma / Certificación"}
+                              </span>
+                              <h4 className="text-sm font-bold truncate mt-0.5" title={c.name}>
+                                {c.name.replace("Servicio Extra - ", "")}
+                              </h4>
+                            </div>
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${statusColors[statusVal] || "bg-slate-50 text-slate-600 border-slate-100"}`}>
+                              {statusVal}
+                            </span>
+                          </div>
+
+                          {/* Card Body */}
+                          <div className="p-4 flex-1 space-y-3 text-xs text-slate-650">
+                            {/* Dates & Cost row */}
+                            <div className="grid grid-cols-2 gap-4 pb-2.5 border-b border-slate-100">
+                              <div>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Línea de Tiempo</span>
+                                <div className="mt-1 space-y-0.5 text-[11px] font-mono">
+                                  {env.enrollmentDate && (
+                                    <div>Insc: <span className="text-slate-700">{env.enrollmentDate}</span></div>
+                                  )}
+                                  <div>Act: <span className="text-slate-700">{env.activationDate || env.startDate || "-"}</span></div>
+                                  <div>Exp: <span className="text-slate-700">{env.endDate || "-"}</span></div>
+                                </div>
                               </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                              <div className="text-right">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Costo Adicional</span>
+                                <span className="text-lg font-black text-slate-900 block mt-1 font-mono">
+                                  ${(env.price || 0).toLocaleString()} <span className="text-xs font-normal text-slate-500">USD</span>
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Specific properties display */}
+                            <div className="space-y-2">
+                              {/* Common fields: Email, CURP, BirthDate, Lugar */}
+                              <div className="grid grid-cols-2 gap-3 text-[11px]">
+                                {env.email && (
+                                  <div>
+                                    <span className="text-[9px] text-slate-455 uppercase font-semibold block">Email Académico</span>
+                                    <span className="font-medium text-slate-800 break-all">{env.email}</span>
+                                  </div>
+                                )}
+                                {env.curp && (
+                                  <div>
+                                    <span className="text-[9px] text-slate-455 uppercase font-semibold block">CURP</span>
+                                    <span className="font-mono text-slate-800">{env.curp}</span>
+                                  </div>
+                                )}
+                                {env.birthDate && (
+                                  <div>
+                                    <span className="text-[9px] text-slate-455 uppercase font-semibold block">Fecha Nacimiento</span>
+                                    <span className="font-mono text-slate-800">{env.birthDate}</span>
+                                  </div>
+                                )}
+                                {env.lugar && (
+                                  <div>
+                                    <span className="text-[9px] text-slate-455 uppercase font-semibold block">Lugar Registro</span>
+                                    <span className="font-medium text-slate-800 flex items-center gap-1">
+                                      📍 Desde {env.lugar}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Credentials block */}
+                              {(env.usuario || env.contrasena) && (
+                                <div className="mt-3 bg-slate-50 p-2.5 rounded-lg border border-slate-150 flex flex-col gap-1 text-[11px] font-mono">
+                                  <div className="flex items-center gap-1.5 text-indigo-800 font-bold font-sans text-[10px] uppercase mb-0.5 tracking-wider">
+                                    🔑 Credenciales de Acceso
+                                  </div>
+                                  {env.usuario && (
+                                    <div className="flex justify-between items-center py-0.5">
+                                      <span className="text-slate-500 font-sans">Usuario:</span>
+                                      <span className="text-slate-800 font-bold select-all">{env.usuario}</span>
+                                    </div>
+                                  )}
+                                  {env.contrasena && (
+                                    <div className="flex justify-between items-center py-0.5">
+                                      <span className="text-slate-500 font-sans">Contraseña:</span>
+                                      <span className="text-slate-800 font-bold select-all">{env.contrasena}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* University block */}
+                              {(env.area || env.destino) && (
+                                <div className="mt-3 bg-purple-50/40 p-2.5 rounded-lg border border-purple-150 flex flex-col gap-1 text-[11px]">
+                                  <div className="flex items-center gap-1 text-purple-700 font-bold text-[10px] uppercase mb-0.5 tracking-wider">
+                                    🎓 Destino Universitario
+                                  </div>
+                                  {env.area && (
+                                    <div className="flex justify-between items-center">
+                                      <span className="text-slate-500">Área:</span>
+                                      <span className="text-slate-800 font-semibold">{env.area}</span>
+                                    </div>
+                                  )}
+                                  {env.destino && (
+                                    <div className="flex justify-between items-center">
+                                      <span className="text-slate-500">Destino:</span>
+                                      <span className="text-slate-800 font-semibold">{env.destino}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Document/Result download block */}
+                              {env.resultadoUrl && (
+                                <div className="mt-3 pt-2">
+                                  <a
+                                    href={env.resultadoUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex w-full justify-center items-center gap-1.5 bg-indigo-600 hover:bg-slate-800 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition border-0 cursor-pointer shadow-xs"
+                                  >
+                                    <Download className="w-3.5 h-3.5" /> Descargar Certificado / Resultado
+                                  </a>
+                                </div>
+                              )}
+
+                              {env.notes && (
+                                <div className="mt-2.5 bg-yellow-50/50 p-2 rounded border border-yellow-100 text-[11px] italic text-slate-650">
+                                  Notas: {env.notes}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Actions Footer */}
+                          <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEnrollForEdit(env)}
+                              className="text-indigo-600 hover:text-indigo-800 hover:underline font-bold text-[11px] uppercase tracking-wider flex items-center gap-0.5 py-1 border-0 bg-transparent cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" /> {canEditAcademicHistory ? "Editar Servicio" : "Ver Detalle"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <div className="py-12 text-center flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-                    <p className="text-slate-500 font-medium text-xs mb-1">
-                      Sin servicios extras registrados
-                    </p>
-                    <p className="text-[10px] text-slate-400">
-                      Asigne servicios de valor añadido como programas de
-                      extensión o seguros.
+                  <div className="py-8 text-center flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                    <p className="text-slate-400 text-xs italic">
+                      Sin registros de plataformas o certificaciones adicionales para este estudiante.
                     </p>
                   </div>
                 )}
               </div>
+
             </div>
           )}
 
@@ -3050,6 +3373,7 @@ export function AlumnoDetail() {
         isOpen={isPaymentModalOpen}
         onClose={closePaymentModal}
         title={editingPayment ? "Editar Pago" : "Registrar Pago"}
+        size="3xl"
       >
         <FinancialTransactionForm
           initialType="income"
@@ -3128,11 +3452,41 @@ export function AlumnoDetail() {
           setIsEnrollModalOpen(false);
           setEditingEnrollment(null);
         }}
-        title={editingEnrollment ? "Detalles de Inscripción" : "Añadir Clase"}
+        title={
+          editingEnrollment
+            ? (enrollModalType === "Service" ? "Detalles de Plataforma / Servicio" : "Detalles de Inscripción")
+            : (enrollModalType === "Service" ? "Inscribir en Plataforma / Certificación" : "Inscribir en Clase del Catálogo")
+        }
       >
         <form onSubmit={handleEnrollSubmit} className="space-y-4">
+          {editingEnrollment && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+              <p className="text-[10px] font-black text-indigo-900 uppercase tracking-wider">Fechas de la Línea de Tiempo Registrada</p>
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="bg-white p-2 rounded-lg border border-slate-150 shadow-xs">
+                  <span className="text-[8px] text-slate-400 font-extrabold uppercase block font-sans">Inscripción</span>
+                  <span className="font-mono font-bold text-slate-700 block mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
+                    {editingEnrollment.enrollmentDate || '-'}
+                  </span>
+                </div>
+                <div className="bg-white p-2 rounded-lg border border-slate-150 shadow-xs">
+                  <span className="text-[8px] text-slate-400 font-extrabold uppercase block font-sans">Activación</span>
+                  <span className="font-mono font-bold text-slate-700 block mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
+                    {editingEnrollment.activationDate || editingEnrollment.startDate || '-'}
+                  </span>
+                </div>
+                <div className="bg-white p-2 rounded-lg border border-slate-150 shadow-xs">
+                  <span className="text-[8px] text-slate-400 font-extrabold uppercase block font-sans">Expiración</span>
+                  <span className="font-mono font-bold text-slate-700 block mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
+                    {editingEnrollment.endDate || '-'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {!canEditAcademicHistory && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 font-medium">
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 font-medium font-sans">
               Tu rol ({currentUser?.role || "Sin Rol"}) solo tiene permisos de
               lectura para el historial académico de los alumnos. No puedes
               guardar cambios.
@@ -3141,7 +3495,7 @@ export function AlumnoDetail() {
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Proveedor de Contenido Académico
+              {enrollModalType === "Service" ? "Proveedor del Servicio Externo" : "Proveedor de Contenido Académico"}
             </label>
             <select
               required
@@ -3152,11 +3506,13 @@ export function AlumnoDetail() {
             >
               <option value="">Seleccionar Proveedor...</option>
               {providers
-                .filter(
-                  (p) =>
-                    !p.providerType ||
-                    p.providerType === "Curriculum Académico",
-                )
+                .filter((p) => {
+                  if (enrollModalType === "Service") {
+                    return p.providerType === "Servicios Extras";
+                  } else {
+                    return !p.providerType || p.providerType === "Curriculum Académico";
+                  }
+                })
                 .map((p) => (
                   <option key={p.id} value={p.id.toString()}>
                     {p.commercialName || p.legalName}
@@ -3167,7 +3523,7 @@ export function AlumnoDetail() {
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Clase del Catálogo
+              {enrollModalType === "Service" ? "Servicio / Certificación del Catálogo" : "Clase del Catálogo"}
             </label>
             <select
               required
@@ -3262,7 +3618,7 @@ export function AlumnoDetail() {
                     status: e.target.value as any,
                   })
                 }
-                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-50 disabled:text-slate-500"
+                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-55 disabled:text-slate-500"
               >
                 <option value="Active">Active</option>
                 <option value="Completed">Completed</option>
@@ -3287,10 +3643,144 @@ export function AlumnoDetail() {
                     price: parseFloat(e.target.value) || 0,
                   })
                 }
-                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono disabled:bg-slate-50 disabled:text-slate-500"
+                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono disabled:bg-slate-55 disabled:text-slate-500"
               />
             </div>
           </div>
+
+          {(() => {
+            const selectedClass = classes.find((c) => c.id === Number(enrollForm.classId));
+            const isService = selectedClass ? isExtraServiceClass(selectedClass.name) : false;
+            if (!isService) return null;
+            const serviceType = selectedClass ? getServiceTypeFromClassName(selectedClass.name) : "";
+
+            return (
+              <div className="bg-slate-50 p-4 border border-slate-200 rounded-xl space-y-3.5 mt-2">
+                <span className="text-[10px] font-bold text-slate-450 uppercase block tracking-wider">
+                  Detalles del Servicio Extra
+                </span>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-1">Email Académico</label>
+                    <input
+                      type="email"
+                      disabled={!canEditAcademicHistory}
+                      value={enrollForm.email}
+                      onChange={e => setEnrollForm({...enrollForm, email: e.target.value})}
+                      className="w-full border border-slate-200 bg-white rounded p-1.5 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="alumno@academia.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-1">CURP Oficial</label>
+                    <input
+                      type="text"
+                      disabled={!canEditAcademicHistory}
+                      value={enrollForm.curp}
+                      onChange={e => setEnrollForm({...enrollForm, curp: e.target.value.toUpperCase()})}
+                      maxLength={18}
+                      className="w-full border border-slate-200 bg-white rounded p-1.5 text-xs focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                      placeholder="CURP18DIGITOS"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-1">Fecha Nacimiento</label>
+                    <input
+                      type="date"
+                      disabled={!canEditAcademicHistory}
+                      value={enrollForm.birthDate}
+                      onChange={e => setEnrollForm({...enrollForm, birthDate: e.target.value})}
+                      className="w-full border border-slate-200 bg-white rounded p-1.5 text-xs focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 uppercase mb-1">Lugar Servicio</label>
+                    <select
+                      disabled={!canEditAcademicHistory}
+                      value={enrollForm.lugar}
+                      onChange={e => setEnrollForm({...enrollForm, lugar: e.target.value as any})}
+                      className="w-full border border-slate-200 bg-white rounded p-1.5 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                    >
+                      <option value="Escuela">Desde Escuela</option>
+                      <option value="Casa">Desde Casa</option>
+                    </select>
+                  </div>
+                </div>
+
+                {(serviceType === "centro_idiomas_digital" || serviceType === "schmoop" || serviceType === "iivvo") && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-200/40">
+                    <div>
+                      <label className="block text-[10px] font-bold text-indigo-900 uppercase mb-1">Usuario / Licencia</label>
+                      <input
+                        type="text"
+                        disabled={!canEditAcademicHistory}
+                        value={enrollForm.usuario}
+                        onChange={e => setEnrollForm({...enrollForm, usuario: e.target.value})}
+                        className="w-full border border-slate-200 bg-white rounded px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Usuario"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-indigo-900 uppercase mb-1">Contraseña</label>
+                      <input
+                        type="text"
+                        disabled={!canEditAcademicHistory}
+                        value={enrollForm.contrasena}
+                        onChange={e => setEnrollForm({...enrollForm, contrasena: e.target.value})}
+                        className="w-full border border-slate-200 bg-white rounded px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Contraseña"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {serviceType === "university_admission" && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-purple-50/50 p-2.5 rounded-lg border border-purple-200/40">
+                    <div>
+                      <label className="block text-[10px] font-bold text-purple-900 uppercase mb-1">Área de Estudios</label>
+                      <input
+                        type="text"
+                        disabled={!canEditAcademicHistory}
+                        value={enrollForm.area}
+                        onChange={e => setEnrollForm({...enrollForm, area: e.target.value})}
+                        className="w-full border border-slate-200 bg-white rounded px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Ej: Ingeniería"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-purple-900 uppercase mb-1">Destino Universitario</label>
+                      <input
+                        type="text"
+                        disabled={!canEditAcademicHistory}
+                        value={enrollForm.destino}
+                        onChange={e => setEnrollForm({...enrollForm, destino: e.target.value})}
+                        className="w-full border border-slate-200 bg-white rounded px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Ej: Canadá"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {serviceType === "certificacion_ingles" && (
+                  <div className="bg-blue-50/50 p-2.5 rounded-lg border border-blue-200/40 space-y-1.5">
+                    <label className="block text-[10px] font-semibold text-blue-900 uppercase">URL del Certificado / Resultado</label>
+                    <input
+                      type="text"
+                      disabled={!canEditAcademicHistory}
+                      value={enrollForm.resultadoUrl}
+                      onChange={e => setEnrollForm({...enrollForm, resultadoUrl: e.target.value})}
+                      className="w-full border border-slate-200 bg-white rounded p-1.5 text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="Ej: https://itepexam.com/certificate/1234..."
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
@@ -3618,7 +4108,7 @@ export function AlumnoDetail() {
               const rSize = viewingDoc.fileSize || "1.4 MB";
               const rId = viewingDoc.id ? `ID-DOC-${viewingDoc.id}` : "REG-ST-99";
               
-              const pdfUrl = viewingDoc.fileData || "data:text/html;charset=utf-8," + encodeURIComponent(`
+              const pdfUrl = activePdfUrl || "data:text/html;charset=utf-8," + encodeURIComponent(`
                 <!DOCTYPE html>
                 <html>
                   <head>
@@ -3857,12 +4347,66 @@ export function AlumnoDetail() {
               `);
 
               return (
-                <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner animate-in fade-in duration-300">
-                  <iframe
-                    src={pdfUrl}
-                    className="w-full h-full border-0"
-                    title={`PDF ${viewingDoc.name}`}
-                  />
+                <div className="w-full flex flex-col space-y-3 animate-in fade-in duration-300">
+                  {/* Barra de herramientas para asegurar que visualicen el PDF si el iframe se bloquea */}
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm text-xs">
+                    <div className="flex items-center space-x-2.5 text-left">
+                      <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-700">Previsualizador de PDF</p>
+                        <p className="text-[10px] text-slate-400">Si el visor no carga en tu dispositivo, haz clic en el botón de la derecha para abrirlo.</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      {(activePdfUrl || pdfUrl) && (
+                        <a 
+                          href={activePdfUrl || pdfUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-bold transition flex items-center space-x-1 border border-indigo-200"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                          <span>Pantalla Completa</span>
+                        </a>
+                      )}
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          const link = document.createElement('a');
+                          link.href = activePdfUrl || pdfUrl;
+                          link.download = rFileName;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[10px] font-bold transition flex items-center space-x-1 border border-slate-200"
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span>Descargar PDF</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Visor integrado confiable con etiqueta object y fallback iframe */}
+                  <div className="w-full h-[550px] rounded-lg border border-slate-250 overflow-hidden bg-white shadow-inner relative">
+                    <object
+                      data={activePdfUrl || pdfUrl}
+                      type="application/pdf"
+                      className="w-full h-full border-0"
+                    >
+                      <iframe
+                        src={activePdfUrl || pdfUrl}
+                        className="w-full h-full border-0"
+                        title={`PDF ${rTitle}`}
+                      />
+                    </object>
+                  </div>
                 </div>
               );
             })() : (

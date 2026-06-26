@@ -36,7 +36,7 @@ import {
   ArrowDown,
   Database
 } from "lucide-react";
-import { useAppContext, TaskType } from "../context/AppContext";
+import { useAppContext, TaskType, cleanForFirestore, generateUniqueId } from "../context/AppContext";
 import { db } from "../lib/firebase";
 import { Modal } from "../components/ui/Modal";
 import { 
@@ -546,7 +546,7 @@ export function CRM() {
           setLeads(remoteLeads);
         } else if (leads.length > 0) {
           for (const item of leads) {
-            await setDoc(doc(db, "crmLeads", String(item.id)), item);
+            await setDoc(doc(db, "crmLeads", String(item.id)), cleanForFirestore(item));
           }
         }
         setCrmFirebaseSyncCompleted(true);
@@ -575,7 +575,7 @@ export function CRM() {
     if (addedOrUpdated.length > 0 || deleted.length > 0) {
       import('firebase/firestore').then(async ({ doc, setDoc, deleteDoc }) => {
         addedOrUpdated.forEach(item => {
-          setDoc(doc(db, "crmLeads", String(item.id)), item).catch(err => {
+          setDoc(doc(db, "crmLeads", String(item.id)), cleanForFirestore(item)).catch(err => {
             console.error(`Error saving crmLeads/${item.id} to Firestore`, err);
           });
         });
@@ -718,7 +718,7 @@ export function CRM() {
     } else {
       // New
       const newLead: CRMLead = {
-        id: `lead-${Date.now()}`,
+        id: `lead-${generateUniqueId()}`,
         name: leadForm.name,
         contactName: leadForm.contactName,
         email: leadForm.email,
@@ -932,7 +932,7 @@ export function CRM() {
         }
 
         newLeadsFromCsv.push({
-          id: `lead-csv-${Date.now()}-${i}`,
+          id: `lead-csv-${generateUniqueId()}-${i}`,
           name,
           contactName: contactName || "Contacto Principal",
           email: email || "comercial@institucion.com",

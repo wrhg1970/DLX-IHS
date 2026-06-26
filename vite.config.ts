@@ -6,7 +6,10 @@ import {defineConfig, loadEnv} from 'vite';
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(), 
+      tailwindcss(),
+    ],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
@@ -14,6 +17,11 @@ export default defineConfig(({mode}) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
+    },
+    build: {
+      minify: 'esbuild',
+      sourcemap: true,
+      assetsInlineLimit: 4096, // Inline small assets under 4KB to reduce HTTP request overhead
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

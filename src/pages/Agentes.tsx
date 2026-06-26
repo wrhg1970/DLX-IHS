@@ -21,10 +21,15 @@ import {
   Briefcase,
   DollarSign,
   Check,
-  AlertCircle
+  AlertCircle,
+  Printer,
+  Download,
+  Wallet,
+  FileText,
+  Sliders
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { useAppContext, User as AppUser, AgentBankAccount } from "../context/AppContext";
+import { useAppContext, User as AppUser, AgentBankAccount, generateUniqueId, ExtraCommission } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
 
 export function Agentes() {
@@ -37,7 +42,11 @@ export function Agentes() {
     students, 
     financialTransactions,
     updateInstitution,
-    catalogs
+    catalogs,
+    enrollments,
+    classes,
+    bankAccounts,
+    addFinancialTransaction
   } = useAppContext();
 
   // Selected agent state
@@ -48,8 +57,24 @@ export function Agentes() {
   const [agentToDelete, setAgentToDelete] = useState<{ id: number; name: string } | null>(null);
 
   // Current sub-tab details
-  const [activeTab, setActiveTab] = useState<'perfil' | 'banco' | 'instituciones' | 'pagos'>('perfil');
+  const [activeTab, setActiveTab] = useState<'perfil' | 'banco' | 'instituciones' | 'pagos' | 'comisiones_extras'>('perfil');
   const [paymentSubTab, setPaymentSubTab] = useState<'recibidos' | 'por_recibir'>('recibidos');
+  const [paymentTopTab, setPaymentTopTab] = useState<'cobros' | 'liquidaciones'>('cobros');
+
+  // Commission payout form states
+  const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [selectedCommForPayout, setSelectedCommForPayout] = useState<any | null>(null);
+  const [payoutDate, setPayoutDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [payoutMethod, setPayoutMethod] = useState<string>('Transferencia');
+  const [payoutBankAccountId, setPayoutBankAccountId] = useState<string>('');
+  const [payoutAmountUSD, setPayoutAmountUSD] = useState<number | ''>('');
+  const [payoutExchangeRate, setPayoutExchangeRate] = useState<number>(18.0);
+  const [payoutAmountMXN, setPayoutAmountMXN] = useState<number | ''>('');
+  const [payoutComments, setPayoutComments] = useState<string>('');
+  
+  // Report filter states
+  const [reportInstFilter, setReportInstFilter] = useState<string>('all');
+  const [reportStatusFilter, setReportStatusFilter] = useState<string>('all');
 
   // Commission modal and form states
   const [editingCommissionInstId, setEditingCommissionInstId] = useState<number | null>(null);
@@ -59,6 +84,10 @@ export function Agentes() {
   const [courseCommType, setCourseCommType] = useState<'percentage' | 'fixed' | 'per_course' | 'none'>('none');
   const [courseCommValue, setCourseCommValue] = useState<number | ''>('');
   const [courseCommCurrency, setCourseCommCurrency] = useState<string>('USD');
+
+  // Multi-select and search states for extra commission institutions
+  const [selectedExtraInstIds, setSelectedExtraInstIds] = useState<number[]>([]);
+  const [instSearchQuery, setInstSearchQuery] = useState('');
 
   // Search filter for agents list
   const [agentSearch, setAgentSearch] = useState('');
@@ -195,7 +224,7 @@ export function Agentes() {
 
     const updatedBankAccounts = selectedAgent.bankAccounts ? [...selectedAgent.bankAccounts] : [];
     const newAcc: AgentBankAccount = {
-      id: "acc_" + Date.now(),
+      id: "acc_" + generateUniqueId(),
       bankName: newBank.bankName,
       clabe: newBank.clabe,
       accountNo: newBank.accountNo,
@@ -240,6 +269,87 @@ export function Agentes() {
     setEditingCommissionInstId(null);
   };
 
+  const handleRegisterPayout = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAgent || !selectedCommForPayout) return;
+
+    const amtUSD = Number(payoutAmountUSD);
+    const amtMXN = Number(payoutAmountMXN);
+
+    if (!amtUSD || amtUSD <= 0) {
+      alert("Por favor ingresa una cantidad en USD válida.");
+      return;
+    }
+
+    if (!payoutExchangeRate || payoutExchangeRate <= 0) {
+      alert("Por favor ingresa un tipo de cambio válido.");
+      return;
+    }
+
+    if (!amtMXN || amtMXN <= 0) {
+      alert("Por favor ingresa o calcula un importe en MXN válido.");
+      return;
+    }
+
+    // 1. Constraint: Cannot pay more than available remaining balance
+    const activeComm = extraCommissionsWithBalances.find(c => c.id === selectedCommForPayout.id);
+    if (!activeComm) return;
+
+    // Remaining limit in MXN:
+    const remainingMXN = activeComm.remainingMXN;
+    if (amtMXN > remainingMXN + 1) { // 1 MXP trace tolerance
+      alert(`No puedes registrar este pago. El importe ingresado ($${amtMXN.toLocaleString('es-MX')} MXN) supera la comisión máxima disponible por pagar para esta institución ($${remainingMXN.toLocaleString('es-MX')} MXN).`);
+      return;
+    }
+
+    // 2. Select bank platform or custom bank Account text
+    const selectedBank = bankAccounts?.find(a => a.id.toString() === payoutBankAccountId);
+    const bankLabel = selectedBank 
+      ? `${selectedBank.bankName} - No SCTA: ${selectedBank.accountNumber || ''} (${selectedBank.currency || 'MXN'})`
+      : payoutBankAccountId || 'Transferencia Directa';
+
+    // 3. Define transaction status
+    const todayStr = new Date().toISOString().split('T')[0];
+    const computedStatus = payoutDate > todayStr ? 'Programado' : 'Aplicado';
+
+    let categoryObj = catalogs['Categorías de Finanzas']?.find((c: any) => c.type === 'expense') || { id: 'cat_administrativos' };
+    
+    // Add transaction as expense
+    const conceptLabel = activeComm.category === 'course' ? 'Curso' : activeComm.category === 'membership' ? 'Membresía' : 'Especial';
+    const description = `Pago Comisión Extra (${conceptLabel}) - ${institutions.find(i => i.id === activeComm.institutionId)?.name || 'Institución'}${payoutComments ? ` - ${payoutComments}` : ''}`;
+
+    const payoutTxData: any = {
+      type: 'expense' as const,
+      date: payoutDate,
+      description,
+      amount: amtUSD,
+      currency: 'USD' as const,
+      exchangeRate: payoutExchangeRate,
+      status: computedStatus as any,
+      categoryId: categoryObj.id || 'cat_administrativos',
+      subcategory: 'Comisiones de Agentes',
+      paymentMethod: payoutMethod,
+      bankAccountId: payoutBankAccountId || '',
+      agentId: selectedAgent.id,
+      institutionId: activeComm.institutionId,
+      originalAmount: amtUSD,
+      originalCurrency: 'USD' as const,
+    };
+
+    // Embed customized properties with flexibility
+    payoutTxData.commissionCategory = activeComm.category;
+    payoutTxData.commissionId = activeComm.id;
+
+    addFinancialTransaction(payoutTxData);
+
+    // Reset and close
+    setShowPayoutModal(false);
+    setSelectedCommForPayout(null);
+    setPayoutAmountUSD('');
+    setPayoutAmountMXN('');
+    setPayoutComments('');
+  };
+
   // Currency options parser
   const currencyOptions = useMemo(() => {
     const list = catalogs['Monedas'] || [];
@@ -262,6 +372,109 @@ export function Agentes() {
     });
   }, [users, agentSearch]);
 
+  const usdRate = useMemo(() => {
+    const usdTx = financialTransactions.find(t => 
+      (t.currency === 'USD' || t.originalCurrency === 'USD') && 
+      t.amount > 0 && 
+      t.amountMXN && 
+      t.amountMXN > t.amount
+    );
+    if (usdTx) {
+      return usdTx.amountMXN / usdTx.amount;
+    }
+    return 18.0; // standard fallback
+  }, [financialTransactions]);
+
+  const extraCommissionsDetails = useMemo(() => {
+    if (!selectedAgent || !selectedAgent.extraCommissions) return [];
+
+    return selectedAgent.extraCommissions.map(comm => {
+      const inst = institutions.find(i => i.id === comm.institutionId);
+      const instStudents = students.filter(s => s.institutionId === comm.institutionId);
+      const studentIds = instStudents.map(s => s.id);
+      const instEnrollments = enrollments.filter(e => studentIds.includes(e.studentId));
+      const totalCourses = instEnrollments.length;
+
+      let calculatedAmount = 0;
+      let calculatedAmountMXN = 0;
+
+      if (comm.category === 'course') {
+        if (comm.type === 'percentage') {
+          // percentage applies to course prices
+          instEnrollments.forEach(e => {
+            const classObj = classes.find(c => c.id === e.classId);
+            const enrolledPrice = e.price ?? (classObj?.price ? Number(classObj.price.toString().replace(/[^0-9.]/g, '')) : 0);
+            calculatedAmount += enrolledPrice * (comm.value / 100);
+          });
+          // Assuming course prices are USD based. Convert to MXN:
+          calculatedAmountMXN = calculatedAmount * usdRate;
+        } else { // fixed
+          // fixed amount per course
+          calculatedAmount = totalCourses * comm.value;
+          if (comm.currency === 'USD') {
+            calculatedAmountMXN = calculatedAmount * usdRate;
+          } else {
+            calculatedAmountMXN = calculatedAmount;
+          }
+        }
+      } else if (comm.category === 'membership') {
+        const membershipPrice = inst?.membershipPrice ? Number(inst.membershipPrice.toString().replace(/[^0-9.]/g, '')) : 0;
+        if (comm.type === 'percentage') {
+          calculatedAmount = membershipPrice * (comm.value / 100);
+          calculatedAmountMXN = calculatedAmount * usdRate;
+        } else {
+          calculatedAmount = comm.value;
+          if (comm.currency === 'USD') {
+            calculatedAmountMXN = calculatedAmount * usdRate;
+          } else {
+            calculatedAmountMXN = calculatedAmount;
+          }
+        }
+      } else { // special
+        if (comm.type === 'percentage') {
+          const revenue = inst?.revenue ?? 0;
+          calculatedAmount = revenue * (comm.value / 100);
+          calculatedAmountMXN = calculatedAmount * usdRate;
+        } else {
+          calculatedAmount = comm.value;
+          if (comm.currency === 'USD') {
+            calculatedAmountMXN = calculatedAmount * usdRate;
+          } else {
+            calculatedAmountMXN = calculatedAmount;
+          }
+        }
+      }
+
+      return {
+        ...comm,
+        totalCourses,
+        calculatedAmount,
+        calculatedAmountMXN
+      };
+    });
+  }, [selectedAgent, institutions, students, enrollments, classes, usdRate]);
+
+  const extraSums = useMemo(() => {
+    let courseSumMXN = 0;
+    let membershipSumMXN = 0;
+    let specialSumMXN = 0;
+    extraCommissionsDetails.forEach(c => {
+      if (c.category === 'course') {
+        courseSumMXN += c.calculatedAmountMXN;
+      } else if (c.category === 'membership') {
+        membershipSumMXN += c.calculatedAmountMXN;
+      } else {
+        specialSumMXN += c.calculatedAmountMXN;
+      }
+    });
+    return {
+      courseSumMXN,
+      membershipSumMXN,
+      specialSumMXN,
+      totalSumMXN: courseSumMXN + membershipSumMXN + specialSumMXN
+    };
+  }, [extraCommissionsDetails]);
+
   // Dynamic calculations for the selected agent
   const agentFinancials = useMemo(() => {
     if (!selectedAgent) return { receivedPayments: [], pendingPayments: [], receivedSum: 0, pendingSum: 0 };
@@ -270,7 +483,41 @@ export function Agentes() {
     const agentTxs = financialTransactions.filter(tx => tx.agentId === selectedAgent.id && tx.type === 'income');
     
     const receivedPayments = agentTxs.filter(tx => tx.status === 'Aplicado');
-    const pendingPayments = agentTxs.filter(tx => tx.status === 'Pendiente');
+    const physicalPending = agentTxs.filter(tx => tx.status === 'Pendiente');
+    
+    // Map extra commissions into virtual pending transactions so they visualize and aggregate
+    const virtualPending = extraCommissionsDetails.map((comm) => {
+      const instObj = institutions.find(i => i.id === comm.institutionId);
+      const isPercentage = comm.type === 'percentage';
+      
+      let conceptLabel = '';
+      if (comm.category === 'course') {
+        conceptLabel = 'Curso';
+      } else if (comm.category === 'membership') {
+        conceptLabel = 'Membresía';
+      } else {
+        conceptLabel = 'Especial';
+      }
+
+      const desc = `Comisión Extra (${conceptLabel}) - ${instObj?.name || `Institución #${comm.institutionId}`}`;
+      
+      const txObj: any = {
+        id: `virtual_extra_${comm.id}`,
+        date: new Date().toISOString().split('T')[0],
+        type: 'income',
+        status: 'Pendiente',
+        description: desc,
+        studentId: undefined, // "Global"
+        paymentMethod: 'Comisión Extra',
+        amount: comm.calculatedAmount,
+        currency: isPercentage ? 'USD' : comm.currency,
+        amountMXN: comm.calculatedAmountMXN
+      };
+
+      return txObj;
+    });
+
+    const pendingPayments = [...physicalPending, ...virtualPending];
     
     const receivedSum = receivedPayments.reduce((acc, tx) => acc + tx.amountMXN, 0);
     const pendingSum = pendingPayments.reduce((acc, tx) => acc + tx.amountMXN, 0);
@@ -281,7 +528,68 @@ export function Agentes() {
       receivedSum,
       pendingSum
     };
-  }, [financialTransactions, selectedAgent]);
+  }, [financialTransactions, selectedAgent, extraCommissionsDetails, institutions]);
+
+  // Track payments made to this agent as commission payouts (expenses/egresos)
+  const agentPayouts = useMemo(() => {
+    if (!selectedAgent) return { paidSumMXN: 0, scheduledSumMXN: 0, balanceSumMXN: 0, transactions: [] };
+
+    // Expenses with agentId matching this agent
+    const payouts = financialTransactions.filter(tx => 
+      tx.agentId === selectedAgent.id && 
+      tx.type === 'expense' &&
+      tx.subcategory === 'Comisiones de Agentes'
+    );
+
+    const paidTxs = payouts.filter(tx => tx.status === 'Aplicado' || tx.status === 'Pagado');
+    const scheduledTxs = payouts.filter(tx => tx.status === 'Programado' || tx.status === 'Pendiente');
+
+    const paidSumMXN = paidTxs.reduce((acc, tx) => acc + (tx.amountMXN || 0), 0);
+    const scheduledSumMXN = scheduledTxs.reduce((acc, tx) => acc + (tx.amountMXN || 0), 0);
+    
+    const totalAssignedMXN = extraSums.totalSumMXN;
+    const balanceSumMXN = Math.max(0, totalAssignedMXN - paidSumMXN - scheduledSumMXN);
+
+    return {
+      paidSumMXN,
+      scheduledSumMXN,
+      balanceSumMXN,
+      transactions: payouts
+    };
+  }, [financialTransactions, selectedAgent, extraSums]);
+
+  // Combine extra commissions with their corresponding paid/scheduled ratios
+  const extraCommissionsWithBalances = useMemo(() => {
+    if (!selectedAgent) return [];
+    return extraCommissionsDetails.map(comm => {
+      const payoutsForThis = financialTransactions.filter(tx => 
+        tx.agentId === selectedAgent.id && 
+        tx.type === 'expense' &&
+        tx.subcategory === 'Comisiones de Agentes' &&
+        tx.institutionId === comm.institutionId &&
+        (tx as any).commissionCategory === comm.category
+      );
+
+      const paidMXN = payoutsForThis
+        .filter(tx => tx.status === 'Aplicado' || tx.status === 'Pagado')
+        .reduce((sum, tx) => sum + (tx.amountMXN || 0), 0);
+
+      const scheduledMXN = payoutsForThis
+        .filter(tx => tx.status === 'Programado' || tx.status === 'Pendiente')
+        .reduce((sum, tx) => sum + (tx.amountMXN || 0), 0);
+
+      // Remaining commission to pay/receive
+      const remainingMXN = Math.max(0, comm.calculatedAmountMXN - paidMXN - scheduledMXN);
+
+      return {
+        ...comm,
+        paidMXN,
+        scheduledMXN,
+        remainingMXN,
+        payouts: payoutsForThis
+      };
+    });
+  }, [extraCommissionsDetails, financialTransactions, selectedAgent]);
 
   // Dynamically detected institutions logic
   const detectedInstitutions = useMemo(() => {
@@ -448,7 +756,7 @@ export function Agentes() {
 
             {/* TAB SELECTOR SECTION */}
             <div className="border-b border-slate-100 px-6 py-2 bg-white flex space-x-4 shrink-0 overflow-x-auto scrollbar-none">
-              {(['perfil', 'banco', 'instituciones', 'pagos'] as const).map(tab => (
+              {(['perfil', 'banco', 'instituciones', 'pagos', 'comisiones_extras'] as const).map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -462,6 +770,7 @@ export function Agentes() {
                   {tab === 'banco' && 'Cuentas de Banco'}
                   {tab === 'instituciones' && 'Instituciones'}
                   {tab === 'pagos' && 'Pagos'}
+                  {tab === 'comisiones_extras' && 'Comisiones Extras'}
                 </button>
               ))}
             </div>
@@ -824,103 +1133,911 @@ export function Agentes() {
                     </div>
                   )}
 
-                  {/* TAB 4: PAGOS (DIVIDED INTO RECIBIDOS & POR RECIBIR) */}
+                  {/* TAB 4: PAGOS (DIVIDED INTO COBROS & LIQUIDACIONES) */}
                   {activeTab === 'pagos' && (
-                    <div className="space-y-5">
+                    <div className="space-y-6">
                       
-                      {/* High level visual cards */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <button 
-                          onClick={() => setPaymentSubTab('recibidos')}
-                          className={`p-5 rounded-2xl border text-left flex items-center justify-between transition-all ${
-                            paymentSubTab === 'recibidos'
-                              ? "bg-slate-900 border-slate-900 text-white shadow-md shadow-slate-900/10"
-                              : "bg-white border-slate-200 text-slate-800 hover:bg-slate-50"
+                      {/* Sub-tab selection with beautiful minimalist pill-selector */}
+                      <div className="flex bg-slate-100 p-1.5 rounded-xl w-full sm:w-fit font-sans border border-slate-200/50">
+                        <button
+                          onClick={() => setPaymentTopTab('cobros')}
+                          className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                            paymentTopTab === 'cobros'
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'text-slate-500 hover:text-slate-900'
                           }`}
                         >
-                          <div className="space-y-1.5">
-                            <div className="flex items-center space-x-1.5">
-                              <CheckCircle2 className={`w-4 h-4 ${paymentSubTab === 'recibidos' ? 'text-emerald-400' : 'text-emerald-500'}`} />
-                              <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">Pagos Recibidos (Aplicados)</span>
-                            </div>
-                            <p className="text-xl font-black">${agentFinancials.receivedSum.toLocaleString()} MXN</p>
-                          </div>
+                          <TrendingUp className="w-3.5 h-3.5" />
+                          Ventas & Cobros de Alumnos
                         </button>
-
-                        <button 
-                          onClick={() => setPaymentSubTab('por_recibir')}
-                          className={`p-5 rounded-2xl border text-left flex items-center justify-between transition-all ${
-                            paymentSubTab === 'por_recibir'
-                              ? "bg-slate-900 border-slate-900 text-white shadow-md shadow-slate-900/10"
-                              : "bg-white border-slate-200 text-slate-800 hover:bg-slate-50"
+                        <button
+                          onClick={() => setPaymentTopTab('liquidaciones')}
+                          className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                            paymentTopTab === 'liquidaciones'
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'text-slate-500 hover:text-slate-900'
                           }`}
                         >
-                          <div className="space-y-1.5">
-                            <div className="flex items-center space-x-1.5">
-                              <Clock className={`w-4 h-4 ${paymentSubTab === 'por_recibir' ? 'text-amber-400' : 'text-amber-500'}`} />
-                              <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">Pagos Por Recibir (Pendientes)</span>
-                            </div>
-                            <p className="text-xl font-black">${agentFinancials.pendingSum.toLocaleString()} MXN</p>
-                          </div>
+                          <Wallet className="w-3.5 h-3.5" />
+                          Liquidación de Comisiones (Egresos)
                         </button>
                       </div>
 
-                      {/* Transaction table */}
-                      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                        <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                          <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest">
-                            {paymentSubTab === 'recibidos' ? 'Cobros históricos procesados' : 'Cuentas por cobrar asignadas'}
-                          </h3>
+                      {paymentTopTab === 'cobros' ? (
+                        <div className="space-y-5">
+                          {/* High level visual cards */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <button 
+                              onClick={() => setPaymentSubTab('recibidos')}
+                              className={`p-5 rounded-2xl border text-left flex items-center justify-between transition-all ${
+                                paymentSubTab === 'recibidos'
+                                  ? "bg-slate-900 border-slate-900 text-white shadow-md shadow-slate-900/10"
+                                  : "bg-white border-slate-200 text-slate-800 hover:bg-slate-50"
+                              }`}
+                            >
+                              <div className="space-y-1.5">
+                                <div className="flex items-center space-x-1.5">
+                                  <CheckCircle2 className={`w-4 h-4 ${paymentSubTab === 'recibidos' ? 'text-emerald-400' : 'text-emerald-500'}`} />
+                                  <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">Pagos Recibidos (Aplicados)</span>
+                                </div>
+                                <p className="text-xl font-black">${agentFinancials.receivedSum.toLocaleString()} MXN</p>
+                              </div>
+                            </button>
+
+                            <button 
+                              onClick={() => setPaymentSubTab('por_recibir')}
+                              className={`p-5 rounded-2xl border text-left flex items-center justify-between transition-all ${
+                                paymentSubTab === 'por_recibir'
+                                  ? "bg-slate-900 border-slate-900 text-white shadow-md shadow-slate-900/10"
+                                  : "bg-white border-slate-200 text-slate-800 hover:bg-slate-50"
+                              }`}
+                            >
+                              <div className="space-y-1.5">
+                                <div className="flex items-center space-x-1.5">
+                                  <Clock className={`w-4 h-4 ${paymentSubTab === 'por_recibir' ? 'text-amber-400' : 'text-amber-500'}`} />
+                                  <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">Pagos Por Recibir (Pendientes)</span>
+                                </div>
+                                <p className="text-xl font-black">${agentFinancials.pendingSum.toLocaleString()} MXN</p>
+                              </div>
+                            </button>
+                          </div>
+
+                          {/* Transaction table */}
+                          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                              <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest">
+                                {paymentSubTab === 'recibidos' ? 'Cobros históricos procesados' : 'Cuentas por cobrar asignadas'}
+                              </h3>
+                            </div>
+
+                            <div className="overflow-x-auto text-xs">
+                              <table className="w-full text-left border-collapse">
+                                <thead>
+                                  <tr className="bg-slate-50/30 border-b border-slate-100">
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider w-24">Fecha</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Concepto</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Estudiante</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Vía / Método</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Importe original</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Importe MXN</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50 font-semibold text-slate-700">
+                                  {(paymentSubTab === 'recibidos' ? agentFinancials.receivedPayments : agentFinancials.pendingPayments).map((tx) => {
+                                    const stObj = students.find(s => s.id === tx.studentId);
+                                    return (
+                                      <tr key={tx.id} className="hover:bg-slate-50/30 transition-colors">
+                                        <td className="px-5 py-3.5 font-mono text-slate-400 font-normal">{tx.date}</td>
+                                        <td className="px-5 py-3.5">
+                                          <div className="flex items-center space-x-1.5">
+                                            <div className={`w-1.5 h-1.5 rounded-full ${tx.status === 'Aplicado' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                                            <p className="font-bold text-slate-900">{tx.description}</p>
+                                          </div>
+                                        </td>
+                                        <td className="px-5 py-3.5">
+                                          {stObj ? `${stObj.name} ${stObj.lastName || ''}` : <span className="text-slate-400 italic">Global</span>}
+                                        </td>
+                                        <td className="px-5 py-3.5 text-slate-500">{tx.paymentMethod || 'Transferencia'}</td>
+                                        <td className="px-5 py-3.5 text-right font-mono text-slate-500 font-bold">
+                                          {tx.amount.toLocaleString()} {tx.currency}
+                                        </td>
+                                        <td className="px-5 py-3.5 text-right font-mono font-black text-slate-900">
+                                          ${tx.amountMXN.toLocaleString()} MXN
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+
+                                  {(paymentSubTab === 'recibidos' ? agentFinancials.receivedPayments : agentFinancials.pendingPayments).length === 0 && (
+                                    <tr>
+                                      <td colSpan={6} className="px-5 py-12 text-center text-slate-400">
+                                        No hay registros de cobro {paymentSubTab === 'recibidos' ? 'aplicados' : 'pendientes'} para este gestor.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        // TAB DE LIQUIDACIONES (EGRESOS)
+                        <div className="space-y-6">
+                          
+                          {/* Tarjetas de Resumen Financiero de Liquidaciones */}
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 font-sans">
+                            <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Alta de Comisiones</p>
+                              <p className="text-lg font-black text-slate-800 font-mono mt-1">
+                                ${extraSums.totalSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
+                              </p>
+                              <p className="text-[9px] text-slate-400 font-semibold mt-0.5">Comisión extra total asignada</p>
+                            </div>
+
+                            <div className="bg-emerald-50/40 p-4 rounded-2xl border border-emerald-100">
+                              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Pagado (Egresos)
+                              </p>
+                              <p className="text-lg font-black text-emerald-900 font-mono mt-1">
+                                ${agentPayouts.paidSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
+                              </p>
+                              <p className="text-[9px] text-emerald-600/80 font-semibold mt-0.5">Importes aplicados y liquidados</p>
+                            </div>
+
+                            <div className="bg-indigo-50/40 p-4 rounded-2xl border border-indigo-100">
+                              <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                Programado (A Futuro)
+                              </p>
+                              <p className="text-lg font-black text-indigo-900 font-mono mt-1">
+                                ${agentPayouts.scheduledSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
+                              </p>
+                              <p className="text-[9px] text-indigo-600/80 font-semibold mt-0.5">Pagos programados a futuro</p>
+                            </div>
+
+                            <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-200/50">
+                              <p className="text-[10px] font-extrabold text-amber-700 uppercase tracking-wider">Por Recibir / Liquidar</p>
+                              <p className="text-lg font-black text-amber-900 font-mono mt-1">
+                                ${agentPayouts.balanceSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
+                              </p>
+                              <p className="text-[9px] text-amber-600 font-semibold mt-0.5">Saldo restante asignado disponible</p>
+                            </div>
+                          </div>
+
+                          {/* Sección: Tabla de Control de Límites por Institución */}
+                          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                            <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                              <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest">
+                                Control de Saldos & Límites por Institución
+                              </h3>
+                              <p className="text-[10.5px] text-slate-400 mt-1">No puedes pagar más comisiones por institución de las dadas de alta.</p>
+                            </div>
+
+                            <div className="overflow-x-auto text-xs">
+                              <table className="w-full text-left border-collapse">
+                                <thead>
+                                  <tr className="bg-slate-50/30 border-b border-slate-100">
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Institución</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Concepto Extra</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Comisión Alta (MXN)</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Pagado (MXN)</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Por Recibir / Pagar</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-center">Acción</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
+                                  {extraCommissionsWithBalances.map((comm) => {
+                                    const instObj = institutions.find(i => i.id === comm.institutionId);
+                                    const canPay = comm.remainingMXN > 1;
+
+                                    return (
+                                      <tr key={comm.id} className="hover:bg-slate-50/30 transition-colors">
+                                        <td className="px-5 py-4 font-bold text-slate-900">
+                                          {instObj?.name || `Institución #${comm.institutionId}`}
+                                        </td>
+                                        <td className="px-5 py-4">
+                                          <div className="space-y-1">
+                                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                              comm.category === 'course' 
+                                                ? 'bg-blue-50 text-blue-700 border border-blue-100/30' 
+                                                : comm.category === 'membership'
+                                                ? 'bg-purple-50 text-purple-700 border border-purple-100/30'
+                                                : 'bg-amber-50 text-amber-700 border border-amber-100/30'
+                                            }`}>
+                                              {comm.category === 'course' && 'Por Curso'}
+                                              {comm.category === 'membership' && 'Por Membresía'}
+                                              {comm.category === 'special' && 'Especial'}
+                                              {!comm.category && 'Especial'}
+                                            </span>
+                                            {comm.category === 'course' && (
+                                              <p className="text-[10px] text-slate-500 font-bold pl-1">
+                                                Cursos: <span className="font-mono text-slate-700">{comm.totalCourses}</span>
+                                              </p>
+                                            )}
+                                          </div>
+                                        </td>
+                                        <td className="px-5 py-4 text-right font-mono font-bold text-slate-800">
+                                          ${comm.calculatedAmountMXN.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                                        </td>
+                                        <td className="px-5 py-4 text-right font-mono text-emerald-600 font-bold">
+                                          ${comm.paidMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
+                                          {comm.scheduledMXN > 0 && (
+                                            <p className="text-[10px] text-indigo-500 font-bold mt-0.5">
+                                              +${comm.scheduledMXN.toLocaleString('es-MX')} Prog.
+                                            </p>
+                                          )}
+                                        </td>
+                                        <td className="px-5 py-4 text-right font-mono font-black text-slate-900">
+                                          <span className={comm.remainingMXN <= 0 ? 'text-slate-400 line-through' : 'text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-100/40'}>
+                                            ${comm.remainingMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
+                                          </span>
+                                        </td>
+                                        <td className="px-5 py-4 text-center">
+                                          {canPay ? (
+                                            <button
+                                              onClick={() => {
+                                                setSelectedCommForPayout(comm);
+                                                // Pre-calculate initial payout value (max 1000 USD converted or corresponding)
+                                                const maxUSD = Math.round((comm.remainingMXN / usdRate) * 100) / 100;
+                                                setPayoutAmountUSD(maxUSD);
+                                                setPayoutExchangeRate(usdRate);
+                                                setPayoutAmountMXN(comm.remainingMXN);
+                                                setPayoutDate(new Date().toISOString().split('T')[0]);
+                                                setShowPayoutModal(true);
+                                              }}
+                                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 mx-auto cursor-pointer"
+                                            >
+                                              <Plus className="w-3 h-3" />
+                                              Pagar Comisión
+                                            </button>
+                                          ) : (
+                                            <span className="text-[10px] text-emerald-650 bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-md border border-emerald-100 font-bold">
+                                              Totalmente Liquidada
+                                            </span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+
+                                  {extraCommissionsWithBalances.length === 0 && (
+                                    <tr>
+                                      <td colSpan={6} className="px-5 py-12 text-center text-slate-400">
+                                        <Briefcase className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                        No hay comisiones extras configuradas para este agente aún.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* Historial de Transacciones de Egresos de Comisiones */}
+                          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                              <div>
+                                <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest">
+                                  Historial de Payouts Realizados (Egresos)
+                                </h3>
+                                <p className="text-[10px] text-slate-400">Pagos liquidados o programados transferidos de las cuentas de la plataforma.</p>
+                              </div>
+                            </div>
+
+                            <div className="overflow-x-auto text-xs">
+                              <table className="w-full text-left border-collapse">
+                                <thead>
+                                  <tr className="bg-slate-50/30 border-b border-slate-100">
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider w-24">Fecha Payout</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Concepto en Egresos</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Via de Pago</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Monto USD</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">T. Cambio</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Total MXN</th>
+                                    <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-center">Estatus</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50 font-semibold text-slate-700">
+                                  {agentPayouts.transactions.map((tx) => {
+                                    const bankObj = bankAccounts?.find(b => b.id.toString() === tx.bankAccountId?.toString());
+                                    const isFuture = tx.status === 'Programado' || new Date(tx.date) > new Date();
+
+                                    return (
+                                      <tr key={tx.id} className="hover:bg-slate-50/30 transition-colors">
+                                        <td className="px-5 py-3.5 font-mono text-slate-400 font-normal">{tx.date}</td>
+                                        <td className="px-5 py-3.5">
+                                          <div>
+                                            <p className="font-bold text-slate-900 leading-tight">{tx.description}</p>
+                                            {bankObj && (
+                                              <p className="text-[9px] text-indigo-500 font-bold mt-0.5">
+                                                Cuenta origen: {bankObj.bankName} ({bankObj.currency}) No: {bankObj.accountNumber}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </td>
+                                        <td className="px-5 py-3.5 text-slate-500 font-bold">{tx.paymentMethod}</td>
+                                        <td className="px-5 py-3.5 text-right font-mono text-slate-500 font-bold">
+                                          ${tx.amount.toLocaleString('es-MX', { minimumFractionDigits: 2 })} USD
+                                        </td>
+                                        <td className="px-5 py-3.5 text-right font-mono text-slate-400 font-normal">
+                                          ${tx.exchangeRate.toFixed(4)}
+                                        </td>
+                                        <td className="px-5 py-3.5 text-right font-mono font-black text-slate-900">
+                                          ${tx.amountMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
+                                        </td>
+                                        <td className="px-5 py-3.5 text-center">
+                                          <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase ${
+                                            isFuture || tx.status === 'Programado'
+                                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-100'
+                                              : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                                          }`}>
+                                            {isFuture || tx.status === 'Programado' ? 'Programado (Futuro)' : 'Aplicado (Pagado)'}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+
+                                  {agentPayouts.transactions.length === 0 && (
+                                    <tr>
+                                      <td colSpan={7} className="px-5 py-12 text-center text-slate-400">
+                                        No se han registrado pagos de comisiones a este agente todavía.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* REPORTE IMPRIMIBLE Y DESCARGABLE DE COMISIONES */}
+                          <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-xl space-y-4 font-sans print:bg-white print:text-slate-950 print:p-0 print:shadow-none">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-4 gap-4 print:border-b-2 print:border-slate-300">
+                              <div>
+                                <h4 className="text-sm font-black uppercase tracking-widest text-indigo-400 flex items-center gap-2 print:text-indigo-900">
+                                  <FileText className="w-4 h-4" />
+                                  Reporte Consolidado de Comisiones
+                                </h4>
+                                <p className="text-[11px] text-slate-400 print:text-slate-500 mt-1">
+                                  Resumen de importes liquidados, programados y pendientes de recibir del agente <strong>{selectedAgent.name}</strong>.
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0 print:hidden">
+                                <button
+                                  onClick={() => {
+                                    // print target simulation or call default browser print
+                                    window.print();
+                                  }}
+                                  className="bg-slate-800 hover:bg-slate-705 border border-slate-700 hover:text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 text-slate-300 cursor-pointer"
+                                >
+                                  <Printer className="w-3.5 h-3.5" />
+                                  Imprimir Reporte
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    // Export simple CSV file
+                                    let csvContent = "data:text/csv;charset=utf-8,";
+                                    csvContent += "REPORTE DE COMISIONES - AGENTE: " + selectedAgent.name + "\r\n";
+                                    csvContent += "Fecha de Emisión: " + new Date().toLocaleDateString('es-MX') + "\r\n\r\n";
+                                    csvContent += "INSTITUCION,CONCEPTO,ESTADO,ASIGNADO (MXN),PAGADO (MXN),POR RECIBIR (MXN)\r\n";
+                                    
+                                    extraCommissionsWithBalances.forEach(comm => {
+                                      const instName = institutions.find(i => i.id === comm.institutionId)?.name || 'N/A';
+                                      const concept = comm.category === 'course' ? 'Curso' : comm.category === 'membership' ? 'Membresía' : 'Especial';
+                                      const isLiqui = comm.remainingMXN <= 0 ? 'Liquidada' : 'Pendiente';
+                                      csvContent += `"${instName}","${concept}","${isLiqui}",${comm.calculatedAmountMXN},${comm.paidMXN},${comm.remainingMXN}\r\n`;
+                                    });
+
+                                    const encodedUri = encodeURI(csvContent);
+                                    const link = document.createElement("a");
+                                    link.setAttribute("href", encodedUri);
+                                    link.setAttribute("download", `comisiones_${selectedAgent.name.replace(/\s+/g, '_')}.csv`);
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                  }}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                  Exportar CSV
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Filtros de Reporte interactivos */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-800/40 p-3.5 rounded-2xl print:hidden">
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Filtrar Institución</label>
+                                <select
+                                  value={reportInstFilter}
+                                  onChange={(e) => setReportInstFilter(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-750 text-white rounded-xl px-3 py-1.5 text-xs font-semibold focus:outline-none"
+                                >
+                                  <option value="all">Todas las instituciones</option>
+                                  {[...extraCommissionsWithBalances]
+                                    .sort((a, b) => {
+                                      const nameA = institutions.find(i => i.id === a.institutionId)?.name || "";
+                                      const nameB = institutions.find(i => i.id === b.institutionId)?.name || "";
+                                      return nameA.localeCompare(nameB, "es");
+                                    })
+                                    .map(c => {
+                                      const inst = institutions.find(i => i.id === c.institutionId);
+                                      return (
+                                        <option key={c.id} value={c.institutionId.toString()}>
+                                          {inst ? inst.name : `Institución #${c.institutionId}`}
+                                        </option>
+                                      );
+                                    })}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Filtrar Estatus de Cuenta</label>
+                                <select
+                                  value={reportStatusFilter}
+                                  onChange={(e) => setReportStatusFilter(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-750 text-white rounded-xl px-3 py-1.5 text-xs font-semibold focus:outline-none"
+                                >
+                                  <option value="all">Ver todo el balance</option>
+                                  <option value="liquidated">Totalmente Liquidadas</option>
+                                  <option value="pending">Con Saldo por Recibir</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Listado del Balance del Reporte */}
+                            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                              {extraCommissionsWithBalances
+                                .filter(c => reportInstFilter === 'all' || c.institutionId.toString() === reportInstFilter)
+                                .filter(c => {
+                                  if (reportStatusFilter === 'liquidated') return c.remainingMXN <= 0;
+                                  if (reportStatusFilter === 'pending') return c.remainingMXN > 0;
+                                  return true;
+                                })
+                                .map((comm) => {
+                                  const instObj = institutions.find(i => i.id === comm.institutionId);
+                                  const conceptLabel = comm.category === 'course' ? 'Curso' : comm.category === 'membership' ? 'Membresía' : 'Especial';
+                                  const isLiqui = comm.remainingMXN <= 0;
+
+                                  return (
+                                    <div key={comm.id} className="bg-slate-850 p-4 rounded-2xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 print:border-b print:bg-white print:text-slate-950">
+                                      <div>
+                                        <div className="flex items-center space-x-2">
+                                          <p className="font-bold text-xs text-white print:text-slate-900">
+                                            {instObj?.name || `Institución #${comm.institutionId}`}
+                                          </p>
+                                          <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase ${
+                                            isLiqui ? 'bg-emerald-950 text-emerald-400 border border-emerald-900 print:bg-emerald-50 print:text-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-900 print:bg-amber-50 print:text-amber-800'
+                                          }`}>
+                                            {isLiqui ? 'Liquidada' : 'Por Recibir'}
+                                          </span>
+                                        </div>
+                                        <p className="text-[10px] text-slate-400 mt-0.5 print:text-slate-500">
+                                          Concepto: <strong className="text-slate-250 print:text-slate-700">{conceptLabel}</strong>
+                                          {comm.category === 'course' && ` (${comm.totalCourses} cursos)`}
+                                        </p>
+                                      </div>
+
+                                      <div className="grid grid-cols-3 gap-4 text-right font-mono text-[10.5px]">
+                                        <div>
+                                          <span className="block text-[8px] text-slate-500 font-bold uppercase tracking-wider">Asignada</span>
+                                          <span className="font-bold text-slate-300 print:text-slate-700">
+                                            ${comm.calculatedAmountMXN.toLocaleString('es-MX')}
+                                          </span>
+                                        </div>
+                                        <div>
+                                          <span className="block text-[8px] text-slate-500 font-bold uppercase tracking-wider">Pagada</span>
+                                          <span className="font-bold text-emerald-400 print:text-emerald-700">
+                                            ${comm.paidMXN.toLocaleString('es-MX')}
+                                          </span>
+                                        </div>
+                                        <div>
+                                          <span className="block text-[8px] text-slate-500 font-bold uppercase tracking-wider">Por Recibir</span>
+                                          <span className={`font-black ${isLiqui ? 'text-slate-500' : 'text-amber-400 print:text-amber-700'}`}>
+                                            ${comm.remainingMXN.toLocaleString('es-MX')}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+
+                              {extraCommissionsWithBalances.length === 0 && (
+                                <p className="text-center py-6 text-xs text-slate-400 italic">No hay datos en el reporte para mostrar.</p>
+                              )}
+                            </div>
+
+                          </div>
+
+                        </div>
+                      )}
+
+                    </div>
+                  )}
+
+                  {/* TAB 5: COMISIONES EXTRAS */}
+                  {activeTab === 'comisiones_extras' && (
+                    <div className="space-y-6">
+                      
+                      {/* Cabecera explicativa */}
+                      <div className="bg-white p-5 border border-slate-200 rounded-2xl">
+                        <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest mb-1">Comisiones Extras del Agente</h3>
+                        <p className="text-[11px] text-slate-400">Determina comisiones específicas o complementarias para instituciones seleccionadas. Estas comisiones se configuran y registran de forma independiente al esquema general.</p>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        
+                        {/* FORMULARIO DE NUEVA COMISIÓN EXTRA */}
+                        <div className="bg-white p-5 border border-slate-200 rounded-2xl shadow-xs space-y-4 h-fit">
+                          <h4 className="text-[11px] font-black text-indigo-600 uppercase tracking-widest flex items-center gap-1.5 mb-2">
+                            <Plus className="w-3.5 h-3.5" />
+                            Nueva Comisión Extra
+                          </h4>
+                          
+                          <div className="space-y-3 font-sans">
+                            {/* Selector de Instituciones (Multi-select con buscador y estado) */}
+                            <div>
+                              <div className="flex justify-between items-center mb-1">
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Institución / Instituciones</label>
+                                <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-full">
+                                  {selectedExtraInstIds.length} seleccionadas
+                                </span>
+                              </div>
+
+                              {/* Buscador de instituciones */}
+                              <input
+                                type="text"
+                                placeholder="🔍 Buscar institución..."
+                                value={instSearchQuery}
+                                onChange={(e) => setInstSearchQuery(e.target.value)}
+                                className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-t-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none"
+                              />
+
+                              {/* Lista de Checkboxes scrollable */}
+                              <div className="border-x border-b border-slate-200 bg-white rounded-b-xl max-h-48 overflow-y-auto p-2.5 space-y-2">
+                                {/* Botones rápidos */}
+                                <div className="flex justify-between border-b border-slate-105 pb-1.5 mb-2 text-[10px] font-bold">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const filtered = institutions
+                                        .filter(inst => {
+                                          const query = instSearchQuery.toLowerCase();
+                                          return (inst.name || '').toLowerCase().includes(query) || (inst.country || '').toLowerCase().includes(query);
+                                        })
+                                        .map(inst => inst.id);
+                                      // Union of currently selected and filtered
+                                      setSelectedExtraInstIds(prev => Array.from(new Set([...prev, ...filtered])));
+                                    }}
+                                    className="text-indigo-650 hover:text-indigo-800 cursor-pointer text-[10px]"
+                                  >
+                                    Seleccionar todo
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      // Deselect all
+                                      setSelectedExtraInstIds([]);
+                                    }}
+                                    className="text-red-500 hover:text-red-700 cursor-pointer text-[10px]"
+                                  >
+                                    Deseleccionar todo
+                                  </button>
+                                </div>
+
+                                {(() => {
+                                  const filteredInsts = [...institutions]
+                                    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es'))
+                                    .filter(inst => {
+                                      const query = instSearchQuery.toLowerCase();
+                                      return (inst.name || '').toLowerCase().includes(query) || (inst.country || '').toLowerCase().includes(query);
+                                    });
+
+                                  if (filteredInsts.length === 0) {
+                                    return <p className="text-center text-slate-400 text-[10px] py-2">No se encontraron instituciones.</p>;
+                                  }
+
+                                  return filteredInsts.map(inst => {
+                                    const isChecked = selectedExtraInstIds.includes(inst.id);
+                                    return (
+                                      <label key={inst.id} className="flex items-start gap-2 hover:bg-slate-50 p-1 rounded cursor-pointer transition-colors">
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={() => {
+                                            if (isChecked) {
+                                              setSelectedExtraInstIds(prev => prev.filter(id => id !== inst.id));
+                                            } else {
+                                              setSelectedExtraInstIds(prev => [...prev, inst.id]);
+                                            }
+                                          }}
+                                          className="mt-0.5 rounded border-slate-300 text-indigo-650 focus:ring-indigo-500"
+                                        />
+                                        <div className="text-xs leading-tight">
+                                          <p className="font-bold text-slate-700">{inst.name}</p>
+                                          <p className="text-[9px] text-slate-400 font-semibold">{inst.country || 'N/A'}</p>
+                                        </div>
+                                      </label>
+                                    );
+                                  });
+                                })()}
+                              </div>
+                            </div>
+
+                            {/* Categoría / Concepto */}
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Concepto / Aplicación</label>
+                              <select
+                                id="extra-commission-category"
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer"
+                                defaultValue="course"
+                              >
+                                <option value="course">Por Curso</option>
+                                <option value="membership">Por Membresía</option>
+                                <option value="special">Especial</option>
+                              </select>
+                            </div>
+
+                            {/* Tipo de Comisión */}
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Tipo de Comisión</label>
+                              <select
+                                id="extra-commission-type"
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer"
+                                defaultValue="percentage"
+                                onChange={(e) => {
+                                  const currencySelect = document.getElementById('extra-commission-currency') as HTMLSelectElement;
+                                  if (currencySelect) {
+                                    if (e.target.value === 'percentage') {
+                                      currencySelect.value = '%';
+                                      currencySelect.disabled = true;
+                                    } else {
+                                      currencySelect.value = 'USD';
+                                      currencySelect.disabled = false;
+                                    }
+                                  }
+                                }}
+                              >
+                                <option value="percentage">% Porcentaje</option>
+                                <option value="fixed">Monto Fijo</option>
+                              </select>
+                            </div>
+
+                            {/* Fila: Valor y Moneda */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Valor / Comisión</label>
+                                <input
+                                  id="extra-commission-value"
+                                  type="number"
+                                  placeholder="0.00"
+                                  min="0"
+                                  step="any"
+                                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Moneda</label>
+                                <select
+                                  id="extra-commission-currency"
+                                  className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold outline-none appearance-none disabled:bg-slate-150 disabled:text-slate-400 cursor-pointer"
+                                  defaultValue="%"
+                                  disabled
+                                >
+                                  <option value="%">% Porcentaje</option>
+                                  {currencyOptions.map(opt => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Botón de Agregar */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const typeSelect = document.getElementById('extra-commission-type') as HTMLSelectElement;
+                                const catSelect = document.getElementById('extra-commission-category') as HTMLSelectElement;
+                                const valInput = document.getElementById('extra-commission-value') as HTMLInputElement;
+                                const currSelect = document.getElementById('extra-commission-currency') as HTMLSelectElement;
+
+                                if (!typeSelect || !valInput || !currSelect || !catSelect) return;
+                                const valueVal = valInput.value;
+
+                                if (selectedExtraInstIds.length === 0) {
+                                  alert('Por favor, selecciona al menos una institución.');
+                                  return;
+                                }
+                                if (!valueVal || isNaN(Number(valueVal)) || Number(valueVal) < 0) {
+                                  alert('Por favor, introduce un valor válido para la comisión.');
+                                  return;
+                                }
+
+                                const currentExtraList = selectedAgent.extraCommissions ? [...selectedAgent.extraCommissions] : [];
+                                
+                                // Check if commission already exists for this institution AND category
+                                const duplicates: string[] = [];
+                                selectedExtraInstIds.forEach(id => {
+                                  const exists = currentExtraList.some(x => x.institutionId === id && x.category === catSelect.value);
+                                  if (exists) {
+                                    const instObj = institutions.find(i => i.id === id);
+                                    duplicates.push(instObj?.name || `ID #${id}`);
+                                  }
+                                });
+
+                                if (duplicates.length > 0) {
+                                  const conceptText = catSelect.value === 'course' ? 'Por Curso' : catSelect.value === 'membership' ? 'Por Membresía' : 'Especial';
+                                  if (!confirm(`Las siguientes instituciones ya cuentan con una comisión extra del concepto "${conceptText}":\n${duplicates.join(', ')}\n\n¿Deseas sobreescribirlas?`)) {
+                                    return;
+                                  }
+                                }
+
+                                selectedExtraInstIds.forEach(instId => {
+                                  const newItem: ExtraCommission = {
+                                    id: 'ec_' + generateUniqueId(),
+                                    institutionId: instId,
+                                    type: typeSelect.value as 'percentage' | 'fixed',
+                                    value: Number(valueVal),
+                                    currency: currSelect.value,
+                                    category: catSelect.value as 'course' | 'membership' | 'special'
+                                  };
+
+                                  const duplicateIndex = currentExtraList.findIndex(x => x.institutionId === instId && x.category === newItem.category);
+                                  if (duplicateIndex !== -1) {
+                                    currentExtraList[duplicateIndex] = newItem;
+                                  } else {
+                                    currentExtraList.push(newItem);
+                                  }
+                                });
+
+                                updateUser(selectedAgent.id, { extraCommissions: currentExtraList });
+
+                                // Clean form
+                                setSelectedExtraInstIds([]);
+                                setInstSearchQuery('');
+                                valInput.value = '';
+                                catSelect.value = 'course';
+                              }}
+                              className="w-full mt-3 flex items-center justify-center space-x-2 bg-indigo-650 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
+                            >
+                              <Plus className="w-4 h-4" />
+                              <span>Agregar Comisión ({selectedExtraInstIds.length})</span>
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="overflow-x-auto text-xs">
-                          <table className="w-full text-left border-collapse">
-                            <thead>
-                              <tr className="bg-slate-50/30 border-b border-slate-100">
-                                <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider w-24">Fecha</th>
-                                <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Concepto</th>
-                                <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Estudiante</th>
-                                <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider">Vía / Método</th>
-                                <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Importe original</th>
-                                <th className="px-5 py-3 font-black text-slate-400 uppercase tracking-wider text-right">Importe MXN</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50 font-semibold text-slate-700">
-                              {(paymentSubTab === 'recibidos' ? agentFinancials.receivedPayments : agentFinancials.pendingPayments).map((tx) => {
-                                const stObj = students.find(s => s.id === tx.studentId);
-                                return (
-                                  <tr key={tx.id} className="hover:bg-slate-50/30 transition-colors">
-                                    <td className="px-5 py-3.5 font-mono text-slate-400 font-normal">{tx.date}</td>
-                                    <td className="px-5 py-3.5">
-                                      <div className="flex items-center space-x-1.5">
-                                        <div className={`w-1.5 h-1.5 rounded-full ${tx.status === 'Aplicado' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                                        <p className="font-bold text-slate-900">{tx.description}</p>
-                                      </div>
-                                    </td>
-                                    <td className="px-5 py-3.5">
-                                      {stObj ? `${stObj.name} ${stObj.lastName || ''}` : <span className="text-slate-400 italic">Global</span>}
-                                    </td>
-                                    <td className="px-5 py-3.5 text-slate-500">{tx.paymentMethod || 'Transferencia'}</td>
-                                    <td className="px-5 py-3.5 text-right font-mono text-slate-500 font-bold">
-                                      {tx.amount.toLocaleString()} {tx.currency}
-                                    </td>
-                                    <td className="px-5 py-3.5 text-right font-mono font-black text-slate-900">
-                                      ${tx.amountMXN.toLocaleString()} MXN
+                        {/* LISTADO DE COMISIONES EXTRAS DE ESTE AGENTE */}
+                        <div className="bg-white p-5 border border-slate-200 rounded-2xl shadow-xs lg:col-span-2 flex flex-col min-h-[300px]">
+                          <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-4">Comisiones Especiales Registradas ({(selectedAgent.extraCommissions || []).length})</h4>
+                          
+                          <div className="flex-1 overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                  <th className="px-4 py-3">Institución</th>
+                                  <th className="px-4 py-3">Concepto</th>
+                                  <th className="px-4 py-3">Tipo de Comisión</th>
+                                  <th className="px-4 py-3 text-right">Comisión</th>
+                                  <th className="px-4 py-3 text-right">Acción</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
+                                {extraCommissionsDetails.map((comm) => {
+                                  const instObj = institutions.find(i => i.id === comm.institutionId);
+                                  return (
+                                    <tr key={comm.id} className="hover:bg-slate-50/50 transition-colors">
+                                      <td className="px-4 py-3.5">
+                                        <div className="flex items-start space-x-2">
+                                          <div className="p-1 bg-slate-100 text-slate-500 rounded shrink-0 mt-0.5">
+                                            <Building2 className="w-3.5 h-3.5" />
+                                          </div>
+                                          <div>
+                                            <p className="font-bold text-slate-900 leading-tight">{instObj?.name || `Institución #${comm.institutionId}`}</p>
+                                            <p className="text-[9px] text-slate-400 mt-0.5">{instObj?.country || "N/A"}</p>
+                                          </div>
+                                        </div>
+                                      </td>
+                                      
+                                      <td className="px-4 py-3.5">
+                                        <div className="space-y-1">
+                                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                            comm.category === 'course' 
+                                              ? 'bg-blue-50 text-blue-700 border border-blue-100/30' 
+                                              : comm.category === 'membership'
+                                              ? 'bg-purple-50 text-purple-700 border border-purple-100/30'
+                                              : 'bg-amber-50 text-amber-700 border border-amber-100/30'
+                                          }`}>
+                                            {comm.category === 'course' && 'Por Curso'}
+                                            {comm.category === 'membership' && 'Por Membresía'}
+                                            {comm.category === 'special' && 'Especial'}
+                                            {!comm.category && 'Especial'}
+                                          </span>
+                                          {comm.category === 'course' && (
+                                            <p className="text-[10px] text-slate-500 font-bold pl-1 mt-1">
+                                              Total Cursos: <span className="text-slate-800 font-mono">{comm.totalCourses}</span>
+                                            </p>
+                                          )}
+                                        </div>
+                                      </td>
+
+                                      <td className="px-4 py-3.5">
+                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                          comm.type === 'percentage' 
+                                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-100/30' 
+                                            : 'bg-emerald-50 text-emerald-700 border border-emerald-100/30'
+                                        }`}>
+                                          {comm.type === 'percentage' ? '% Porcentaje de Venta' : 'Monto Fijo Asignado'}
+                                        </span>
+                                      </td>
+
+                                      <td className="px-4 py-3.5 text-right font-mono text-slate-900">
+                                        <div className="space-y-1 text-right">
+                                          <p className="font-black text-xs">
+                                            {comm.type === 'percentage' 
+                                              ? `${comm.value}%` 
+                                              : `${new Intl.NumberFormat('es-MX', { style: 'currency', currency: comm.currency || 'USD' }).format(comm.value)} ${comm.currency}`
+                                            }
+                                          </p>
+                                          <p className="text-[10px] font-bold text-indigo-600">
+                                            Total: ${comm.calculatedAmountMXN.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                                          </p>
+                                        </div>
+                                      </td>
+
+                                      <td className="px-4 py-3.5 text-right">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const updatedComms = (selectedAgent.extraCommissions || []).filter(x => x.id !== comm.id);
+                                            updateUser(selectedAgent.id, { extraCommissions: updatedComms });
+                                          }}
+                                          className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-all"
+                                          title="Eliminar comisión extra"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+
+                                {extraCommissionsDetails.length === 0 && (
+                                  <tr>
+                                    <td colSpan={5} className="px-4 py-16 text-center text-slate-400">
+                                      <Briefcase className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                      <p className="font-bold text-xs text-slate-400">No hay comisiones extras registradas para este agente.</p>
+                                      <p className="text-[10px] text-slate-300 max-w-xs mx-auto mt-1">Utiliza el panel lateral de la izquierda para agregar su primera comisión específica.</p>
                                     </td>
                                   </tr>
-                                );
-                              })}
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
 
-                              {(paymentSubTab === 'recibidos' ? agentFinancials.receivedPayments : agentFinancials.pendingPayments).length === 0 && (
-                                <tr>
-                                  <td colSpan={6} className="px-5 py-12 text-center text-slate-400">
-                                    No hay registros de cobro {paymentSubTab === 'recibidos' ? 'aplicados' : 'pendientes'} para este gestor.
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
+                          {/* Resumen de totales de comisiones extras */}
+                           {extraCommissionsDetails.length > 0 && (
+                             <div className="mt-6 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-4 gap-4 bg-slate-50/50 p-4 rounded-xl font-sans">
+                               <div>
+                                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Cursos ({extraCommissionsDetails.filter(c => c.category === 'course').reduce((acc, c) => acc + c.totalCourses, 0)} cursos)</p>
+                                 <p className="text-xs font-bold text-slate-800 font-mono">${extraSums.courseSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN</p>
+                               </div>
+                               <div>
+                                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Membresías</p>
+                                 <p className="text-xs font-bold text-slate-800 font-mono">${extraSums.membershipSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN</p>
+                               </div>
+                               <div>
+                                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Especiales</p>
+                                 <p className="text-xs font-bold text-slate-800 font-mono">${extraSums.specialSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN</p>
+                               </div>
+                               <div className="bg-indigo-50/60 p-2.5 rounded-lg border border-indigo-100/40">
+                                 <p className="text-[9px] font-extrabold text-indigo-500 uppercase tracking-wider">Sumatoria de Comisiones</p>
+                                 <p className="text-sm font-black text-indigo-700 font-mono">${extraSums.totalSumMXN.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN</p>
+                               </div>
+                             </div>
+                           )}
                         </div>
+
                       </div>
 
                     </div>
@@ -1259,6 +2376,202 @@ export function Agentes() {
           </div>
         </div>
       </Modal>
+
+      {/* MODAL LIQUIDACIÓN / PAGO DE COMISIONES */}
+      <AnimatePresence>
+        {showPayoutModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl relative border border-slate-100 max-h-[90vh] overflow-y-auto"
+            >
+              <div className="mb-4">
+                <h3 className="text-base font-black text-slate-900 tracking-tight">Programar o Registrar Liquidación</h3>
+                <p className="text-xs text-slate-400">Genera la salida/egresos correspondientes con verificación de límites por concepto.</p>
+              </div>
+
+              {selectedCommForPayout && (() => {
+                const instObj = institutions.find(i => i.id === selectedCommForPayout.institutionId);
+                const activeComm = extraCommissionsWithBalances.find(c => c.id === selectedCommForPayout.id);
+                const limitMXN = activeComm ? activeComm.remainingMXN : 0;
+
+                return (
+                  <form onSubmit={handleRegisterPayout} className="space-y-4 font-sans text-xs">
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-150 space-y-1">
+                      <p className="text-slate-400 font-bold uppercase tracking-wider text-[9px]">Concepto de Comisión</p>
+                      <p className="font-extrabold text-slate-800 text-[11px]">
+                        {instObj?.name || 'Institución'}
+                      </p>
+                      <div className="flex justify-between items-center text-slate-500 font-semibold pt-1">
+                        <span>Monto Configurado: ${activeComm?.calculatedAmountMXN.toLocaleString('es-MX')} MXN</span>
+                        <span className="text-amber-800 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100/30">
+                          Máximo por pagar: ${limitMXN.toLocaleString('es-MX')} MXN
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Fecha de Pago */}
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-450 uppercase tracking-widest mb-1">Fecha de Pago / Liquidación</label>
+                      <input
+                        type="date"
+                        value={payoutDate}
+                        onChange={(e) => setPayoutDate(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none font-mono"
+                        required
+                      />
+                      <p className="text-[10px] text-indigo-600 mt-1 font-semibold">
+                        💡 Si eliges una fecha a futuro, el pago se guardará como <strong className="font-bold text-indigo-700">"Programado"</strong> y se devengará en esa fecha.
+                      </p>
+                    </div>
+
+                    {/* Forma de Pago y Cuenta Origen */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-450 uppercase tracking-widest mb-1">Forma de Pago</label>
+                        <select
+                          value={payoutMethod}
+                          onChange={(e) => setPayoutMethod(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none cursor-pointer appearance-none"
+                        >
+                          <option value="Transferencia">Transferencia Bancaria</option>
+                          <option value="Efectivo">Efectivo</option>
+                          <option value="Cheque">Cheque Nominativo</option>
+                          <option value="Tarjeta">Tarjeta de Crédito Corporativa</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-450 uppercase tracking-widest mb-1">Cuenta de Origen</label>
+                        <select
+                          value={payoutBankAccountId}
+                          onChange={(e) => setPayoutBankAccountId(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none cursor-pointer appearance-none"
+                        >
+                          <option value="">-- Sin cuenta asignada --</option>
+                          {bankAccounts?.map(bank => (
+                            <option key={bank.id} value={bank.id.toString()}>
+                              {bank.bankName} - No: {bank.accountNumber || ''} ({bank.currency || 'MXN'})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Importes Conversor USD/MXN */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/50 p-3 rounded-2xl border border-slate-100">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-450 uppercase tracking-widest mb-1">Monto (USD)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={payoutAmountUSD}
+                          onChange={(e) => {
+                            const usd = Number(e.target.value);
+                            setPayoutAmountUSD(e.target.value);
+                            if (usd && payoutExchangeRate) {
+                              const mxnAmt = Math.min(limitMXN, Math.round(usd * Number(payoutExchangeRate) * 100) / 100);
+                              setPayoutAmountMXN(mxnAmt.toString());
+                            }
+                          }}
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none font-mono"
+                          placeholder="0.00"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-450 uppercase tracking-widest mb-1">Tipo de Cambio</label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={payoutExchangeRate}
+                          onChange={(e) => {
+                            const rate = Number(e.target.value);
+                            setPayoutExchangeRate(e.target.value);
+                            if (Number(payoutAmountUSD) && rate) {
+                              const mxnAmt = Math.min(limitMXN, Math.round(Number(payoutAmountUSD) * rate * 100) / 100);
+                              setPayoutAmountMXN(mxnAmt.toString());
+                            }
+                          }}
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none font-mono"
+                          placeholder="e.g. 18.00"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-450 uppercase tracking-widest mb-1">Monto (MXN)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={payoutAmountMXN}
+                          onChange={(e) => {
+                            const mxnVal = Number(e.target.value);
+                            setPayoutAmountMXN(e.target.value);
+                            if (mxnVal && payoutExchangeRate) {
+                              const usdVal = Math.round((mxnVal / Number(payoutExchangeRate)) * 100) / 100;
+                              setPayoutAmountUSD(usdVal.toString());
+                            }
+                          }}
+                          className={`w-full px-3 py-2 bg-white border rounded-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none font-mono ${
+                            Number(payoutAmountMXN) > limitMXN + 1 ? 'border-red-300 text-red-900 bg-red-55' : 'border-slate-200'
+                          }`}
+                          placeholder="0.00"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    {/* Alerta de exceso de límite en tiempo real */}
+                    {Number(payoutAmountMXN) > limitMXN + 1 && (
+                      <div className="bg-red-50 border border-red-100 p-3 rounded-lg flex items-start gap-1.5 text-red-800 text-[10.5px] font-bold">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-red-650" />
+                        <span>El total ingresado en pesos (${Number(payoutAmountMXN).toLocaleString('es-MX')} MXN) supera el saldo disponible (${limitMXN.toLocaleString('es-MX')} MXN). Se impedirá la ejecución al enviar el formulario.</span>
+                      </div>
+                    )}
+
+                    {/* Comentarios */}
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-450 uppercase tracking-widest mb-1">Comentarios / Observaciones</label>
+                      <textarea
+                        value={payoutComments}
+                        onChange={(e) => setPayoutComments(e.target.value)}
+                        rows={2}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none font-sans"
+                        placeholder="Escribe comentarios, folio o banco de depósito"
+                      />
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end space-x-2 pt-4 border-t border-slate-100 font-sans">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowPayoutModal(false);
+                          setSelectedCommForPayout(null);
+                        }}
+                        className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-xs font-bold transition-all text-slate-500 cursor-pointer"
+                      >
+                        Cerrar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={Number(payoutAmountMXN) > limitMXN + 1}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-350 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 cursor-pointer animate-none"
+                      >
+                        {payoutDate > new Date().toISOString().split('T')[0] ? 'Programar Pago a Futuro' : 'Registrar Pago (Egresos)'}
+                      </button>
+                    </div>
+                  </form>
+                );
+              })()}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

@@ -123,6 +123,20 @@
       },
       "required": ["id", "description"]
     },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System-wide tracking of critical changes to financial transactions or provider details.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "userName": { "type": "string" }
+      },
+      "required": ["id", "entityType", "description"]
+    },
     "FinancialTransaction": {
       "title": "FinancialTransaction",
       "description": "General system financial ledger item.",
@@ -171,9 +185,24 @@
         "email": { "type": "string" },
         "role": { "type": "string" },
         "password": { "type": "string" },
-        "requirePasswordChange": { "type": "boolean" }
+        "requirePasswordChange": { "type": "boolean" },
+        "requireEmailVerification": { "type": "boolean" },
+        "emailVerified": { "type": "boolean" }
       },
       "required": ["id", "name", "email", "role"]
+    },
+    "Backup": {
+      "title": "Backup",
+      "description": "Metadata about system database backup snapshot.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string" },
+        "size": { "type": "string" },
+        "records": { "type": "number" }
+      },
+      "required": ["id", "date", "type", "size", "records"]
     }
   },
   "firestore": {
@@ -221,6 +250,10 @@
       "schema": "Activity",
       "description": "Audit trails and historical event lists"
     },
+    "auditLogs": {
+      "schema": "AuditLog",
+      "description": "System audit logs for core state changes such as Payment modifications or Provider changes"
+    },
     "financialTransactions": {
       "schema": "FinancialTransaction",
       "description": "Cash ledger of incomes and expenses"
@@ -232,6 +265,34 @@
     "users": {
       "schema": "User",
       "description": "System users catalog supporting credentials, auto-passwords, and roles"
+    },
+    "companyInfo": {
+      "schema": "object",
+      "description": "Company registration and configuration details"
+    },
+    "companyDocuments": {
+      "schema": "object",
+      "description": "Company document metadata and records"
+    },
+    "financeCategories": {
+      "schema": "object",
+      "description": "Financial categorization and subcategory rules"
+    },
+    "accountStatements": {
+      "schema": "object",
+      "description": "Imported banking account statement sheets"
+    },
+    "statementTransactions": {
+      "schema": "object",
+      "description": "Granular operation entries compiled from statements"
+    },
+    "catalogs": {
+      "schema": "object",
+      "description": "Flexible drop-down dictionaries and country fees"
+    },
+    "app_backups": {
+      "schema": "Backup",
+      "description": "History and metadata of generated database backups"
     }
   }
 }

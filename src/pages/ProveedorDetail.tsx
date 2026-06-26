@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Building, MapPin, Phone, Mail, Network, Landmark, Receipt, Plus, Users, BookOpen, Trash2 } from "lucide-react";
 import { useAppContext, ProviderProductService } from "../context/AppContext";
@@ -36,9 +36,25 @@ export function ProveedorDetail() {
     name: '', lastName: '', position: '', area: '', email: '', phone: ''
   });
 
-  const [bankForm, setBankForm] = useState({
-    bankName: '', accountName: '', accountNumber: '', clabe: '', reference: ''
+  const [bankForm, setBankForm] = useState<{
+    bankName: string;
+    accountName: string;
+    accountNumber: string;
+    clabe: string;
+    reference: string;
+    currency: 'MXN' | 'USD';
+  }>({
+    bankName: '', accountName: '', accountNumber: '', clabe: '', reference: '', currency: 'MXN'
   });
+
+  useEffect(() => {
+    const isWF = bankForm.bankName.toLowerCase().includes('wellsfargo') ||
+                 bankForm.bankName.toLowerCase().includes('wells fargo') ||
+                 bankForm.bankName.toLowerCase().includes('wf');
+    if (isWF && bankForm.currency !== 'USD') {
+      setBankForm(prev => ({ ...prev, currency: 'USD' }));
+    }
+  }, [bankForm.bankName, bankForm.currency]);
 
   const [paymentForm, setPaymentForm] = useState({
     date: '', amount: '', tax: '', exchangeRate: '1.0', finalAmount: '', bankAccountId: '', concept: '', reference: ''
@@ -47,10 +63,51 @@ export function ProveedorDetail() {
   // Product and country rate states and helper
   const cn = (...classes: any[]) => classes.filter(Boolean).join(' ');
 
+  const normalizeProductType = (typeName: string): string => {
+    if (!typeName) return '';
+    return typeName
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") // remove accent marks
+      .replace(/s$/, '') // remove trailing 's' to unify singular & plural
+      .replace(/[^a-z0-9]/g, '') // remove spaces and symbols
+      .trim();
+  };
+
   // Dynamic product type defaults from catalogs list
   const catalogProductTypes = (catalogs['Tipo de Producto'] || [])
-    .filter(item => !item.providerIds || item.providerIds.length === 0 || item.providerIds.includes(Number(id)))
+    .filter(item => !item.providerIds || item.providerIds.length === 0 || item.providerIds.map(String).includes(String(id)))
     .map(item => item.name);
+
+  // Unify and deduplicate list of product types to display, merging catalog assignments and any already configured rates
+  const seenNormalized = new Set<string>();
+  const productTypesToDisplay: string[] = [];
+
+  for (const type of catalogProductTypes) {
+    const norm = normalizeProductType(type);
+    if (norm && !seenNormalized.has(norm)) {
+      seenNormalized.add(norm);
+      productTypesToDisplay.push(type);
+    }
+  }
+
+  const configuredServiceTypes = (providerProductServices || [])
+    .filter(ps => ps.providerId === Number(id) && ps.countryPrices && ps.countryPrices.length > 0)
+    .map(ps => ps.productType);
+
+  for (const type of configuredServiceTypes) {
+    const norm = normalizeProductType(type);
+    if (norm && !seenNormalized.has(norm)) {
+      seenNormalized.add(norm);
+      productTypesToDisplay.push(type);
+    }
+  }
+
+  // Final list of types to display with safe fallback
+  const finalProductTypesList = productTypesToDisplay.length > 0 
+    ? productTypesToDisplay 
+    : ["Clases", "Plataforma", "Examen", "Certificación"];
+
   const defaultProductType = catalogProductTypes.includes('Syllabus Académico') 
     ? 'Syllabus Académico' 
     : (catalogProductTypes[0] || 'Syllabus Académico');
@@ -60,6 +117,8 @@ export function ProveedorDetail() {
   const [selectedProductTypeForCountry, setSelectedProductTypeForCountry] = useState<string | null>(null);
   const [countryForm, setCountryForm] = useState({
     country: '',
+    startDate: '',
+    endDate: '',
     priceFullCredit: '',
     priceHalfCredit: '',
     priceFullApCredit: '',
@@ -76,12 +135,14 @@ export function ProveedorDetail() {
     
     // Find if the base type service setup already exists for this provider and productType
     let baseTypeProd = providerProductServices.find(
-      p => p.providerId === provider.id && p.productType === selectedProductTypeForCountry
+      p => p.providerId === provider.id && normalizeProductType(p.productType) === normalizeProductType(selectedProductTypeForCountry)
     );
 
     const isClase = ['clase', 'clases'].includes(selectedProductTypeForCountry?.toLowerCase() || '');
     const newRate = {
       country: countryForm.country,
+      startDate: countryForm.startDate,
+      endDate: countryForm.endDate,
       priceFullCredit: countryForm.priceFullCredit,
       priceHalfCredit: isClase ? countryForm.priceHalfCredit : '',
       priceFullApCredit: isClase ? countryForm.priceFullApCredit : '',
@@ -114,6 +175,8 @@ export function ProveedorDetail() {
     setSelectedProductTypeForCountry(null);
     setCountryForm({
       country: '',
+      startDate: '',
+      endDate: '',
       priceFullCredit: '',
       priceHalfCredit: '',
       priceFullApCredit: '',
@@ -128,7 +191,7 @@ export function ProveedorDetail() {
   const handleDeleteCountryRate = (productType: string, countryName: string) => {
     if (!provider) return;
     const baseTypeProd = providerProductServices.find(
-      p => p.providerId === provider.id && p.productType === productType
+      p => p.providerId === provider.id && normalizeProductType(p.productType) === normalizeProductType(productType)
     );
     if (!baseTypeProd) return;
     const updatedRates = (baseTypeProd.countryPrices || []).filter(r => r.country.toLowerCase() !== countryName.toLowerCase());
@@ -168,7 +231,7 @@ export function ProveedorDetail() {
     e.preventDefault();
     addBankAccount({ ...bankForm, providerId: provider.id });
     setIsBankModalOpen(false);
-    setBankForm({ bankName: '', accountName: '', accountNumber: '', clabe: '', reference: '' });
+    setBankForm({ bankName: '', accountName: '', accountNumber: '', clabe: '', reference: '', currency: 'MXN' });
   };
 
   const openPaymentModal = (payment?: any) => {
@@ -513,7 +576,16 @@ export function ProveedorDetail() {
                             <Landmark className="w-5 h-5" />
                           </div>
                           <div>
-                            <p className="font-extrabold text-slate-850 text-sm tracking-tight">{account.bankName}</p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="font-extrabold text-slate-850 text-sm tracking-tight">{account.bankName}</p>
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-black tracking-wider ${
+                                account.currency === 'USD' 
+                                  ? 'bg-blue-50 text-blue-700 border border-blue-100' 
+                                  : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                              }`}>
+                                {account.currency || 'MXN'}
+                              </span>
+                            </div>
                             <p className="text-xs text-slate-500 italic mt-0.5">Beneficiario: <b className="text-slate-700 font-medium">{account.accountName}</b></p>
                           </div>
                         </div>
@@ -816,9 +888,9 @@ export function ProveedorDetail() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {(catalogProductTypes.length > 0 ? catalogProductTypes : ["Clase", "Plataforma", "Examen", "Certificación"]).map((type) => {
+                  {finalProductTypesList.map((type) => {
                     const typeConfig = providerProductServices.find(
-                      ps => ps.providerId === provider.id && ps.productType === type
+                      ps => ps.providerId === provider.id && normalizeProductType(ps.productType) === normalizeProductType(type)
                     );
                     const hasRates = typeConfig && typeConfig.countryPrices && typeConfig.countryPrices.length > 0;
 
@@ -841,6 +913,8 @@ export function ProveedorDetail() {
                                 setSelectedProductTypeForCountry(type);
                                 setCountryForm({
                                   country: '',
+                                  startDate: '',
+                                  endDate: '',
                                   priceFullCredit: '',
                                   priceHalfCredit: '',
                                   priceFullApCredit: '',
@@ -865,15 +939,24 @@ export function ProveedorDetail() {
                                 {typeConfig.countryPrices.map((cp, cpIdx) => (
                                   <div key={cpIdx} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col hover:border-indigo-150 transition-colors">
                                     <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                                      <span className="text-xs font-bold text-slate-800 flex items-center">
-                                        🌍 {cp.country}
-                                      </span>
+                                      <div className="flex flex-col">
+                                        <span className="text-xs font-bold text-slate-800 flex items-center">
+                                          🌍 {cp.country}
+                                        </span>
+                                        {(cp.startDate || cp.endDate) && (
+                                          <span className="text-[9px] text-[#4f46e5] font-bold mt-0.5">
+                                            {cp.startDate ? `Vigencia: ${cp.startDate}` : 'Vigencia: indefinido'} {cp.endDate ? `al ${cp.endDate}` : ''}
+                                          </span>
+                                        )}
+                                      </div>
                                       <div className="flex items-center space-x-1 font-mono text-[9px]">
                                         <button
                                           onClick={() => {
                                             setCountryForm({
                                               ...cp,
                                               country: '', // Clear the country so they can pick a new target tariff country
+                                              startDate: cp.startDate || '',
+                                              endDate: cp.endDate || '',
                                             });
                                             setSelectedProductTypeForCountry(type);
                                             setIsCountryModalOpen(true);
@@ -886,7 +969,11 @@ export function ProveedorDetail() {
                                         <span className="text-slate-300">|</span>
                                         <button
                                           onClick={() => {
-                                            setCountryForm({ ...cp });
+                                            setCountryForm({
+                                              ...cp,
+                                              startDate: cp.startDate || '',
+                                              endDate: cp.endDate || '',
+                                            });
                                             setSelectedProductTypeForCountry(type);
                                             setIsCountryModalOpen(true);
                                           }}
@@ -1070,7 +1157,19 @@ export function ProveedorDetail() {
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">CLABE / IBAN</label>
               <input required type="text" value={bankForm.clabe} onChange={e => setBankForm({...bankForm, clabe: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" />
             </div>
-            <div className="col-span-2">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Moneda de la Cuenta</label>
+              <select
+                required
+                value={bankForm.currency}
+                onChange={e => setBankForm({...bankForm, currency: e.target.value as 'MXN' | 'USD'})}
+                className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-semibold"
+              >
+                <option value="MXN">MXN - Pesos Mexicanos</option>
+                <option value="USD">USD - Dólares Americanos</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Referencia (Opcional)</label>
               <input type="text" value={bankForm.reference} onChange={e => setBankForm({...bankForm, reference: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
             </div>
@@ -1081,7 +1180,7 @@ export function ProveedorDetail() {
         </form>
       </Modal>
 
-      <Modal isOpen={isPaymentModalOpen} onClose={closePaymentModal} title="Registrar Pago a Proveedor">
+      <Modal isOpen={isPaymentModalOpen} onClose={closePaymentModal} title="Registrar Pago a Proveedor" size="3xl">
         <FinancialTransactionForm 
           initialType="expense" 
           initialData={editingPayment} 
@@ -1267,6 +1366,27 @@ export function ProveedorDetail() {
                 <option key={tp.id} value={tp.name}>{tp.name}</option>
               ))}
             </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Fecha de Inicio</label>
+              <input 
+                type="date" 
+                value={countryForm.startDate} 
+                onChange={e => setCountryForm({...countryForm, startDate: e.target.value})} 
+                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium text-slate-700 cursor-pointer" 
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Fecha de Término</label>
+              <input 
+                type="date" 
+                value={countryForm.endDate} 
+                onChange={e => setCountryForm({...countryForm, endDate: e.target.value})} 
+                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium text-slate-700 cursor-pointer" 
+              />
+            </div>
           </div>
 
           <div className="space-y-4">

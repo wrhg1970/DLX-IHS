@@ -898,7 +898,7 @@ export function Agenda() {
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Asociar a Institución (Opcional)</label>
             <select value={taskForm.institutionId} onChange={e => setTaskForm({...taskForm, institutionId: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
               <option value="">Ninguna</option>
-              {institutions.map(i => (
+              {[...institutions].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es')).map(i => (
                 <option key={i.id} value={i.id}>{i.name}</option>
               ))}
             </select>
