@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Download, ArrowUpRight, ArrowDownRight, CreditCard, LayoutDashboard, History, Search, FileText, DollarSign, TrendingUp } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useAppContext } from "../context/AppContext";
+import { useAppContext, calculateInstitutionFinancials } from "../context/AppContext";
 
 export function Administracion() {
   const [activeTab, setActiveTab] = useState("Dashboard");
@@ -14,211 +14,27 @@ export function Administracion() {
   const [selectedInst, setSelectedInst] = useState<string>("all");
   const [onlyWithStudents, setOnlyWithStudents] = useState<boolean>(false);
 
-  const normalizeCountryName = (c: string) => {
-    return (c || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // removes accents
-      .replace(/ñ/g, "n")
-      .trim();
-  };
-
-  const resolveProviderClassCost = (
-    providerId: any,
-    creditType: string | undefined,
-    countryRef: string,
-    providerProductServices: any[] | undefined
-  ) => {
-    if (!providerId || !providerProductServices) return 0;
-    
-    // Find product service for Classes (could be plural "clases" or singular "clase")
-    const serviceClass = providerProductServices.find(
-      ps => Number(ps.providerId) === Number(providerId) &&
-        ['clase', 'clases'].includes((ps.productType || "").toLowerCase().trim())
-    );
-    
-    if (!serviceClass || !serviceClass.countryPrices) return 0;
-    
-    // Find matching country
-    const normCountryRef = normalizeCountryName(countryRef);
-    const cpData = serviceClass.countryPrices.find(
-      (p: any) => normalizeCountryName(p.country) === normCountryRef
-    );
-    
-    if (!cpData) return 0;
-    
-    const typeStr = (creditType || "").toLowerCase().trim();
-    const isAp = typeStr.includes("ap");
-    
-    let costStr = "0";
-    if (typeStr.includes("medio") || typeStr.includes("half")) {
-      costStr = isAp ? cpData.costHalfApCredit : cpData.costHalfCredit;
-    } else {
-      // defaults to Full/Completo
-      costStr = isAp ? cpData.costFullApCredit : cpData.costFullCredit;
-    }
-    
-    return parseFloat(String(costStr || "0").replace(/[^0-9.-]+/g, "") || "0");
-  };
-
-  // Helper to get USD without IVA (and convert MXN with IVA to USD without IVA if payWithIva is true)
-  const getUSDWithoutIva = (p: { currency: string; amount: number; amountMXN?: number; exchangeRate?: number }, inst: any) => {
-    if (p.currency === 'USD') {
-      return p.amount;
-    } else {
-      const amtMXN = p.amountMXN !== undefined ? p.amountMXN : p.amount;
-      const baseMXNWithoutIva = inst?.payWithIva ? amtMXN / 1.16 : amtMXN;
-      const rate = (p.exchangeRate && p.exchangeRate !== 1) ? p.exchangeRate : (Math.abs(baseMXNWithoutIva - 3768) < 5 ? 18.84 : 18.5);
-      return baseMXNWithoutIva / rate;
-    }
-  };
-
   // Calculate metrics per school/institution
   const metricsByInstitution = React.useMemo(() => {
     return institutions.map(inst => {
-      const instStudents = students.filter(s => Number(s.institutionId) === Number(inst.id));
-      const instStudentIds = instStudents.map(s => Number(s.id));
-      
-      // Enrolled courses (Prices are all in USD)
-      const instEnrollments = enrollments.filter(e => instStudentIds.includes(Number(e.studentId)));
-      const totalVendidoUSD = instEnrollments.reduce((sum, e) => {
-        let cp = e.price;
-        if (cp === undefined || cp === null) {
-          const cl = classes.find(c => Number(c.id) === Number(e.classId));
-          if (cl) {
-            const student = students.find(s => Number(s.id) === Number(e.studentId));
-            const cType = cl.creditType;
-            let valStr = "";
-            if (inst) {
-              if (cType === 'Medio Crédito') valStr = inst.priceHalfCredit || "";
-              else if (cType === 'Crédito completo AP') valStr = inst.priceFullApCredit || "";
-              else if (cType === 'Medio Crédito AP') valStr = inst.priceHalfApCredit || "";
-              else if (cType === 'Crédito completo') valStr = inst.priceFullCredit || "";
-            }
-            if (valStr) {
-              cp = parseFloat(valStr.replace(/[^0-9.-]+/g, "") || "0");
-            } else {
-              // Check if cl has countryRates
-              const studentCountry = inst?.country?.trim() || student?.country?.trim();
-              let rateForCountry = null;
-              if (studentCountry && cl.countryRates) {
-                rateForCountry = cl.countryRates[studentCountry];
-                if (!rateForCountry) {
-                  const matchKey = Object.keys(cl.countryRates).find(
-                    (k) => k.toLowerCase() === studentCountry.toLowerCase()
-                  );
-                  if (matchKey) {
-                    rateForCountry = cl.countryRates[matchKey];
-                  }
-                }
-              }
-              if (rateForCountry && rateForCountry.price) {
-                cp = parseFloat(rateForCountry.price.replace(/[^0-9.-]+/g, "") || "0");
-              } else {
-                if (cType === 'Medio Crédito') cp = 250;
-                else if (cType === 'Crédito completo AP') cp = 600;
-                else if (cType === 'Medio Crédito AP') cp = 300;
-                else cp = 500;
-              }
-            }
-          } else {
-            cp = 0;
-          }
-        }
-        return sum + (cp || 0);
-      }, 0);
-
-      // Membership Projections (This is in USD)
-      const activeMemb = catalogs?.['Membresías']?.find((m: any) => m.id === inst?.membershipId);
-      const membUnitAmount = activeMemb ? Number(activeMemb.amount || 0) : 0;
-      const customMembPrice = inst?.membershipPrice ? parseFloat((inst.membershipPrice || "").replace(/[^0-9.-]+/g, "")) : null;
-      const finalMembUnitAmount = customMembPrice !== null && !isNaN(customMembPrice) ? customMembPrice : membUnitAmount;
-      const totalMembUSD = finalMembUnitAmount;
-
-      // COMBINED REVENUE PROJECTIONS
-      const ingresosTotales = totalVendidoUSD + totalMembUSD;
-
-      // Received payments (income)
-      const instPaymentsList = (financialTransactions || []).filter(p => 
-        (Number(p.institutionId) === Number(inst.id) || (p.studentId && instStudentIds.includes(Number(p.studentId)))) && 
-        p.type === 'income' && 
-        (p.status === 'Aplicado' || p.status === 'Pagado')
+      const metrics = calculateInstitutionFinancials(
+        inst,
+        students,
+        enrollments,
+        classes,
+        catalogs,
+        providerProductServices,
+        financialTransactions
       );
-
-      // Divide payments into membership vs courses to compute outstanding balances exactly like in details
-      const membPayments = instPaymentsList.filter(p => 
-        p.subcategory === 'sub_membresia' || 
-        (p.concept && (p.concept.toLowerCase().includes('membresía') || p.concept.toLowerCase().includes('membresia'))) ||
-        (p.description && (p.description.toLowerCase().includes('membresía') || p.description.toLowerCase().includes('membresia')))
-      );
-      const coursesPayments = instPaymentsList.filter(p => !membPayments.includes(p));
-
-      const coursesPaidUSD = coursesPayments.reduce((sum, p) => sum + getUSDWithoutIva(p, inst), 0);
-      const membPaidUSD = membPayments.reduce((sum, p) => sum + getUSDWithoutIva(p, inst), 0);
-      
-      const coursesPendingUSD = Math.max(0, totalVendidoUSD - coursesPaidUSD);
-      const membPendingUSD = Math.max(0, totalMembUSD - membPaidUSD);
-      
-      // Total por Recaudar (Por Cobrar)
-      const ingresosPorCobrar = coursesPendingUSD + membPendingUSD;
-
-      // Total received / paid
-      const ingresosRecibidos = instPaymentsList.reduce((sum, p) => sum + getUSDWithoutIva(p, inst), 0);
-
-      // Total class costs to providers (in USD)
-      const cuentasPorPagar = instEnrollments.reduce((sum, e) => {
-        const cl = classes.find(c => Number(c.id) === Number(e.classId));
-        if (!cl) return sum;
-
-        const provId = e.providerId || cl.providerId;
-        const tariffId = inst?.tarifasId;
-        const countryRef = catalogs?.['Tarifas Países']?.find((c: any) => c.id === tariffId)?.name || inst?.country || 'Default';
-
-        let resolvedCost = resolveProviderClassCost(provId, cl.creditType, countryRef, providerProductServices);
-
-        let countryRate = null;
-        if (countryRef && cl.countryRates) {
-          countryRate = cl.countryRates[countryRef];
-          if (!countryRate) {
-            const matchKey = Object.keys(cl.countryRates).find(k => normalizeCountryName(k) === normalizeCountryName(countryRef));
-            if (matchKey) countryRate = cl.countryRates[matchKey];
-          }
-        }
-
-        if (!resolvedCost && countryRate?.cost) {
-          resolvedCost = parseFloat(countryRate.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
-        }
-
-        if (!resolvedCost && cl.cost) {
-          resolvedCost = parseFloat(cl.cost.toString().replace(/[^0-9.-]+/g, "") || "0");
-        }
-
-        // Default fallbacks if not found
-        if (!resolvedCost) {
-          const typeStr = (cl.creditType || "").toLowerCase().trim();
-          const isAp = typeStr.includes("ap");
-          const isHalf = typeStr.includes("medio") || typeStr.includes("half");
-
-          if (isHalf) {
-            resolvedCost = isAp ? 175 : 150;
-          } else {
-            resolvedCost = isAp ? 350 : 300;
-          }
-        }
-
-        return sum + resolvedCost;
-      }, 0);
-
-      const margen = ingresosTotales - cuentasPorPagar;
 
       return {
         inst,
-        numAlumnos: instStudents.length,
-        ingresosTotales,
-        ingresosRecibidos,
-        ingresosPorCobrar,
-        cuentasPorPagar,
-        margen
+        numAlumnos: metrics.numStudents,
+        ingresosTotales: metrics.totalIngresosProyectadosUSD,
+        ingresosRecibidos: metrics.totalPagadoUSD,
+        ingresosPorCobrar: metrics.totalPorRecaudarUSD,
+        cuentasPorPagar: metrics.totalCostUSD,
+        margen: metrics.margenProyectadoUSD
       };
     });
   }, [institutions, students, enrollments, classes, financialTransactions, providerProductServices, catalogs]);

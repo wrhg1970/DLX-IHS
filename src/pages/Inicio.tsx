@@ -21,10 +21,23 @@ import {
   ChevronRight,
   TrendingUp,
   AlertTriangle,
-  ArrowRight
+  ArrowRight,
+  Edit3,
+  Trash2,
+  Users,
+  CheckSquare,
+  Sparkles,
+  Phone,
+  Mail,
+  MapPin,
+  Video,
+  FileText,
+  Check,
+  AlertCircle
 } from "lucide-react";
 import { useAppContext, Task, TaskType } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
+import { hasPermission } from "../utils/permissionCheck";
 
 export function Inicio() {
   const navigate = useNavigate();
@@ -32,10 +45,12 @@ export function Inicio() {
     currentUser, 
     tasks, 
     updateTask, 
+    deleteTask,
     addTask, 
     students, 
     institutions, 
     users, 
+    teams,
     financialTransactions,
     payments
   } = useAppContext();
@@ -63,49 +78,211 @@ export function Inicio() {
   // Expiring contracts list modal state
   const [isExpiringModalOpen, setIsExpiringModalOpen] = useState(false);
 
-  // New task modal state
+  // New & Edit task modal state
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
+
   const [taskForm, setTaskForm] = useState({
     title: '',
     dueDate: new Date().toISOString().split('T')[0],
     institutionId: '',
     userId: currentUser?.id?.toString() || '',
-    type: 'Llamada' as TaskType
+    userIds: currentUser?.id ? [currentUser.id] : (users[0]?.id ? [users[0].id] : []),
+    teamId: '',
+    type: 'Llamada' as TaskType,
+    priority: 'Media' as 'Alta' | 'Media' | 'Baja',
+    status: 'Pendiente' as 'Pendiente' | 'Completada',
+    notes: ''
   });
 
-  const handleTaskSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    addTask({
-      title: taskForm.title,
-      dueDate: taskForm.dueDate,
+  const isTaskCreatedByMe = (task: Task) => {
+    if (!currentUser) return false;
+    if (!task.requestedBy) return false;
+    const currentName = (currentUser.name || '').trim().toLowerCase();
+    const currentEmail = (currentUser.email || '').trim().toLowerCase();
+    const reqBy = task.requestedBy.trim().toLowerCase();
+    return (
+      reqBy === currentName ||
+      reqBy === currentEmail ||
+      (currentName.length > 2 && reqBy.includes(currentName))
+    );
+  };
+
+  const canEditTask = (task: Task) => {
+    if (!currentUser) return false;
+    const isSuperAdmin = currentUser.role === 'Superadministrador' || currentUser.role === 'Admin Principal';
+    return isSuperAdmin || isTaskCreatedByMe(task);
+  };
+
+  const canDeleteTask = (task: Task) => {
+    if (!currentUser) return false;
+    const isSuperAdmin = currentUser.role === 'Superadministrador' || currentUser.role === 'Admin Principal';
+    return isSuperAdmin || isTaskCreatedByMe(task);
+  };
+
+  const myCreatedTasksCount = useMemo(() => {
+    return tasks.filter(t => isTaskCreatedByMe(t)).length;
+  }, [tasks, currentUser]);
+
+  const handleOpenNewTask = () => {
+    setEditingTask(null);
+    const myId = currentUser?.id;
+    setTaskForm({
+      title: '',
+      dueDate: new Date().toISOString().split('T')[0],
+      institutionId: '',
+      userId: myId ? String(myId) : (users[0]?.id ? String(users[0].id) : ''),
+      userIds: myId ? [myId] : (users[0]?.id ? [users[0].id] : []),
+      teamId: '',
+      type: 'Llamada',
+      priority: 'Media',
       status: 'Pendiente',
-      institutionId: taskForm.institutionId ? Number(taskForm.institutionId) : undefined,
-      userId: taskForm.userId ? Number(taskForm.userId) : undefined,
-      type: taskForm.type
+      notes: ''
     });
-    setIsTaskModalOpen(false);
-    setTaskForm({ 
-      title: '', 
-      dueDate: new Date().toISOString().split('T')[0], 
-      institutionId: '', 
-      userId: currentUser?.id?.toString() || '', 
-      type: 'Llamada' 
+    setIsTaskModalOpen(true);
+  };
+
+  const handleOpenEditTask = (task: Task) => {
+    setEditingTask(task);
+    const initialUserIds = task.userIds && task.userIds.length > 0
+      ? task.userIds
+      : (task.userId ? [task.userId] : (users[0]?.id ? [users[0].id] : []));
+
+    setTaskForm({
+      title: task.title || '',
+      dueDate: task.dueDate || new Date().toISOString().split('T')[0],
+      institutionId: task.institutionId ? String(task.institutionId) : '',
+      userId: task.userId ? String(task.userId) : (initialUserIds[0] ? String(initialUserIds[0]) : ''),
+      userIds: initialUserIds,
+      teamId: task.teamId ? String(task.teamId) : '',
+      type: (task.type || 'Llamada') as TaskType,
+      priority: (task.priority || 'Media') as 'Alta' | 'Media' | 'Baja',
+      status: (task.status || 'Pendiente') as 'Pendiente' | 'Completada',
+      notes: task.notes || ''
+    });
+    setIsTaskModalOpen(true);
+  };
+
+  const handleTeamSelectChange = (selectedTeamIdStr: string) => {
+    if (!selectedTeamIdStr) {
+      setTaskForm(prev => ({ ...prev, teamId: '' }));
+      return;
+    }
+    const tId = Number(selectedTeamIdStr);
+    const teamMembers = users.filter(u => u.teamId === tId).map(u => u.id);
+    setTaskForm(prev => ({
+      ...prev,
+      teamId: selectedTeamIdStr,
+      userIds: teamMembers.length > 0 ? teamMembers : prev.userIds,
+      userId: teamMembers.length > 0 ? String(teamMembers[0]) : prev.userId
+    }));
+  };
+
+  const handleToggleUserInTaskForm = (userId: number) => {
+    setTaskForm(prev => {
+      const exists = prev.userIds.includes(userId);
+      const updatedUserIds = exists 
+        ? prev.userIds.filter(id => id !== userId) 
+        : [...prev.userIds, userId];
+      return {
+        ...prev,
+        userIds: updatedUserIds,
+        userId: updatedUserIds.length > 0 ? String(updatedUserIds[0]) : ''
+      };
     });
   };
 
+  const handleTaskSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!taskForm.title.trim()) return;
+
+    const resolvedPrimaryUserId = taskForm.userIds.length > 0
+      ? taskForm.userIds[0]
+      : (taskForm.userId ? Number(taskForm.userId) : (currentUser?.id || users[0]?.id));
+    const resolvedTeamId = taskForm.teamId ? Number(taskForm.teamId) : undefined;
+    const resolvedUserIds = taskForm.userIds.length > 0
+      ? taskForm.userIds
+      : (resolvedPrimaryUserId ? [resolvedPrimaryUserId] : []);
+
+    if (editingTask) {
+      updateTask(editingTask.id, {
+        title: taskForm.title.trim(),
+        dueDate: taskForm.dueDate,
+        status: taskForm.status,
+        type: taskForm.type,
+        priority: taskForm.priority,
+        institutionId: taskForm.institutionId ? Number(taskForm.institutionId) : undefined,
+        userId: resolvedPrimaryUserId,
+        userIds: resolvedUserIds,
+        teamId: resolvedTeamId,
+        notes: taskForm.notes ? taskForm.notes.trim() : undefined
+      });
+    } else {
+      addTask({
+        title: taskForm.title.trim(),
+        dueDate: taskForm.dueDate,
+        status: 'Pendiente',
+        type: taskForm.type,
+        priority: taskForm.priority,
+        institutionId: taskForm.institutionId ? Number(taskForm.institutionId) : undefined,
+        userId: resolvedPrimaryUserId,
+        userIds: resolvedUserIds,
+        teamId: resolvedTeamId,
+        requestedBy: currentUser?.name || "Admin Principal",
+        notes: taskForm.notes ? taskForm.notes.trim() : undefined
+      });
+    }
+
+    setIsTaskModalOpen(false);
+    setEditingTask(null);
+  };
+
+  const handleDeleteTaskConfirm = () => {
+    if (taskToDelete) {
+      deleteTask(taskToDelete.id);
+      setTaskToDelete(null);
+      if (editingTask && editingTask.id === taskToDelete.id) {
+        setIsTaskModalOpen(false);
+        setEditingTask(null);
+      }
+    }
+  };
+
   const toggleTaskStatus = (id: number, currentStatus: "Pendiente" | "Completada") => {
+    const taskObj = tasks.find(t => t.id === id);
+    if (!taskObj) return;
+
+    const isSuperAdmin = currentUser?.role === 'Superadministrador' || currentUser?.role === 'Admin Principal';
+    const isAssigned = (taskObj.userId !== undefined && taskObj.userId !== null && Number(taskObj.userId) === Number(currentUser?.id)) ||
+      (taskObj.userIds && taskObj.userIds.includes(Number(currentUser?.id)));
+    const isCreator = isTaskCreatedByMe(taskObj);
+
+    if (!isSuperAdmin && !isAssigned && !isCreator) {
+      alert("Solo el creador de la tarea, los usuarios asignados o el super administrador pueden cambiar su estado de finalización.");
+      return;
+    }
+
     updateTask(id, { status: currentStatus === "Pendiente" ? "Completada" : "Pendiente" });
   };
 
   // Filter logic
   const filteredTasks = tasks.filter(t => {
-    // Created by filter (using userId for mockup assignee/creator mapping simple match)
-    if (filterCreatedBy !== "Cualquiera" && t.userId?.toString() !== filterCreatedBy) {
-      return false;
+    // Created by filter
+    if (filterCreatedBy === "mis_tareas") {
+      if (!isTaskCreatedByMe(t)) return false;
+    } else if (filterCreatedBy !== "Cualquiera") {
+      const creatorUser = users.find(u => u.id.toString() === filterCreatedBy);
+      const matchesCreator = 
+        (t.requestedBy && creatorUser && t.requestedBy.toLowerCase().includes(creatorUser.name.toLowerCase())) ||
+        (t.userId?.toString() === filterCreatedBy);
+      if (!matchesCreator) return false;
     }
     // Responsable filter
-    if (filterAssignee !== "Cualquiera" && t.userId?.toString() !== filterAssignee) {
-      return false;
+    if (filterAssignee !== "Cualquiera") {
+      const targetUid = Number(filterAssignee);
+      const isAssigned = (t.userId === targetUid) || (t.userIds && t.userIds.includes(targetUid));
+      if (!isAssigned) return false;
     }
     // Status filter
     if (filterStatus === "Pendientes" && t.status !== "Pendiente") return false;
@@ -322,37 +499,83 @@ export function Inicio() {
       {/* 1.5. Dynamic Strategic Summary Cards Block (Requested Component) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-1.5">
         
-        {/* Card A: Ingresos Totales */}
-        <div 
-          onClick={() => navigate('/reportes')}
-          className="relative bg-white border border-slate-200/80 hover:border-emerald-300 rounded-[24px] shadow-sm transition-all duration-300 hover:shadow-xl hover:scale-[1.015] cursor-pointer group flex flex-col justify-between h-[155px]"
-        >
-          {/* Background decoration with overflow-hidden isolated to avoid shadow cropping */}
-          <div className="absolute inset-0 rounded-[24px] overflow-hidden pointer-events-none">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-emerald-500/10 to-transparent rounded-full blur-2xl group-hover:scale-125 transition-transform duration-500"></div>
-          </div>
-          
-          <div className="relative z-10 p-6 flex flex-col justify-between h-full w-full">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-450">Ingresos Totales</span>
-              <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center font-bold shadow-sm shadow-emerald-500/10">
-                <DollarSign className="w-5 h-5" strokeWidth={2.5} />
+        {/* Card A: Ingresos Totales (Restricted ONLY to users with access to Dashboard) */}
+        {hasPermission(currentUser?.role, "Dashboard", "view") ? (
+          <div 
+            onClick={() => navigate('/reportes')}
+            className="relative bg-white border border-slate-200/80 hover:border-emerald-300 rounded-[24px] shadow-sm transition-all duration-300 hover:shadow-xl hover:scale-[1.015] cursor-pointer group flex flex-col justify-between h-[155px]"
+          >
+            {/* Background decoration with overflow-hidden isolated to avoid shadow cropping */}
+            <div className="absolute inset-0 rounded-[24px] overflow-hidden pointer-events-none">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-emerald-500/10 to-transparent rounded-full blur-2xl group-hover:scale-125 transition-transform duration-500"></div>
+            </div>
+            
+            <div className="relative z-10 p-6 flex flex-col justify-between h-full w-full">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-450">Ingresos Totales Empresa</span>
+                <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center font-bold shadow-sm shadow-emerald-500/10">
+                  <DollarSign className="w-5 h-5" strokeWidth={2.5} />
+                </div>
+              </div>
+              <div className="mt-2 space-y-1">
+                <h4 className="text-xl md:text-2xl font-black text-slate-800 font-mono tracking-tight leading-none">
+                  ${totalIncomeMXN.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-xs text-slate-500 font-bold font-sans">MXN</span>
+                </h4>
+                <p className="text-xs text-emerald-600 font-black font-mono leading-none">
+                  ≈ ${totalIncomeUSD.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[9px] font-black font-sans uppercase">USD</span>
+                </p>
+                <div className="flex items-center text-[9px] font-bold text-slate-400 pt-1">
+                  <TrendingUp className="w-3 h-3 mr-1 text-emerald-500" />
+                  <span>Ver flujos de caja y reportes financieros</span>
+                </div>
               </div>
             </div>
-            <div className="mt-2 space-y-1">
-              <h4 className="text-xl md:text-2xl font-black text-slate-800 font-mono tracking-tight leading-none">
-                ${totalIncomeMXN.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-xs text-slate-500 font-bold font-sans">MXN</span>
-              </h4>
-              <p className="text-xs text-emerald-600 font-black font-mono leading-none">
-                ≈ ${totalIncomeUSD.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[9px] font-black font-sans uppercase">USD</span>
-              </p>
-              <div className="flex items-center text-[9px] font-bold text-slate-400 pt-1">
-                <TrendingUp className="w-3 h-3 mr-1 text-emerald-500" />
-                <span>Ver flujos de caja y ledger general</span>
+          </div>
+        ) : (
+          <div 
+            onClick={() => {
+              if (hasPermission(currentUser?.role, "CRM", "view") || hasPermission(currentUser?.role, "CRM - Prospectos", "view")) {
+                navigate('/crm');
+              } else if (hasPermission(currentUser?.role, "Alumnos", "view")) {
+                navigate('/alumnos');
+              } else {
+                navigate('/instituciones');
+              }
+            }}
+            className="relative bg-white border border-slate-200/80 hover:border-indigo-300 rounded-[24px] shadow-sm transition-all duration-300 hover:shadow-xl hover:scale-[1.015] cursor-pointer group flex flex-col justify-between h-[155px]"
+          >
+            <div className="absolute inset-0 rounded-[24px] overflow-hidden pointer-events-none">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl group-hover:scale-125 transition-transform duration-500"></div>
+            </div>
+            
+            <div className="relative z-10 p-6 flex flex-col justify-between h-full w-full">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-450">
+                  {hasPermission(currentUser?.role, "CRM", "view") || hasPermission(currentUser?.role, "CRM - Prospectos", "view") 
+                    ? "Módulo Comercial CRM" 
+                    : "Matrícula Institucional"}
+                </span>
+                <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center font-bold shadow-sm shadow-indigo-500/10">
+                  <Briefcase className="w-5 h-5" strokeWidth={2.5} />
+                </div>
+              </div>
+              <div className="mt-2 space-y-1">
+                <h4 className="text-xl md:text-2xl font-black text-slate-800 font-mono tracking-tight leading-none">
+                  {hasPermission(currentUser?.role, "CRM", "view") || hasPermission(currentUser?.role, "CRM - Prospectos", "view")
+                    ? "Seguimiento Prospectos"
+                    : `${students.length} Alumnos Registrados`}
+                </h4>
+                <p className="text-xs text-indigo-600 font-bold leading-none">
+                  {institutions.length} Instituciones y Colegios Activos
+                </p>
+                <div className="flex items-center text-[9px] font-bold text-slate-400 pt-1">
+                  <ChevronRight className="w-3 h-3 mr-1 text-indigo-500" />
+                  <span>Acceso rápido a gestión operativa</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Card B: Instituciones con contratos por vencer */}
         <div 
@@ -562,6 +785,7 @@ export function Inicio() {
                     className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-bold outline-none text-slate-700 focus:ring-1 focus:ring-indigo-500 cursor-pointer"
                   >
                     <option value="Cualquiera">Cualquiera</option>
+                    <option value="mis_tareas">⭐ Creadas por mí ({myCreatedTasksCount})</option>
                     {users.map(u => (
                       <option key={u.id} value={u.id.toString()}>{u.name}</option>
                     ))}
@@ -652,6 +876,14 @@ export function Inicio() {
                                       task.type === 'Correo' ? '✉️' :
                                       task.type === 'Visita' ? '📍' :
                                       task.type === 'Meet' ? '💻' : '📝';
+                        const userCanEdit = canEditTask(task);
+                        const userCanDelete = canDeleteTask(task);
+                        const createdByMe = isTaskCreatedByMe(task);
+                        const assignedTeam = task.teamId ? teams.find(t => t.id === task.teamId) : null;
+                        const assignedUserIds = task.userIds && task.userIds.length > 0
+                          ? task.userIds
+                          : (task.userId ? [task.userId] : []);
+
                         return (
                           <div 
                             key={task.id} 
@@ -659,16 +891,32 @@ export function Inicio() {
                               isOverdue ? 'border-rose-200 shadow-rose-50/5' : 'border-slate-200 hover:border-indigo-300'
                             }`}
                           >
-                            <div className="flex items-start space-x-3.5">
+                            <div className="flex items-start space-x-3.5 flex-1 min-w-0 mr-3">
                               <button 
                                 onClick={() => toggleTaskStatus(task.id, task.status)}
-                                className="mt-0.5 text-slate-400 hover:text-indigo-650 transition-colors shrink-0"
+                                className="mt-0.5 text-slate-400 hover:text-indigo-650 transition-colors shrink-0 cursor-pointer"
+                                title="Marcar como completada"
                               >
                                 <Circle className="w-5 h-5 text-slate-400 hover:text-indigo-600 hover:fill-indigo-50/30" />
                               </button>
-                              <div className="space-y-1.5">
-                                <p className="font-bold text-slate-800 text-sm">{task.title}</p>
-                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] font-bold text-slate-500">
+                              <div className="space-y-1.5 min-w-0 flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="font-bold text-slate-800 text-sm truncate">{task.title}</p>
+                                  {createdByMe && (
+                                    <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 border border-indigo-200 text-[9px] font-extrabold px-2 py-0.5 rounded-md">
+                                      <Sparkles className="w-2.5 h-2.5 text-indigo-500" />
+                                      Creada por mí
+                                    </span>
+                                  )}
+                                  {task.priority && task.priority !== "Media" && (
+                                    <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded border ${
+                                      task.priority === "Alta" ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                    }`}>
+                                      {task.priority === "Alta" ? "⚡ Alta" : "Baja"}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[10px] font-bold text-slate-500">
                                   {task.type && (
                                     <span className={`px-2 py-0.5 rounded-lg text-[9px] uppercase tracking-wider font-extrabold flex items-center gap-1 ${badgeStyle}`}>
                                       <span>{emoji}</span> {task.type}
@@ -681,11 +929,52 @@ export function Inicio() {
                                   }`}>
                                     Agenda: {task.dueDate || "Sin fecha"} {isOverdue ? "(Atrasada)" : ""}
                                   </span>
-                                  <span className="flex items-center text-slate-500 bg-slate-50 px-2 py-0.5 rounded-lg border border-slate-150 font-semibold text-[9px]">
-                                    <UserCheck className="w-3 h-3 mr-1 text-slate-400" /> {assignedTo}
-                                  </span>
+                                  {assignedTeam && (
+                                    <span className="flex items-center text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-150 font-semibold text-[9px]">
+                                      <Users className="w-3 h-3 mr-1 text-indigo-500" /> {assignedTeam.name}
+                                    </span>
+                                  )}
+                                  {assignedUserIds.length > 1 ? (
+                                    <span className="flex items-center text-slate-600 bg-slate-50 px-2 py-0.5 rounded-lg border border-slate-150 font-semibold text-[9px]">
+                                      <Users className="w-3 h-3 mr-1 text-slate-400" /> {assignedUserIds.length} responsables
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center text-slate-500 bg-slate-50 px-2 py-0.5 rounded-lg border border-slate-150 font-semibold text-[9px]">
+                                      <UserCheck className="w-3 h-3 mr-1 text-slate-400" /> {assignedTo}
+                                    </span>
+                                  )}
+                                  {task.requestedBy && !createdByMe && (
+                                    <span className="text-slate-400 text-[9px] font-medium italic">
+                                      Por: {task.requestedBy}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
+                            </div>
+
+                            {/* Action Buttons for Edit & Delete */}
+                            <div className="flex items-center space-x-1.5 shrink-0">
+                              {userCanEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditTask(task)}
+                                  className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-800 transition cursor-pointer flex items-center gap-1 text-xs font-bold shadow-2xs border border-indigo-150"
+                                  title="Editar tarea creada por ti"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span className="hidden sm:inline text-[10px]">Editar</span>
+                                </button>
+                              )}
+                              {userCanDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => setTaskToDelete(task)}
+                                  className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer shadow-2xs border border-rose-150"
+                                  title="Eliminar tarea"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -711,20 +1000,36 @@ export function Inicio() {
                     <div className="grid grid-cols-1 gap-2.5">
                       {completedFilteredTasks.map((task: Task) => {
                         const assignedTo = users.find(u => u.id === task.userId)?.name || "Sin asignar";
+                        const userCanEdit = canEditTask(task);
+                        const userCanDelete = canDeleteTask(task);
+                        const createdByMe = isTaskCreatedByMe(task);
+                        const assignedTeam = task.teamId ? teams.find(t => t.id === task.teamId) : null;
+                        const assignedUserIds = task.userIds && task.userIds.length > 0
+                          ? task.userIds
+                          : (task.userId ? [task.userId] : []);
+
                         return (
                           <div 
                             key={task.id} 
-                            className="p-4 rounded-xl bg-slate-50/50 border border-slate-200 flex items-start justify-between opacity-75 hover:opacity-100 transition-opacity group"
+                            className="p-4 rounded-xl bg-slate-50/50 border border-slate-200 flex items-start justify-between opacity-80 hover:opacity-100 transition-opacity group"
                           >
-                            <div className="flex items-start space-x-3.5">
+                            <div className="flex items-start space-x-3.5 flex-1 min-w-0 mr-3">
                               <button 
                                 onClick={() => toggleTaskStatus(task.id, task.status)}
-                                className="mt-0.5 text-emerald-600 shrink-0"
+                                className="mt-0.5 text-emerald-600 shrink-0 cursor-pointer"
+                                title="Marcar como pendiente"
                               >
                                 <CheckCircle2 className="w-5 h-5 text-emerald-500 fill-emerald-50" />
                               </button>
-                              <div className="space-y-1">
-                                <p className="font-medium text-slate-500 line-through text-sm">{task.title}</p>
+                              <div className="space-y-1 min-w-0 flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="font-medium text-slate-500 line-through text-sm truncate">{task.title}</p>
+                                  {createdByMe && (
+                                    <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-600 border border-slate-250 text-[9px] font-bold px-1.5 py-0.2 rounded">
+                                      Creada por mí
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-slate-400">
                                   {task.type && (
                                     <span className="bg-slate-200 text-slate-605 px-1.5 py-0.2 rounded-md font-bold uppercase tracking-wider text-[8px]">
@@ -732,11 +1037,46 @@ export function Inicio() {
                                     </span>
                                   )}
                                   <span className="font-mono">Fecha: {task.dueDate}</span>
-                                  <span className="flex items-center">
-                                    <UserCheck className="w-3 h-3 mr-1" /> {assignedTo}
-                                  </span>
+                                  {assignedTeam && (
+                                    <span className="text-slate-500 font-semibold">
+                                      👥 {assignedTeam.name}
+                                    </span>
+                                  )}
+                                  {assignedUserIds.length > 1 ? (
+                                    <span className="text-slate-500 font-semibold">
+                                      👤 {assignedUserIds.length} asignados
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center">
+                                      <UserCheck className="w-3 h-3 mr-1" /> {assignedTo}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
+                            </div>
+
+                            {/* Action Buttons for Edit & Delete */}
+                            <div className="flex items-center space-x-1.5 shrink-0">
+                              {userCanEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditTask(task)}
+                                  className="p-1.5 rounded-lg bg-white text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 transition cursor-pointer border border-slate-200"
+                                  title="Editar tarea"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {userCanDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => setTaskToDelete(task)}
+                                  className="p-1.5 rounded-lg bg-white text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer border border-slate-200"
+                                  title="Eliminar tarea"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -754,7 +1094,7 @@ export function Inicio() {
                   <button 
                     type="button" 
                     onClick={() => navigateMonth(-1)}
-                    className="p-1 px-3 bg-white hover:bg-slate-100 rounded-lg text-xs font-bold border border-slate-200 select-none"
+                    className="p-1 px-3 bg-white hover:bg-slate-100 rounded-lg text-xs font-bold border border-slate-200 select-none cursor-pointer"
                   >
                     Anterior
                   </button>
@@ -762,7 +1102,7 @@ export function Inicio() {
                   <button 
                     type="button" 
                     onClick={() => navigateMonth(1)}
-                    className="p-1 px-3 bg-white hover:bg-slate-100 rounded-lg text-xs font-bold border border-slate-200 select-none"
+                    className="p-1 px-3 bg-white hover:bg-slate-100 rounded-lg text-xs font-bold border border-slate-200 select-none cursor-pointer"
                   >
                     Siguiente
                   </button>
@@ -814,7 +1154,7 @@ export function Inicio() {
                 {/* Legend or Quick summary header below calendar */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-around text-[10px] font-bold text-slate-500">
                   <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-amber-500 mr-2"></span>Pendientes</span>
-                  <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-emerald-500 mr-2"></span>Completadas</span>
+                  <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-emerald-550 mr-2"></span>Completadas</span>
                   <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-indigo-600 mr-2"></span>Hoy</span>
                 </div>
               </div>
@@ -823,8 +1163,9 @@ export function Inicio() {
             {/* "+ AGREGAR NUEVA TAREA" button inside container */}
             <div className="pt-2 border-t border-slate-100">
               <button 
-                onClick={() => setIsTaskModalOpen(true)}
-                className="w-full py-4 border-2 border-dashed border-slate-200 hover:border-indigo-300 rounded-2xl flex items-center justify-center text-xs font-bold text-slate-500 hover:text-indigo-600 transition-all bg-white hover:bg-slate-50"
+                type="button"
+                onClick={handleOpenNewTask}
+                className="w-full py-4 border-2 border-dashed border-slate-200 hover:border-indigo-300 rounded-2xl flex items-center justify-center text-xs font-bold text-slate-500 hover:text-indigo-600 transition-all bg-white hover:bg-slate-50 cursor-pointer"
               >
                 <Plus className="w-4 h-4 mr-2" />
                 Agregar Nueva Tarea
@@ -967,99 +1308,295 @@ export function Inicio() {
 
       </div>
 
-      {/* Dynamic Modal to Add Tarea */}
-      <Modal isOpen={isTaskModalOpen} onClose={() => setIsTaskModalOpen(false)} title="Agregar Nueva Tarea">
+      {/* Dynamic Modal to Add/Edit Tarea */}
+      <Modal 
+        isOpen={isTaskModalOpen} 
+        onClose={() => {
+          setIsTaskModalOpen(false);
+          setEditingTask(null);
+        }} 
+        title={editingTask ? "Editar Tarea" : "Agregar Nueva Tarea"}
+      >
         <form onSubmit={handleTaskSubmit} className="space-y-4 text-left">
           
+          {editingTask && isTaskCreatedByMe(editingTask) && (
+            <div className="flex items-center gap-2 p-2.5 bg-indigo-50 text-indigo-800 border border-indigo-200 rounded-xl text-xs font-semibold">
+              <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+              <span>Esta tarea fue creada por ti. Puedes editar sus asignaciones, fechas y observaciones.</span>
+            </div>
+          )}
+
           <div>
-            <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Título o Descripción de la Tarea *</label>
+            <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1.5">Título o Descripción de la Tarea *</label>
             <input 
               required 
               type="text" 
               value={taskForm.title} 
               onChange={e => setTaskForm({...taskForm, title: e.target.value})} 
-              className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+              className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium" 
               placeholder="Ej. Llamar a Rectoría de la UANL" 
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          {/* Tipo de Tarea */}
+          <div>
+            <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-2">Tipo de Tarea</label>
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { type: "Llamada" as TaskType, label: "Llamada", icon: Phone, emoji: "📞" },
+                { type: "Correo" as TaskType, label: "Correo", icon: Mail, emoji: "✉️" },
+                { type: "Visita" as TaskType, label: "Visita", icon: MapPin, emoji: "📍" },
+                { type: "Meet" as TaskType, label: "Meet", icon: Video, emoji: "💻" },
+                { type: "Otro" as TaskType, label: "Otro", icon: FileText, emoji: "📝" },
+              ].map(opt => {
+                const Icon = opt.icon;
+                const isSelected = taskForm.type === opt.type;
+                return (
+                  <button
+                    key={opt.type}
+                    type="button"
+                    onClick={() => setTaskForm({ ...taskForm, type: opt.type })}
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
+                      isSelected 
+                        ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm font-bold' 
+                        : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                    }`}
+                  >
+                    <Icon className={`w-4 h-4 mb-1 ${isSelected ? 'text-indigo-600' : 'text-slate-400'}`} />
+                    <span className="text-[10px]">{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Fecha de Vencimiento *</label>
+              <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1.5">Fecha de Vencimiento *</label>
               <input 
                 required 
                 type="date" 
                 value={taskForm.dueDate} 
                 onChange={e => setTaskForm({...taskForm, dueDate: e.target.value})} 
-                className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                className="w-full border border-slate-200 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-medium" 
               />
             </div>
-            
+
             <div>
-              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Tipo de Tarea *</label>
+              <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1.5">Prioridad</label>
               <select 
-                value={taskForm.type} 
-                onChange={e => setTaskForm({...taskForm, type: e.target.value as TaskType})} 
-                className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-bold text-slate-705"
+                value={taskForm.priority} 
+                onChange={e => setTaskForm({...taskForm, priority: e.target.value as any})} 
+                className="w-full border border-slate-200 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-semibold text-slate-700"
               >
-                <option value="Llamada">📞 Llamada</option>
-                <option value="Correo">✉️ Correo</option>
-                <option value="Visita">📍 Visita</option>
-                <option value="Meet">💻 Videollamada Meet</option>
-                <option value="Otro">📝 Otro / Seguimiento</option>
+                <option value="Baja">🟢 Baja</option>
+                <option value="Media">🟡 Media</option>
+                <option value="Alta">🔴 Alta</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1.5">Estado</label>
+              <select 
+                value={taskForm.status} 
+                onChange={e => setTaskForm({...taskForm, status: e.target.value as any})} 
+                className="w-full border border-slate-200 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-semibold text-slate-700"
+              >
+                <option value="Pendiente">⏳ Pendiente</option>
+                <option value="Completada">✅ Completada</option>
               </select>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Responsable / Asignado *</label>
-              <select 
-                required
-                value={taskForm.userId} 
-                onChange={e => setTaskForm({...taskForm, userId: e.target.value})} 
-                className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-slate-705 font-bold"
-              >
-                <option value="">Selecciona responsable...</option>
-                {users.map(u => (
-                  <option key={u.id} value={u.id.toString()}>{u.name} ({u.role})</option>
-                ))}
-              </select>
+          <div>
+            <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1.5">Universidad / Institución Relacionada (Opcional)</label>
+            <select 
+              value={taskForm.institutionId} 
+              onChange={e => setTaskForm({...taskForm, institutionId: e.target.value})} 
+              className="w-full border border-slate-200 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-medium"
+            >
+              <option value="">Ninguna</option>
+              {[...institutions].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es')).map(inst => (
+                <option key={inst.id} value={inst.id.toString()}>{inst.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* ASIGNAR A EQUIPO */}
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-[10px] font-black text-slate-800 uppercase tracking-wider">
+                👥 Asignar a un Equipo (Opcional)
+              </label>
+              {taskForm.teamId && (
+                <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">
+                  Auto-asigna al equipo
+                </span>
+              )}
+            </div>
+            <select
+              value={taskForm.teamId}
+              onChange={e => handleTeamSelectChange(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg p-2 text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none font-medium text-slate-700"
+            >
+              <option value="">Ningún equipo en específico</option>
+              {teams.map(t => {
+                const memberCount = users.filter(u => u.teamId === t.id).length;
+                return (
+                  <option key={t.id} value={t.id}>
+                    👥 {t.name} ({memberCount} miembros)
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* ASIGNAR A MULTIPLES USUARIOS */}
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-[10px] font-black text-slate-800 uppercase tracking-wider">
+                👤 Asignar a Personas / Responsables ({taskForm.userIds.length} seleccionados)
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allIds = users.map(u => u.id);
+                    setTaskForm({ ...taskForm, userIds: allIds, userId: allIds[0] ? String(allIds[0]) : "" });
+                  }}
+                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold cursor-pointer"
+                >
+                  Todos
+                </button>
+                <span className="text-slate-300">|</span>
+                <button
+                  type="button"
+                  onClick={() => setTaskForm({ ...taskForm, userIds: [], userId: "" })}
+                  className="text-[10px] text-slate-500 hover:text-slate-700 font-bold cursor-pointer"
+                >
+                  Limpiar
+                </button>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Universidad Relacionada (Opcional)</label>
-              <select 
-                value={taskForm.institutionId} 
-                onChange={e => setTaskForm({...taskForm, institutionId: e.target.value})} 
-                className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-              >
-                <option value="">Ninguna</option>
-                {[...institutions].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es')).map(inst => (
-                  <option key={inst.id} value={inst.id.toString()}>{inst.name}</option>
-                ))}
-              </select>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-36 overflow-y-auto p-1 border border-slate-200/60 rounded-lg bg-white">
+              {users.map(u => {
+                const isSelected = taskForm.userIds.includes(u.id);
+                const userTeam = teams.find(t => t.id === u.teamId);
+                return (
+                  <label
+                    key={u.id}
+                    className={`flex items-center space-x-2 p-1.5 rounded-lg border text-xs cursor-pointer transition ${
+                      isSelected 
+                        ? 'bg-indigo-50 border-indigo-300 text-indigo-900 font-semibold' 
+                        : 'bg-white border-slate-150 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleToggleUserInTaskForm(u.id)}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
+                    />
+                    <span className="truncate flex-1">
+                      {u.name} {userTeam ? `(${userTeam.name})` : `(${u.role})`}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           </div>
 
-          <div className="pt-4 flex justify-end space-x-2 border-t border-slate-100">
-            <button 
-              type="button" 
-              onClick={() => setIsTaskModalOpen(false)} 
-              className="px-5 py-3 text-xs font-black uppercase text-slate-500 hover:text-slate-800 tracking-widest transition-colors select-none"
-            >
-              Cancelar
-            </button>
-            <button 
-              type="submit" 
-              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 font-black text-xs uppercase tracking-widest text-white rounded-xl shadow-md shadow-indigo-650/15 transition-all flex items-center"
-            >
-              <Plus className="w-4 h-4 mr-1.5" />
-              Crear Tarea
-            </button>
+          <div>
+            <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1.5">Notas u Observaciones (Opcional)</label>
+            <textarea
+              rows={2}
+              value={taskForm.notes}
+              onChange={e => setTaskForm({...taskForm, notes: e.target.value})}
+              placeholder="Detalles adicionales, compromisos, enlace de reunión..."
+              className="w-full border border-slate-200 rounded-xl p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
+            />
+          </div>
+
+          <div className="pt-4 flex items-center justify-between border-t border-slate-100">
+            <div>
+              {editingTask && canDeleteTask(editingTask) && (
+                <button
+                  type="button"
+                  onClick={() => setTaskToDelete(editingTask)}
+                  className="px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Eliminar</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex space-x-2">
+              <button 
+                type="button" 
+                onClick={() => {
+                  setIsTaskModalOpen(false);
+                  setEditingTask(null);
+                }} 
+                className="px-4 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors select-none cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit" 
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 font-bold text-xs text-white rounded-xl shadow-md shadow-indigo-600/15 transition-all flex items-center cursor-pointer"
+              >
+                {editingTask ? (
+                  <>
+                    <Check className="w-4 h-4 mr-1.5" />
+                    Guardar Cambios
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4 mr-1.5" />
+                    Crear Tarea
+                  </>
+                )}
+              </button>
+            </div>
           </div>
           
         </form>
+      </Modal>
+
+      {/* Delete Task Confirmation Modal */}
+      <Modal
+        isOpen={Boolean(taskToDelete)}
+        onClose={() => setTaskToDelete(null)}
+        title="Confirmar Eliminación de Tarea"
+      >
+        <div className="space-y-4 text-left">
+          <div className="flex items-center gap-3 p-3 bg-rose-50 text-rose-800 rounded-xl border border-rose-200">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <p className="text-xs font-medium">
+              ¿Estás seguro de que deseas eliminar la tarea <strong>"{taskToDelete?.title}"</strong>? Esta acción no se puede deshacer.
+            </p>
+          </div>
+
+          <div className="pt-3 flex justify-end space-x-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setTaskToDelete(null)}
+              className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteTaskConfirm}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Eliminar Definitivamente
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Dynamic Modal to Show Expiring Contracts / Institutions */}

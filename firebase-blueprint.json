@@ -203,9 +203,24 @@
         "records": { "type": "number" }
       },
       "required": ["id", "date", "type", "size", "records"]
+    },
+    "SystemRole": {
+      "title": "SystemRole",
+      "description": "System role definitions and granular module permissions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "permissions": { "type": "object" }
+      },
+      "required": ["id", "name", "permissions"]
     }
   },
   "firestore": {
+    "system_roles": {
+      "schema": "SystemRole",
+      "description": "Role definitions with granular access controls and permissions"
+    },
     "institutions": {
       "schema": "Institution",
       "description": "Educational institutions and enterprise prospects"
@@ -257,6 +272,14 @@
     "financialTransactions": {
       "schema": "FinancialTransaction",
       "description": "Cash ledger of incomes and expenses"
+    },
+    "providerProductServices": {
+      "schema": "object",
+      "description": "Catalog of rates and services offered by educational providers by country"
+    },
+    "providerSpecificProducts": {
+      "schema": "object",
+      "description": "Custom provider-specific products and platforms"
     },
     "temporary_otps": {
       "schema": "OTPRequest",

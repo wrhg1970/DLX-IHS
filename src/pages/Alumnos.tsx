@@ -2,6 +2,7 @@ import { useState } from "react";
 import { GraduationCap, Search, Filter, ChevronRight, ArrowUp, ArrowDown, Trash2, FileText, Download, Check, Settings, X, Info } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import { useNavigate } from "react-router-dom";
+import { hasPermission } from "../utils/permissionCheck";
 
 export function Alumnos() {
   const { students, institutions, deleteStudent, updateStudent, currentUser, catalogs, users } = useAppContext();
@@ -51,6 +52,8 @@ export function Alumnos() {
                        currentUser?.role?.toLowerCase()?.includes('coordinador') ||
                        currentUser?.role?.toLowerCase()?.includes('finanzas') ||
                        currentUser?.role?.toLowerCase()?.includes('academia');
+
+  const isSuperAdminOnly = currentUser?.role?.trim().toLowerCase() === 'superadministrador';
 
   const getInstName = (id: number) => {
     return institutions.find(i => i.id === id)?.name || "Desconocida";
@@ -367,12 +370,14 @@ export function Alumnos() {
             <Download className="w-3.5 h-3.5 text-slate-500" />
             <span>Exportar CSV</span>
           </button>
-          <button 
-            onClick={() => navigate('/alumnos/nuevo')}
-            className="bg-indigo-600 text-white px-4 py-1.5 rounded-md text-xs font-semibold shadow-sm hover:bg-indigo-700 transition"
-          >
-            + Registrar Alumno
-          </button>
+          {hasPermission(currentUser?.role, "Alumnos", "create") && (
+            <button 
+              onClick={() => navigate('/alumnos/nuevo')}
+              className="bg-indigo-600 text-white px-4 py-1.5 rounded-md text-xs font-semibold shadow-sm hover:bg-indigo-700 transition"
+            >
+              + Registrar Alumno
+            </button>
+          )}
         </div>
       </div>
 
@@ -616,13 +621,15 @@ export function Alumnos() {
           </div>
 
           <div className="flex justify-end gap-3 pt-1">
-            <button 
-              onClick={handleBulkDeleteClick}
-              className="bg-rose-600 hover:bg-rose-700 text-white px-5 py-1.5 rounded-md text-[11px] font-bold uppercase tracking-wider shadow transition flex items-center space-x-1.5 cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Eliminar seleccionados</span>
-            </button>
+            {isSuperAdminOnly && (
+              <button 
+                onClick={handleBulkDeleteClick}
+                className="bg-rose-600 hover:bg-rose-700 text-white px-5 py-1.5 rounded-md text-[11px] font-bold uppercase tracking-wider shadow transition flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Eliminar seleccionados</span>
+              </button>
+            )}
             <button 
               onClick={handleApplyBulkUpdate}
               className="bg-indigo-600 text-white px-5 py-1.5 rounded-md text-[11px] font-bold uppercase tracking-wider shadow hover:bg-indigo-700 transition flex items-center space-x-1.5 animate-pulse"
@@ -727,16 +734,18 @@ export function Alumnos() {
                       >
                         <FileText className="w-3.5 h-3.5 mr-1" /> Archivar
                       </button>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setStudentToDelete(student);
-                        }}
-                        className="text-[10px] font-bold uppercase tracking-wider text-rose-500 hover:text-rose-700 transition flex items-center"
-                        title="Eliminar alumno"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 mr-1" /> Eliminar
-                      </button>
+                      {isSuperAdminOnly && (
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setStudentToDelete(student);
+                          }}
+                          className="text-[10px] font-bold uppercase tracking-wider text-rose-500 hover:text-rose-700 transition flex items-center"
+                          title="Eliminar alumno"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-1" /> Eliminar
+                        </button>
+                      )}
                       <div className="w-px h-3 bg-slate-200 mx-1"></div>
                       <button 
                         onClick={(e) => { e.stopPropagation(); navigate(`/alumnos/${student.id}`); }}

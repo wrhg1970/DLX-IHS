@@ -197,7 +197,6 @@ export function ServiciosExtras() {
     // Creating class dynamically to support native enrollments structure
     const newId = classes.length > 0 ? Math.max(...classes.map(c => Number(c.id))) + 1 : 1;
     addClass({
-      id: newId,
       name: className,
       code: `EXT-${service.name.toUpperCase().replace(/[^A-Z]/g, "").substring(0, 8)}`,
       creditType: "Crédito completo",
@@ -345,7 +344,7 @@ export function ServiciosExtras() {
       return {
         ...env,
         studentName: student ? `${student.name} ${student.lastName || ""}`.trim() : "Alumno Desconocido",
-        studentEmail: env.email || student?.email || "Sin correo",
+        studentEmail: (env as any).email || student?.email || "Sin correo",
         studentPhone: student?.phone || "Sin teléfono",
         studentModalidad: student?.modality || "No especificada",
         providerName: provider ? (provider.commercialName || provider.legalName) : "Sin Proveedor",

@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
+import { getEnrollmentStatusBadge } from '../utils/enrollmentStatus';
 
 export function AlumnosDashboard() {
   const { students, enrollments, classes, institutions, providers } = useAppContext();
@@ -72,7 +73,7 @@ export function AlumnosDashboard() {
     ).length;
 
     const totalInscriptions = filteredEnrollments.length;
-    const activeInscriptions = filteredEnrollments.filter(e => e.status === 'Active').length;
+    const activeInscriptions = filteredEnrollments.filter(e => e.status === 'Active' || e.status === 'Extended' || (!e.status && e.status !== 'Completed' && e.status !== 'Withdrawn' && e.status !== 'Ended')).length;
 
     return {
       total,
@@ -532,13 +533,14 @@ export function AlumnosDashboard() {
                       ${rec.price.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                     </td>
                     <td className="px-6 py-3.5 text-center">
-                      <span className={`inline-flex px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
-                        rec.status === 'Active' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                        rec.status === 'Completed' ? 'bg-indigo-50 text-indigo-700 border border-indigo-105' :
-                        'bg-rose-50 text-rose-700 border border-rose-100'
-                      }`}>
-                        {rec.status === 'Active' ? 'Activo' : rec.status === 'Completed' ? 'Completado' : 'Cancelado'}
-                      </span>
+                      {(() => {
+                        const badge = getEnrollmentStatusBadge(rec.status);
+                        return (
+                          <span className={`inline-flex px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border ${badge.badgeClass}`}>
+                            {badge.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))

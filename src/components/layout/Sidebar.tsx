@@ -22,7 +22,12 @@ import {
   Landmark,
   Users,
   Briefcase,
-  Sparkles
+  Sparkles,
+  Megaphone,
+  Mail,
+  FolderOpen,
+  CheckSquare,
+  Clock
 } from "lucide-react";
 
 export function Sidebar() {
@@ -45,6 +50,9 @@ export function Sidebar() {
     }
     if (path.startsWith("/instituciones")) {
       initial["Instituciones"] = true;
+    }
+    if (path.startsWith("/crm")) {
+      initial["CRM"] = true;
     }
     return initial;
   });
@@ -80,12 +88,26 @@ export function Sidebar() {
     { name: "Mi Perfil Alumno", href: `/alumnos/${studentIdToUse}`, icon: GraduationCap }
   ] : currentUser?.role === 'Coordinador' ? [
     { name: "Mi Institución", href: `/instituciones/${currentUser.institutionId || 1}`, icon: Building2 },
-    { name: "Alumnos de la Institución", href: "/alumnos", icon: GraduationCap }
+    { name: "Alumnos de la Institución", href: "/alumnos", icon: GraduationCap },
+    { name: "Extensión", href: "/alumnos/extension", icon: Clock }
   ] : [
-    { name: "Inicio", href: "/", icon: Home, permission: "Dashboard" as const },
+    { name: "Inicio", href: "/", icon: Home },
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "Dashboard" as const },
     { name: "Agenda", href: "/agenda", icon: CalendarDays, permission: "Agenda" as const },
-    { name: "CRM", href: "/crm", icon: Briefcase, permission: "Dashboard" as const },
+    {
+      name: "CRM",
+      icon: Briefcase,
+      permission: "CRM" as const,
+      children: [
+        { name: "Dashboard de CRM", href: "/crm/dashboard", icon: LayoutDashboard, permission: "CRM - Dashboard" as const },
+        { name: "Instituciones Prospecto", href: "/crm", icon: Briefcase, permission: "CRM - Prospectos" as const },
+        { name: "Campañas", href: "/crm/campanas", icon: Megaphone, permission: "CRM - Campañas" as const },
+        { name: "Reportes", href: "/crm/reportes", icon: BarChart, permission: "CRM - Reportes" as const },
+        { name: "Correos", href: "/crm/correos", icon: Mail, permission: "CRM - Correos" as const },
+        { name: "Repositorio", href: "/crm/repositorio", icon: FolderOpen, permission: "CRM - Repositorio" as const },
+        { name: "Tareas", href: "/crm/tareas", icon: CheckSquare, permission: "CRM - Tareas" as const },
+      ]
+    },
     {
       name: "Instituciones",
       icon: Building2,
@@ -93,6 +115,7 @@ export function Sidebar() {
       children: [
         { name: "Dashboard de Instituciones", href: "/instituciones/dashboard", icon: LayoutDashboard, permission: "Instituciones" as const },
         { name: "Lista de Instituciones", href: "/instituciones", icon: Building2, permission: "Instituciones" as const },
+        { name: "Notificaciones", href: "/instituciones/notificaciones", icon: Mail, permission: "Instituciones - Notificaciones" as const },
       ]
     },
     {
@@ -102,10 +125,11 @@ export function Sidebar() {
       children: [
         { name: "Dashboard de Alumnos", href: "/alumnos/dashboard", icon: LayoutDashboard, permission: "Alumnos" as const },
         { name: "Lista de Alumnos", href: "/alumnos", icon: GraduationCap, permission: "Alumnos" as const },
-        { name: "Alumnos por Clase", href: "/alumnos/por-clase", icon: BookOpen, permission: "Alumnos" as const },
+        { name: "Alumnos por Clase", href: "/alumnos/por-clase", icon: BookOpen, permission: "Clases" as const },
+        { name: "Extensión", href: "/alumnos/extension", icon: Clock, permission: "Alumnos" as const },
       ]
     },
-    { name: "Agentes", href: "/agentes", icon: Users, permission: "Dashboard" as const },
+    { name: "Agentes", href: "/agentes", icon: Users, permission: "Agentes" as const },
     {
       name: "Proveedores",
       icon: Truck,

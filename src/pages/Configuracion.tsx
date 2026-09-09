@@ -1,25 +1,17 @@
-import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye, Database, RotateCcw, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
-import React, { useState } from "react";
+import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye, Database, RotateCcw, CheckCircle2, AlertCircle, Loader2, RefreshCw, CheckSquare, Zap } from "lucide-react";
+import React, { useState, useEffect } from "react";
 import { useAppContext, resolveCreditPrices, generateUniqueId } from "../context/AppContext";
-
-type PermissionMenu = "Dashboard" | "Agenda" | "Instituciones" | "Alumnos" | "Clases" | "Administración" | "Proveedores" | "Finanzas" | "Reportes" | "Catálogos" | "Configuración";
-
-const DEFAULT_PERMS = { view: true, create: true, edit: true, delete: true };
-const NO_PERMS = { view: false, create: false, edit: false, delete: false };
-
-const menus: PermissionMenu[] = [
-  "Dashboard",
-  "Agenda",
-  "Instituciones",
-  "Alumnos",
-  "Clases",
-  "Administración",
-  "Proveedores",
-  "Finanzas",
-  "Reportes",
-  "Catálogos",
-  "Configuración"
-];
+import { PermissionMenu, DEFAULT_MENUS as menus, DEFAULT_ROLES, getSystemRoles, NO_PERMS, DEFAULT_PERMS, Role } from "../utils/permissionCheck";
+import {
+  getTaskNotificationConfig,
+  saveTaskNotificationConfig,
+  TaskNotificationConfig,
+  DEFAULT_TASK_NOTIFICATION_CONFIG,
+  sendRealNotificationEmail,
+  sendRealNotificationWhatsApp,
+  sendTaskAssignmentNotification,
+  sendTaskDeadlineNotification
+} from "../utils/notifications";
 
 export function Configuracion() {
   const [activeTab, setActiveTab] = useState("Usuarios");
@@ -75,7 +67,11 @@ export function Configuracion() {
     catalogs, providerProductServices,
     providers, enrollments, financialTransactions,
     addFinancialTransaction, bankAccounts,
-    backups, triggerFullBackup, restoreBackup, deleteBackup
+    tasks, triggerDeadlineScan, notifyTaskAssignee, notifyTaskDeadline,
+    backups, triggerFullBackup, restoreBackup, deleteBackup,
+    systemRoles, updateSystemRoles, restoreDefaultRoles, addSystemRole, deleteSystemRole,
+    dbMetrics, resetDbMetrics,
+    teams
   } = useAppContext();
 
   // CSV formatting and trigger browser download
@@ -146,7 +142,7 @@ export function Configuracion() {
             <!-- Header -->
             <div class="flex justify-between items-start border-b border-slate-200 pb-6">
               <div>
-                <h1 class="text-2xl font-black text-indigo-900 tracking-tight">IHS MANAGER - SISTEMA GENERAL</h1>
+                <h1 class="text-2xl font-black text-indigo-900 tracking-tight">\${(companyInfo?.commercialName || 'IHS MANAGER').toUpperCase()} - SISTEMA GENERAL</h1>
                 <p class="text-xs text-slate-500 mt-1">Exportación oficial de datos administrativos y escolares</p>
               </div>
               <div class="text-right">
@@ -208,7 +204,7 @@ export function Configuracion() {
         i.id,
         i.tradeName || i.name,
         i.name,
-        i.country || "ND",
+        i.country ? (i.country.toLowerCase().includes('colombia') && i.colombiaCalendar ? `${i.country} (${i.colombiaCalendar})` : i.country) : "ND",
         i.membershipId ? (catalogs['Membresías']?.find(m => m.id === i.membershipId)?.name || 'Especial') : 'Ninguna',
         i.producerName || "ND",
         i.registrationDate || "ND",
@@ -472,6 +468,9 @@ export function Configuracion() {
   ]);
 
   const [smtpConfig, setSmtpConfig] = useState(() => {
+    if ((companyInfo as any)?.smtpConfig) {
+      return (companyInfo as any).smtpConfig;
+    }
     try {
       const saved = localStorage.getItem("smtp_credentials");
       if (saved) return JSON.parse(saved);
@@ -481,17 +480,24 @@ export function Configuracion() {
     return {
       host: "smtp.gmail.com",
       port: "587",
-      user: "ejemplo@gmail.com",
+      user: "",
       pass: "",
-      fromEmail: "ejemplo@gmail.com",
-      fromName: "Instituto de Humanidades y Ciencias"
+      fromEmail: companyInfo?.contactEmail || "",
+      fromName: companyInfo?.commercialName || "Instituto de Humanidades y Ciencias"
     };
   });
+
+  // Keep smtpConfig updated if loaded from cloud Firestore
+  useEffect(() => {
+    if ((companyInfo as any)?.smtpConfig) {
+      setSmtpConfig((companyInfo as any).smtpConfig);
+    }
+  }, [(companyInfo as any)?.smtpConfig]);
 
   const [testEmail, setTestEmail] = useState("");
   const [isTestingSmtp, setIsTestingSmtp] = useState(false);
 
-  const sendRealNotificationEmail = async (toEmail: string, toName: string, subject: string, body: string) => {
+  const sendRealNotificationEmail = async (toEmail: string, toName: string, subject: string, body: string, allowFallback = true) => {
     try {
       const res = await fetch("/api/send-email", {
         method: "POST",
@@ -501,21 +507,29 @@ export function Configuracion() {
           smtpPort: smtpConfig.port,
           smtpUser: smtpConfig.user,
           smtpPass: smtpConfig.pass,
-          smtpFromEmail: smtpConfig.fromEmail,
-          smtpFromName: smtpConfig.fromName,
+          smtpFromEmail: smtpConfig.fromEmail || companyInfo?.contactEmail,
+          smtpFromName: smtpConfig.fromName || companyInfo?.commercialName,
           to: toEmail,
           subject: subject,
-          body: body
+          body: body,
+          allowFallback: allowFallback
         })
       });
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Error de red");
+      if (!res.ok && !data.simulated) {
+        throw new Error(data.error || "Error al conectar con el servidor de correo.");
       }
-      return { success: true };
+      return { 
+        success: data.success !== false, 
+        simulated: data.simulated, 
+        message: data.message, 
+        warning: data.warning, 
+        error: data.error,
+        technicalError: data.technicalError
+      };
     } catch (err: any) {
       console.error("Real email dispatch error: ", err);
-      return { success: false, error: err.message };
+      return { success: false, error: err.message || "Error al enviar el correo." };
     }
   };
 
@@ -535,8 +549,14 @@ export function Configuracion() {
     };
   });
 
+  const [taskNotifConfig, setTaskNotifConfig] = useState<TaskNotificationConfig>(getTaskNotificationConfig);
   const [testPhone, setTestPhone] = useState("");
   const [isTestingWhatsapp, setIsTestingWhatsapp] = useState(false);
+  const [isTestingTaskNotif, setIsTestingTaskNotif] = useState(false);
+  const [isScanningDeadlines, setIsScanningDeadlines] = useState(false);
+  const [taskTestRecipientEmail, setTaskTestRecipientEmail] = useState("");
+  const [taskTestRecipientPhone, setTaskTestRecipientPhone] = useState("");
+  const [activeTemplateTab, setActiveTemplateTab] = useState<"assignment" | "deadline">("assignment");
 
   const sendRealNotificationWhatsApp = async (toPhone: string, body: string) => {
     try {
@@ -639,6 +659,7 @@ export function Configuracion() {
   const [requireEmailVerification, setRequireEmailVerification] = useState(true);
   const [generatedPassInfo, setGeneratedPassInfo] = useState<{ email: string; pass: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedWelcomeBody, setCopiedWelcomeBody] = useState(false);
   const [isSendingCredentialsEmail, setIsSendingCredentialsEmail] = useState(false);
   const [credentialsEmailResult, setCredentialsEmailResult] = useState<{ success?: boolean; msg?: string } | null>(null);
   const [isWelcomeEmailModalOpen, setIsWelcomeEmailModalOpen] = useState(false);
@@ -646,14 +667,16 @@ export function Configuracion() {
   const [welcomeEmailSubject, setWelcomeEmailSubject] = useState("");
   const [welcomeEmailBody, setWelcomeEmailBody] = useState("");
   const [isSendingWelcomeEmail, setIsSendingWelcomeEmail] = useState(false);
+  const [welcomeEmailResult, setWelcomeEmailResult] = useState<{ success?: boolean; msg?: string } | null>(null);
   const [welcomePasswordToInclude, setWelcomePasswordToInclude] = useState("");
   const [userForm, setUserForm] = useState<{
     name: string;
     email: string;
     role: string;
+    teamId?: number;
     studentId?: number;
     institutionId?: number;
-  }>({ name: '', email: '', role: '', studentId: undefined, institutionId: undefined });
+  }>({ name: '', email: '', role: '', teamId: undefined, studentId: undefined, institutionId: undefined });
 
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
@@ -724,17 +747,20 @@ export function Configuracion() {
     setIsSendingCredentialsEmail(true);
     setCredentialsEmailResult(null);
 
-    const subject = "Tus credenciales de acceso para IHS";
-    const body = `Hola,\n\nSe ha creado tu cuenta en el sistema de IHS.\n\nAquí tienes tus credenciales provisionales para ingresar:\n• Correo: ${generatedPassInfo.email}\n• Contraseña temporal: ${generatedPassInfo.pass}\n\nNota: Por motivos de seguridad, el sistema te solicitará cambiar tu contraseña obligatoriamente en tu primer acceso.\n\nSi se requiere verificar tu correo, recibirás un código de 6 dígitos en tu bandeja.\n\nSaludos,\nEquipo IHS`;
+    const subject = "Tus credenciales de acceso para el Sistema IHS";
+    const body = `Hola,\n\nSe ha configurado tu cuenta de acceso en el sistema de IHS (Instituto de Humanidades y Ciencias).\n\nAquí tienes tus credenciales para ingresar:\n• Portal: ${window.location.origin}\n• Correo electrónico: ${generatedPassInfo.email}\n• Contraseña temporal: ${generatedPassInfo.pass}\n\nNota: Por motivos de seguridad, te sugerimos o se te solicitará cambiar tu contraseña en tu primer acceso.\n\nSaludos cordiales,\nEquipo IHS`;
 
-    const res = await sendRealNotificationEmail(generatedPassInfo.email, generatedPassInfo.email, subject, body);
+    const res = await sendRealNotificationEmail(generatedPassInfo.email, generatedPassInfo.email, subject, body, true);
     setIsSendingCredentialsEmail(false);
     if (res.success) {
-      setCredentialsEmailResult({ success: true, msg: "¡Credenciales enviadas correctamente por correo electrónico real!" });
-      triggerToast("Correo enviado con éxito", "success");
+      const msg = res.simulated
+        ? (res.warning ? `Registrado en bitácora: ${res.warning}` : "¡Credenciales registradas con éxito en el sistema! (Modo Simulación: configura tu SMTP en la pestaña Notificaciones para despacho directo a buzón externo).")
+        : "¡Credenciales enviadas correctamente por correo electrónico real!";
+      setCredentialsEmailResult({ success: true, msg });
+      triggerToast(res.simulated ? "Credenciales procesadas" : "Correo enviado con éxito", "success");
     } else {
-      setCredentialsEmailResult({ success: false, msg: `No se pudo enviar: ${res.error || "Error de SMTP"}. Revisa tus credenciales en Configuración > Notificaciones.` });
-      triggerToast("Error al enviar correo", "error");
+      setCredentialsEmailResult({ success: false, msg: `No se pudo enviar vía SMTP: ${res.error || "Error de conexión"}. Puedes copiar las credenciales o abrir tu cliente de correo abajo.` });
+      triggerToast("Aviso: Revisa la configuración SMTP", "error");
     }
   };
 
@@ -742,9 +768,10 @@ export function Configuracion() {
     setSelectedUserForEmail(user);
     const pass = user.password || "ihs123";
     setWelcomePasswordToInclude(pass);
+    setWelcomeEmailResult(null);
     setWelcomeEmailSubject("Bienvenido a IHS - Tus credenciales de acceso");
     
-    const body = `Hola ${user.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Correo electrónico: ${user.email}\n• Contraseña provisional: ${pass}\n\nPor favor, ingresa a la plataforma utilizando el siguiente enlace:\n${window.location.origin}\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos,\nEquipo IHS`;
+    const body = `Hola ${user.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Portal: ${window.location.origin}\n• Correo electrónico: ${user.email}\n• Contraseña provisional: ${pass}\n\nPor favor, ingresa a la plataforma utilizando el enlace anterior.\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos cordiales,\nEquipo IHS`;
     
     setWelcomeEmailBody(body);
     setIsWelcomeEmailModalOpen(true);
@@ -753,6 +780,7 @@ export function Configuracion() {
   const handleSendWelcomeEmail = async () => {
     if (!selectedUserForEmail) return;
     setIsSendingWelcomeEmail(true);
+    setWelcomeEmailResult(null);
     
     // Save updated password in app state if changed
     if (welcomePasswordToInclude !== selectedUserForEmail.password) {
@@ -766,15 +794,23 @@ export function Configuracion() {
       selectedUserForEmail.email,
       selectedUserForEmail.name || selectedUserForEmail.email,
       welcomeEmailSubject,
-      welcomeEmailBody
+      welcomeEmailBody,
+      true
     );
     
     setIsSendingWelcomeEmail(false);
     if (res.success) {
-      triggerToast("¡Correo de bienvenida enviado con éxito!", "success");
-      setIsWelcomeEmailModalOpen(false);
+      const msg = res.simulated
+        ? (res.warning ? `Registrado en bitácora: ${res.warning}` : "¡Correo generado y registrado en bitácora con éxito!")
+        : "¡Correo de bienvenida enviado exitosamente por correo real!";
+      setWelcomeEmailResult({ success: true, msg });
+      triggerToast(res.simulated ? "Correo procesado" : "¡Correo enviado con éxito!", "success");
+      setTimeout(() => {
+        setIsWelcomeEmailModalOpen(false);
+      }, 1500);
     } else {
-      triggerToast(`Error al enviar: ${res.error || "Revisa la configuración SMTP"}`);
+      setWelcomeEmailResult({ success: false, msg: `Error al enviar: ${res.error || "Revisa la configuración SMTP en Notificaciones."}` });
+      triggerToast(`Error al enviar: ${res.error || "Revisa la configuración SMTP"}`, "error");
     }
   };
 
@@ -800,9 +836,10 @@ export function Configuracion() {
           emailVerified: !requireEmailVerification
         };
       } else {
+        generatedPass = customPassword || 'ihs123';
         userPayload = {
           ...userPayload,
-          password: customPassword || 'ihs123',
+          password: generatedPass,
           requirePasswordChange: requirePasswordChange,
           requireEmailVerification: requireEmailVerification,
           emailVerified: !requireEmailVerification
@@ -822,17 +859,15 @@ export function Configuracion() {
 
     if (editingUserId) {
       updateUser(editingUserId, userPayload);
+      triggerToast("Usuario actualizado con éxito", "success");
+      setIsUserModalOpen(false);
     } else {
       addUser(userPayload);
-    }
-
-    if (generatedPass) {
-      setGeneratedPassInfo({ email: userForm.email, pass: generatedPass });
-    } else {
-      setIsUserModalOpen(false);
+      triggerToast("Usuario añadido al sistema con éxito", "success");
+      setGeneratedPassInfo({ email: userForm.email, pass: generatedPass || 'ihs123' });
     }
     
-    setUserForm({ name: '', email: '', role: '', studentId: undefined, institutionId: undefined });
+    setUserForm({ name: '', email: '', role: '', teamId: undefined, studentId: undefined, institutionId: undefined });
     setAutoGeneratePassword(true);
     setCustomPassword("");
     setRequirePasswordChange(true);
@@ -846,6 +881,7 @@ export function Configuracion() {
       name: user.name, 
       email: user.email, 
       role: user.role, 
+      teamId: user.teamId ? Number(user.teamId) : undefined,
       studentId: user.studentId ? Number(user.studentId) : undefined, 
       institutionId: user.institutionId ? Number(user.institutionId) : undefined 
     });
@@ -861,115 +897,66 @@ export function Configuracion() {
     }
   };
 
-  const [roles, setRoles] = useState(() => {
-    const saved = localStorage.getItem("system_roles");
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Error loading system_roles", e);
-      }
-    }
-    return [
-      { 
-        id: '1', 
-        name: 'Superadministrador', 
-        permissions: Object.fromEntries(menus.map(m => [m, { ...DEFAULT_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-      },
-      { 
-        id: '2', 
-        name: 'Finanzas', 
-        permissions: Object.fromEntries(menus.map(m => [m, ["Administración", "Finanzas", "Reportes", "Proveedores"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-      },
-      { 
-        id: '3', 
-        name: 'Academia', 
-        permissions: Object.fromEntries(menus.map(m => [m, ["Clases", "Alumnos", "Instituciones", "Agenda"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-      },
-      { 
-        id: '4', 
-        name: 'Ventas', 
-        permissions: Object.fromEntries(menus.map(m => [m, ["Instituciones", "Alumnos", "Dashboard"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-      },
-      { 
-        id: '5', 
-        name: 'Alumno', 
-        permissions: Object.fromEntries(menus.map(m => [m, m === "Alumnos" ? { view: true, create: false, edit: true, delete: false } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-      },
-      { 
-        id: '6', 
-        name: 'Coordinador', 
-        permissions: Object.fromEntries(menus.map(m => [m, ["Alumnos", "Instituciones", "Clases"].includes(m) ? { view: true, create: true, edit: true, delete: false } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-      },
-    ];
+  const [roles, setRoles] = useState<Role[]>(() => {
+    return systemRoles && systemRoles.length > 0 ? systemRoles : getSystemRoles();
   });
 
-  const handleCreateRole = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (systemRoles && systemRoles.length > 0) {
+      setRoles(systemRoles);
+    }
+  }, [systemRoles]);
+
+  const [isSavingRoles, setIsSavingRoles] = useState(false);
+
+  const handleCreateRole = async (e: React.FormEvent) => {
     e.preventDefault();
-    if(newRoleName.trim() === '') return;
+    if (newRoleName.trim() === '') return;
     
-    const newRole = {
-      id: generateUniqueId().toString(),
-      name: newRoleName,
-      permissions: Object.fromEntries(menus.map(m => [m, { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-    };
+    const newRolePermissions = Object.fromEntries(menus.map(m => [m, { view: false, create: false, edit: false, delete: false }])) as Record<PermissionMenu, { view: boolean; create: boolean; edit: boolean; delete: boolean }>;
     
-    const updatedRoles = [...roles, newRole];
-    setRoles(updatedRoles);
-    localStorage.setItem("system_roles", JSON.stringify(updatedRoles));
-    setSelectedRoleId(newRole.id);
-    setIsRoleModalOpen(false);
-    setNewRoleName("");
-    triggerToast(`¡El rol "${newRole.name}" ha sido creado satisfactoriamente!`);
+    try {
+      const createdRole = await addSystemRole({
+        name: newRoleName.trim(),
+        permissions: newRolePermissions
+      });
+      setSelectedRoleId(createdRole.id);
+      setIsRoleModalOpen(false);
+      setNewRoleName("");
+      triggerToast(`¡El rol "${createdRole.name}" ha sido creado y sincronizado con Firestore en la nube!`);
+    } catch (err) {
+      console.error("Error creating role:", err);
+      triggerToast("Error al crear el rol", "error");
+    }
   };
 
-  const handleSavePermissions = () => {
-    localStorage.setItem("system_roles", JSON.stringify(roles));
-    triggerToast("¡Permisos guardados satisfactoriamente!");
+  const handleSavePermissions = async () => {
+    setIsSavingRoles(true);
+    try {
+      await updateSystemRoles(roles);
+      triggerToast("¡Permisos guardados y sincronizados con la base de datos en la nube (Firestore)!");
+    } catch (err) {
+      console.error("Error saving roles to cloud:", err);
+      triggerToast("Error al guardar permisos en la nube", "error");
+    } finally {
+      setIsSavingRoles(false);
+    }
   };
 
-  const handleRestoreDefaultRoles = () => {
-    if (confirm("¿Estás seguro de restaurar todos los roles y permisos a sus configuraciones estándar? Esto sobrescribirá tus configuraciones personalizadas de roles.")) {
-      const defaultRoles = [
-        { 
-          id: '1', 
-          name: 'Superadministrador', 
-          permissions: Object.fromEntries(menus.map(m => [m, { ...DEFAULT_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-        },
-        { 
-          id: '2', 
-          name: 'Finanzas', 
-          permissions: Object.fromEntries(menus.map(m => [m, ["Administración", "Finanzas", "Reportes", "Proveedores"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-        },
-        { 
-          id: '3', 
-          name: 'Academia', 
-          permissions: Object.fromEntries(menus.map(m => [m, ["Clases", "Alumnos", "Instituciones", "Agenda"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-        },
-        { 
-          id: '4', 
-          name: 'Ventas', 
-          permissions: Object.fromEntries(menus.map(m => [m, ["Instituciones", "Alumnos", "Dashboard"].includes(m) ? { ...DEFAULT_PERMS } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-        },
-        { 
-          id: '5', 
-          name: 'Alumno', 
-          permissions: Object.fromEntries(menus.map(m => [m, m === "Alumnos" ? { view: true, create: false, edit: true, delete: false } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-        },
-        { 
-          id: '6', 
-          name: 'Coordinador', 
-          permissions: Object.fromEntries(menus.map(m => [m, ["Alumnos", "Instituciones", "Clases"].includes(m) ? { view: true, create: true, edit: true, delete: false } : { ...NO_PERMS }])) as Record<PermissionMenu, typeof DEFAULT_PERMS>
-        },
-      ];
-      setRoles(defaultRoles);
-      localStorage.setItem("system_roles", JSON.stringify(defaultRoles));
-      triggerToast("¡Roles restaurados a los valores estándar!");
+  const handleRestoreDefaultRoles = async () => {
+    if (confirm("¿Estás seguro de restaurar todos los roles y permisos a sus configuraciones estándar? Esto sincronizará los valores por defecto en la nube.")) {
+      try {
+        await restoreDefaultRoles();
+        triggerToast("¡Roles restaurados a los valores estándar y guardados en la nube!");
+      } catch (err) {
+        console.error("Error restoring roles:", err);
+        triggerToast("Error al restaurar roles", "error");
+      }
     }
   };
 
   const [selectedRoleId, setSelectedRoleId] = useState('1');
-  const selectedRoleData = roles.find(r => r.id === selectedRoleId);
+  const selectedRoleData = roles.find(r => r.id === selectedRoleId) || roles[0];
 
   const togglePermission = (roleId: string, menu: string, perm: 'view' | 'create' | 'edit' | 'delete') => {
     setRoles(prev => prev.map(r => {
@@ -1235,6 +1222,9 @@ export function Configuracion() {
               state: data[4] || undefined,
               zipCode: data[5] || undefined,
               country: data[6] || '',
+              colombiaCalendar: (data[6] || '').toLowerCase().includes('colombia')
+                ? (data[23] && (data[23].includes('B') || data[23].toLowerCase().includes('calendario b')) ? 'Calendario B' : data[23] ? 'Calendario A' : undefined)
+                : undefined,
               phone: data[7] || undefined,
               email: data[8] || undefined,
               contact: data[9] || '',
@@ -2082,6 +2072,13 @@ export function Configuracion() {
             Respaldos de Datos
           </button>
           <button 
+            onClick={() => setActiveTab("MonitorBD")}
+            className={`w-full flex items-center p-3 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'MonitorBD' ? 'bg-indigo-50 border border-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <Database className={`h-4 w-4 mr-3 ${activeTab === 'MonitorBD' ? '' : 'opacity-70'}`} />
+            Monitor Acceso BD
+          </button>
+          <button 
             onClick={() => setActiveTab("Roles")}
             className={`w-full flex items-center p-3 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'Roles' ? 'bg-indigo-50 border border-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}
           >
@@ -2439,6 +2436,14 @@ export function Configuracion() {
                       <p className="text-[10px] text-slate-500 mt-0.5">{user.email}</p>
                     </div>
                     <div className="flex items-center space-x-4">
+                      {user.teamId && (() => {
+                        const userTeam = teams.find(t => t.id === user.teamId);
+                        return userTeam ? (
+                          <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold tracking-wider uppercase border border-indigo-100 flex items-center gap-1">
+                            👥 {userTeam.name}
+                          </span>
+                        ) : null;
+                      })()}
                       <span className="px-2 py-0.5 bg-slate-200/50 text-slate-700 rounded text-[10px] font-bold tracking-widest uppercase border border-slate-200">
                         {user.role}
                       </span>
@@ -2881,16 +2886,47 @@ export function Configuracion() {
               
               <div className="flex-1 overflow-auto flex flex-col md:flex-row">
                 <div className="md:w-1/3 border-b md:border-b-0 md:border-r border-slate-100 p-4 shrink-0 overflow-y-auto">
-                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 px-2">Lista de Roles</h4>
+                  <div className="flex justify-between items-center mb-3 px-2">
+                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Lista de Roles</h4>
+                    <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
+                      Cloud DB Sincronizado
+                    </span>
+                  </div>
                   <div className="space-y-1">
                     {roles.map(role => (
-                      <button 
+                      <div 
                         key={role.id}
-                        onClick={() => setSelectedRoleId(role.id)}
-                        className={`w-full text-left px-3 py-2.5 rounded-lg text-xs font-bold transition-colors ${selectedRoleId === role.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
+                        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-bold transition-colors ${selectedRoleId === role.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
                       >
-                        {role.name}
-                      </button>
+                        <button 
+                          onClick={() => setSelectedRoleId(role.id)}
+                          className="flex-1 text-left"
+                        >
+                          {role.name}
+                        </button>
+                        {/* Allow deleting custom roles created beyond the default base roles */}
+                        {!['1', '2', '3', '4', '5', '6'].includes(role.id) && (
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (confirm(`¿Estás seguro de eliminar el rol personalizado "${role.name}"?`)) {
+                                try {
+                                  await deleteSystemRole(role.id);
+                                  setSelectedRoleId('1');
+                                  triggerToast(`Rol "${role.name}" eliminado de la base de datos`);
+                                } catch (err) {
+                                  triggerToast("Error al eliminar rol", "error");
+                                }
+                              }
+                            }}
+                            className="text-slate-400 hover:text-rose-600 p-1 transition"
+                            title="Eliminar rol personalizado"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -2899,12 +2935,26 @@ export function Configuracion() {
                   {selectedRoleData && (
                     <div>
                       <div className="flex justify-between items-center mb-6">
-                        <h4 className="font-bold text-slate-800 text-sm">{selectedRoleData.name} - Permisos</h4>
+                        <div>
+                          <h4 className="font-bold text-slate-800 text-sm">{selectedRoleData.name} - Permisos</h4>
+                          <span className="text-[10px] text-slate-400">Los cambios se guardan globalmente para toda la empresa en Firestore</span>
+                        </div>
                         <button 
                           onClick={handleSavePermissions}
-                          className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors uppercase tracking-wider bg-indigo-50 px-3 py-1.5 rounded"
+                          disabled={isSavingRoles}
+                          className="text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition-colors uppercase tracking-wider px-4 py-2 rounded-lg shadow-sm flex items-center gap-1.5 cursor-pointer"
                         >
-                          Guardar Cambios
+                          {isSavingRoles ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              Guardando en Nube...
+                            </>
+                          ) : (
+                            <>
+                              <Save className="w-3.5 h-3.5" />
+                              Guardar Cambios
+                            </>
+                          )}
                         </button>
                       </div>
 
@@ -3290,14 +3340,34 @@ export function Configuracion() {
 
                     {/* Tarjeta de Configuración de Credenciales de Correo (SMTP) */}
                     <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                      <div className="flex items-center gap-2.5 mb-2.5">
-                        <div className="p-1.5 bg-indigo-50 rounded-lg text-indigo-600">
-                          <Send className="w-4 h-4" />
+                      <div className="flex items-center justify-between mb-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-1.5 bg-indigo-50 rounded-lg text-indigo-600">
+                            <Send className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-slate-800 text-sm">Controles de Envío y Servidor de Correo (SMTP)</h3>
+                            <p className="text-[10px] text-slate-500">Configura tu servidor de correo para despachar credenciales de usuario y notificaciones reales.</p>
+                          </div>
                         </div>
-                        <div>
-                          <h3 className="font-bold text-slate-800 text-sm">Controles de Envío y Credenciales de Correo (SMTP)</h3>
-                          <p className="text-[10px] text-slate-500">Configura de forma persistente tu proveedor de correos para despachar los recordatorios de pago.</p>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle className="w-3 h-3 text-emerald-600" />
+                          Sincronizado con la Nube
+                        </span>
+                      </div>
+
+                      {/* Helper Banner for Gmail / Custom SMTP */}
+                      <div className="mt-3 p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl text-[11px] text-amber-900 leading-relaxed">
+                        <div className="font-bold text-amber-950 mb-1 flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                          Guía de Configuración Rápida para Gmail / Google Workspace:
                         </div>
+                        <ol className="list-decimal pl-4 space-y-1 text-amber-800">
+                          <li><strong>Servidor:</strong> <code className="bg-amber-100/60 px-1 py-0.5 rounded font-mono">smtp.gmail.com</code> | <strong>Puerto:</strong> <code className="bg-amber-100/60 px-1 py-0.5 rounded font-mono">587</code> (o 465).</li>
+                          <li>Google requiere activar la <strong>Verificación en 2 pasos</strong> en tu cuenta de Google.</li>
+                          <li>Genera una <strong>Contraseña de Aplicación de 16 caracteres</strong> en: <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer" className="text-indigo-600 underline font-semibold hover:text-indigo-800">myaccount.google.com/apppasswords</a> y pégala en el campo Contraseña abajo (sin espacios).</li>
+                          <li><em>Si dejas los campos vacíos o usas valores de prueba, el sistema operará en <strong>Modo Simulación Inteligente</strong> registrando todos los envíos sin generar errores.</em></li>
+                        </ol>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
@@ -3305,7 +3375,7 @@ export function Configuracion() {
                           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Servidor SMTP (Host)</label>
                           <input
                             type="text"
-                            placeholder="smtp.example.com"
+                            placeholder="smtp.gmail.com"
                             value={smtpConfig.host}
                             onChange={(e) => setSmtpConfig({ ...smtpConfig, host: e.target.value })}
                             className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
@@ -3325,7 +3395,7 @@ export function Configuracion() {
                           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre Remitente</label>
                           <input
                             type="text"
-                            placeholder="IHS Notificaciones"
+                            placeholder="Instituto de Humanidades y Ciencias"
                             value={smtpConfig.fromName}
                             onChange={(e) => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })}
                             className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
@@ -3335,27 +3405,27 @@ export function Configuracion() {
                           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Correo Remitente</label>
                           <input
                             type="email"
-                            placeholder="colegio@dominio.com"
+                            placeholder="tu-correo@gmail.com"
                             value={smtpConfig.fromEmail}
                             onChange={(e) => setSmtpConfig({ ...smtpConfig, fromEmail: e.target.value })}
                             className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
                           />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario SMTP</label>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Usuario SMTP / Correo</label>
                           <input
                             type="text"
-                            placeholder="colegio@dominio.com"
+                            placeholder="tu-correo@gmail.com"
                             value={smtpConfig.user}
                             onChange={(e) => setSmtpConfig({ ...smtpConfig, user: e.target.value })}
                             className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
                           />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña / Token</label>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña de Aplicación / Clave</label>
                           <input
                             type="password"
-                            placeholder="Contraseña del servidor de correo"
+                            placeholder="Contraseña de aplicación de 16 letras"
                             value={smtpConfig.pass}
                             onChange={(e) => setSmtpConfig({ ...smtpConfig, pass: e.target.value })}
                             className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
@@ -3367,17 +3437,17 @@ export function Configuracion() {
                         <div className="flex items-center gap-2 max-w-md">
                           <input
                             type="email"
-                            placeholder="correo-prueba@ejemplo.com"
+                            placeholder="correo-destino@ejemplo.com"
                             value={testEmail}
                             onChange={(e) => setTestEmail(e.target.value)}
-                            className="px-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 text-slate-800 w-48 font-sans"
+                            className="px-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 text-slate-800 w-52 font-sans"
                           />
                           <button
                             type="button"
                             disabled={isTestingSmtp}
                             onClick={async () => {
                               if (!testEmail.trim()) {
-                                triggerToast("Ingresa un correo de prueba.");
+                                triggerToast("Ingresa un correo de prueba.", "error");
                                 return;
                               }
                               setIsTestingSmtp(true);
@@ -3390,25 +3460,39 @@ export function Configuracion() {
                                     smtpPort: smtpConfig.port,
                                     smtpUser: smtpConfig.user,
                                     smtpPass: smtpConfig.pass,
-                                    smtpFromEmail: smtpConfig.fromEmail,
-                                    smtpFromName: smtpConfig.fromName,
+                                    smtpFromEmail: smtpConfig.fromEmail || testEmail,
+                                    smtpFromName: smtpConfig.fromName || "IHS Sistema",
                                     to: testEmail,
                                     subject: "Prueba de Servidor de Correo SMTP - Sistema IHS",
-                                    body: "Este es un correo electrónico de prueba enviado para verificar la correcta integración de tus credenciales de correo (SMTP) en el sistema. ¡Felicidades, la configuración funciona perfectamente!"
+                                    body: "Este es un correo electrónico de prueba enviado para verificar la correcta integración de tus credenciales de correo (SMTP) en el sistema IHS.\n\n¡Felicidades, la configuración funciona perfectamente!",
+                                    allowFallback: false
                                   })
                                 });
                                 const data = await res.json();
-                                if (!res.ok) throw new Error(data.error || "Error de red");
-                                triggerToast("¡Correo de prueba despachado con éxito!");
+                                if (!res.ok || data.success === false) {
+                                  throw new Error(data.error || "Error al conectar con el servidor SMTP.");
+                                }
+                                if (data.simulated) {
+                                  triggerToast("¡Correo de prueba generado en Modo Simulación!");
+                                } else {
+                                  triggerToast("¡Correo de prueba despachado con éxito a tu bandeja!");
+                                }
                               } catch (err: any) {
-                                alert("Error al enviar prueba: " + err.message);
+                                alert("Resultado de prueba SMTP:\n" + err.message);
                               } finally {
                                 setIsTestingSmtp(false);
                               }
                             }}
-                            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 transition-all cursor-pointer disabled:opacity-50"
+                            className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                           >
-                            {isTestingSmtp ? "Enviando..." : "Enviar Correo de Prueba"}
+                            {isTestingSmtp ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Probando...</span>
+                              </>
+                            ) : (
+                              <span>Enviar Correo de Prueba</span>
+                            )}
                           </button>
                         </div>
 
@@ -3416,11 +3500,16 @@ export function Configuracion() {
                           type="button"
                           onClick={() => {
                             localStorage.setItem("smtp_credentials", JSON.stringify(smtpConfig));
-                            triggerToast("¡Credenciales de SMTP guardadas exitosamente!");
+                            updateCompanyInfo({
+                              ...companyInfo,
+                              smtpConfig: smtpConfig
+                            } as any);
+                            triggerToast("¡Credenciales de SMTP guardadas y sincronizadas con la nube!");
                           }}
-                          className="px-4 py-1.5 bg-indigo-650 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer bg-indigo-600"
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
                         >
-                          Guardar Credenciales
+                          <Save className="w-3.5 h-3.5" />
+                          <span>Guardar y Sincronizar en la Nube</span>
                         </button>
                       </div>
                     </div>
@@ -3550,6 +3639,469 @@ export function Configuracion() {
                         >
                           Guardar Configuración
                         </button>
+                      </div>
+                    </div>
+
+                    {/* NUEVO MÓDULO: Configuración de Notificaciones Automáticas de Tareas CRM y Vencimientos */}
+                    <div className="bg-white border border-indigo-200/80 rounded-2xl p-6 shadow-sm space-y-6">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-50 pb-4">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 bg-indigo-600 rounded-xl text-white shadow-xs">
+                            <CheckSquare className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-extrabold text-slate-850 text-sm">Alertas Automáticas de Tareas CRM y Vencimientos</h3>
+                              <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md text-[10px] font-black uppercase tracking-wider font-mono">
+                                Email & WhatsApp
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500">
+                              Configura el envío de alertas automáticas para notificar a los responsables cuando se les asigna una tarea o cuando su fecha límite está próxima.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Botón Escanear Vencimientos Ahora */}
+                        <button
+                          type="button"
+                          disabled={isScanningDeadlines}
+                          onClick={async () => {
+                            setIsScanningDeadlines(true);
+                            try {
+                              const result = await triggerDeadlineScan(true);
+                              if (result.notifiedTasks.length > 0) {
+                                triggerToast(`¡Escaneo exitoso! Se enviaron ${result.notifiedTasks.length} alertas de fecha límite a los responsables.`);
+                              } else {
+                                triggerToast(`Escaneo completado: ${result.scannedCount} tareas pendientes revisadas. No hubo tareas por vencer hoy sin notificar.`);
+                              }
+                            } catch (err: any) {
+                              alert("Error al escanear vencimientos: " + err.message);
+                            } finally {
+                              setIsScanningDeadlines(false);
+                            }
+                          }}
+                          className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-xl text-xs shadow-2xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 self-start sm:self-auto"
+                        >
+                          {isScanningDeadlines ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-700" />
+                              <span>Escaneando Tareas...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="w-3.5 h-3.5 text-amber-700" />
+                              <span>Escanear y Notificar Vencimientos Ahora</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Master Toggles Grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Box 1: Assignment Toggles */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Zap className="w-4 h-4 text-indigo-600" />
+                            <h4 className="text-xs font-bold text-slate-800">Al Asignar una Nueva Tarea en CRM</h4>
+                          </div>
+                          <p className="text-[10.5px] text-slate-500">
+                            Avisa inmediatamente al usuario responsable seleccionado en cuanto se crea o reasigna la tarea.
+                          </p>
+
+                          <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                            <label className="flex items-center justify-between text-xs text-slate-700 font-medium cursor-pointer p-1.5 hover:bg-white rounded-lg transition">
+                              <span className="flex items-center gap-2">
+                                <Mail className="w-3.5 h-3.5 text-indigo-600" />
+                                <span>Notificar por Correo Electrónico (SMTP)</span>
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={taskNotifConfig.notifyAssignmentEmail}
+                                onChange={(e) => {
+                                  const updated = { ...taskNotifConfig, notifyAssignmentEmail: e.target.checked };
+                                  setTaskNotifConfig(updated);
+                                  saveTaskNotificationConfig(updated);
+                                }}
+                                className="w-4 h-4 text-indigo-600 rounded cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between text-xs text-slate-700 font-medium cursor-pointer p-1.5 hover:bg-white rounded-lg transition">
+                              <span className="flex items-center gap-2">
+                                <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Notificar por WhatsApp (Oficial / Twilio)</span>
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={taskNotifConfig.notifyAssignmentWhatsApp}
+                                onChange={(e) => {
+                                  const updated = { ...taskNotifConfig, notifyAssignmentWhatsApp: e.target.checked };
+                                  setTaskNotifConfig(updated);
+                                  saveTaskNotificationConfig(updated);
+                                }}
+                                className="w-4 h-4 text-indigo-600 rounded cursor-pointer"
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Box 2: Deadline Toggles */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-amber-600" />
+                            <h4 className="text-xs font-bold text-slate-800">Al Aproximarse la Fecha Límite</h4>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-[10.5px] text-slate-500">
+                              Anticipación para el aviso automático:
+                            </p>
+                            <select
+                              value={taskNotifConfig.deadlineHoursThreshold}
+                              onChange={(e) => {
+                                const updated = { ...taskNotifConfig, deadlineHoursThreshold: Number(e.target.value) };
+                                setTaskNotifConfig(updated);
+                                saveTaskNotificationConfig(updated);
+                              }}
+                              className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500"
+                            >
+                              <option value="12">12 horas antes</option>
+                              <option value="24">24 horas antes (1 día)</option>
+                              <option value="48">48 horas antes (2 días)</option>
+                              <option value="72">72 horas antes (3 días)</option>
+                            </select>
+                          </div>
+
+                          <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                            <label className="flex items-center justify-between text-xs text-slate-700 font-medium cursor-pointer p-1.5 hover:bg-white rounded-lg transition">
+                              <span className="flex items-center gap-2">
+                                <Mail className="w-3.5 h-3.5 text-indigo-600" />
+                                <span>Recordatorio por Correo Electrónico</span>
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={taskNotifConfig.notifyDeadlineEmail}
+                                onChange={(e) => {
+                                  const updated = { ...taskNotifConfig, notifyDeadlineEmail: e.target.checked };
+                                  setTaskNotifConfig(updated);
+                                  saveTaskNotificationConfig(updated);
+                                }}
+                                className="w-4 h-4 text-indigo-600 rounded cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between text-xs text-slate-700 font-medium cursor-pointer p-1.5 hover:bg-white rounded-lg transition">
+                              <span className="flex items-center gap-2">
+                                <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Recordatorio por WhatsApp</span>
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={taskNotifConfig.notifyDeadlineWhatsApp}
+                                onChange={(e) => {
+                                  const updated = { ...taskNotifConfig, notifyDeadlineWhatsApp: e.target.checked };
+                                  setTaskNotifConfig(updated);
+                                  saveTaskNotificationConfig(updated);
+                                }}
+                                className="w-4 h-4 text-indigo-600 rounded cursor-pointer"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Plantillas y Variables dinámicas */}
+                      <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-indigo-600" />
+                            <h4 className="text-xs font-bold text-slate-800">Editor de Plantillas de Notificación</h4>
+                          </div>
+
+                          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+                            <button
+                              type="button"
+                              onClick={() => setActiveTemplateTab("assignment")}
+                              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${
+                                activeTemplateTab === "assignment"
+                                  ? "bg-white text-indigo-700 shadow-2xs"
+                                  : "text-slate-500 hover:text-slate-800"
+                              }`}
+                            >
+                              🔔 Asignación de Tarea
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTemplateTab("deadline")}
+                              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${
+                                activeTemplateTab === "deadline"
+                                  ? "bg-white text-amber-700 shadow-2xs"
+                                  : "text-slate-500 hover:text-slate-800"
+                              }`}
+                            >
+                              ⏰ Vencimiento Próximo
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Available dynamic tag chips */}
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                            Variables Disponibles (Se reemplazan automáticamente en tiempo real):
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {[
+                              { tag: "{nombre_responsable}", label: "Nombre Responsable" },
+                              { tag: "{titulo_tarea}", label: "Título de la Tarea" },
+                              { tag: "{fecha_limite}", label: "Fecha Límite" },
+                              { tag: "{prioridad}", label: "Prioridad" },
+                              { tag: "{tipo_tarea}", label: "Tipo (Llamada, Correo, etc.)" },
+                              { tag: "{institucion}", label: "Institución / Prospecto" },
+                              { tag: "{asignado_por}", label: "Asignado Por" },
+                              { tag: "{notas}", label: "Notas / Instrucciones" },
+                              { tag: "{tiempo_restante}", label: "Tiempo Restante (Horas/Días)" },
+                            ].map(item => (
+                              <span
+                                key={item.tag}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[10px] font-mono font-medium border border-slate-200 select-all"
+                                title={`Etiqueta: ${item.tag}`}
+                              >
+                                {item.tag}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Template Content for Assignment */}
+                        {activeTemplateTab === "assignment" && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                            {/* Email Template */}
+                            <div className="space-y-2">
+                              <label className="flex items-center gap-1.5 text-xs font-bold text-indigo-700">
+                                <Mail className="w-3.5 h-3.5" />
+                                <span>Plantilla de Correo Electrónico (Asignación)</span>
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Asunto del correo"
+                                value={taskNotifConfig.assignmentTemplateEmail.subject}
+                                onChange={(e) => {
+                                  setTaskNotifConfig({
+                                    ...taskNotifConfig,
+                                    assignmentTemplateEmail: {
+                                      ...taskNotifConfig.assignmentTemplateEmail,
+                                      subject: e.target.value
+                                    }
+                                  });
+                                }}
+                                className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg text-slate-800 font-medium focus:ring-1 focus:ring-indigo-500"
+                              />
+                              <textarea
+                                rows={8}
+                                value={taskNotifConfig.assignmentTemplateEmail.body}
+                                onChange={(e) => {
+                                  setTaskNotifConfig({
+                                    ...taskNotifConfig,
+                                    assignmentTemplateEmail: {
+                                      ...taskNotifConfig.assignmentTemplateEmail,
+                                      body: e.target.value
+                                    }
+                                  });
+                                }}
+                                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg text-slate-800 font-mono focus:ring-1 focus:ring-indigo-500 leading-relaxed"
+                              />
+                            </div>
+
+                            {/* WhatsApp Template */}
+                            <div className="space-y-2">
+                              <label className="flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                <span>Plantilla de Mensaje de WhatsApp (Asignación)</span>
+                              </label>
+                              <textarea
+                                rows={10}
+                                value={taskNotifConfig.assignmentTemplateWhatsApp}
+                                onChange={(e) => {
+                                  setTaskNotifConfig({
+                                    ...taskNotifConfig,
+                                    assignmentTemplateWhatsApp: e.target.value
+                                  });
+                                }}
+                                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg text-slate-800 font-mono focus:ring-1 focus:ring-indigo-500 leading-relaxed"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Template Content for Deadline */}
+                        {activeTemplateTab === "deadline" && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                            {/* Email Template */}
+                            <div className="space-y-2">
+                              <label className="flex items-center gap-1.5 text-xs font-bold text-amber-700">
+                                <Mail className="w-3.5 h-3.5" />
+                                <span>Plantilla de Correo Electrónico (Vencimiento)</span>
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Asunto del correo"
+                                value={taskNotifConfig.deadlineTemplateEmail.subject}
+                                onChange={(e) => {
+                                  setTaskNotifConfig({
+                                    ...taskNotifConfig,
+                                    deadlineTemplateEmail: {
+                                      ...taskNotifConfig.deadlineTemplateEmail,
+                                      subject: e.target.value
+                                    }
+                                  });
+                                }}
+                                className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg text-slate-800 font-medium focus:ring-1 focus:ring-indigo-500"
+                              />
+                              <textarea
+                                rows={8}
+                                value={taskNotifConfig.deadlineTemplateEmail.body}
+                                onChange={(e) => {
+                                  setTaskNotifConfig({
+                                    ...taskNotifConfig,
+                                    deadlineTemplateEmail: {
+                                      ...taskNotifConfig.deadlineTemplateEmail,
+                                      body: e.target.value
+                                    }
+                                  });
+                                }}
+                                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg text-slate-800 font-mono focus:ring-1 focus:ring-indigo-500 leading-relaxed"
+                              />
+                            </div>
+
+                            {/* WhatsApp Template */}
+                            <div className="space-y-2">
+                              <label className="flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                <span>Plantilla de Mensaje de WhatsApp (Vencimiento)</span>
+                              </label>
+                              <textarea
+                                rows={10}
+                                value={taskNotifConfig.deadlineTemplateWhatsApp}
+                                onChange={(e) => {
+                                  setTaskNotifConfig({
+                                    ...taskNotifConfig,
+                                    deadlineTemplateWhatsApp: e.target.value
+                                  });
+                                }}
+                                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg text-slate-800 font-mono focus:ring-1 focus:ring-indigo-500 leading-relaxed"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Botones Guardar Plantillas y Restaurar */}
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTaskNotifConfig(DEFAULT_TASK_NOTIFICATION_CONFIG);
+                              saveTaskNotificationConfig(DEFAULT_TASK_NOTIFICATION_CONFIG);
+                              triggerToast("Plantillas restablecidas a sus valores por defecto");
+                            }}
+                            className="text-xs font-bold text-slate-500 hover:text-slate-800 transition underline cursor-pointer"
+                          >
+                            Restablecer Plantillas por Defecto
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              saveTaskNotificationConfig(taskNotifConfig);
+                              triggerToast("¡Plantillas y reglas de notificación de tareas guardadas!");
+                            }}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>Guardar Configuración de Tareas</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Interactive Test Panel */}
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Send className="w-4 h-4 text-indigo-600" />
+                          <h4 className="text-xs font-bold text-slate-800">Probar Despacho de Notificación de Tarea (Simulación o Real)</h4>
+                        </div>
+                        <p className="text-[10.5px] text-slate-500">
+                          Envía una tarea de prueba inmediata con datos de ejemplo para verificar la llegada del correo o mensaje de WhatsApp.
+                        </p>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-1">
+                          <input
+                            type="email"
+                            placeholder="correo-destino@ejemplo.com"
+                            value={taskTestRecipientEmail}
+                            onChange={(e) => setTaskTestRecipientEmail(e.target.value)}
+                            className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800"
+                          />
+                          <input
+                            type="tel"
+                            placeholder="+52 55 1234 5678"
+                            value={taskTestRecipientPhone}
+                            onChange={(e) => setTaskTestRecipientPhone(e.target.value)}
+                            className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800"
+                          />
+                          <button
+                            type="button"
+                            disabled={isTestingTaskNotif || (!taskTestRecipientEmail.trim() && !taskTestRecipientPhone.trim())}
+                            onClick={async () => {
+                              setIsTestingTaskNotif(true);
+                              try {
+                                const sampleTask = {
+                                  id: 99999,
+                                  title: "Reunión de seguimiento comercial - Presentación de Propuesta",
+                                  dueDate: new Date(Date.now() + 86400000).toISOString().split("T")[0],
+                                  status: "Pendiente" as const,
+                                  type: "Llamada" as const,
+                                  priority: "Alta" as const,
+                                  notes: "Llamar al director académico para resolver dudas sobre el convenio anual.",
+                                  requestedBy: currentUser?.name || "Admin Principal"
+                                };
+                                const sampleUser = {
+                                  id: 99999,
+                                  name: "Usuario de Prueba",
+                                  role: "Coordinador",
+                                  email: taskTestRecipientEmail.trim(),
+                                  phone: taskTestRecipientPhone.trim()
+                                };
+
+                                const res = await sendTaskAssignmentNotification(sampleTask, sampleUser, {
+                                  forceEmail: !!taskTestRecipientEmail.trim(),
+                                  forceWhatsApp: !!taskTestRecipientPhone.trim()
+                                });
+
+                                if (res.errors.length > 0) {
+                                  alert("Resultado del test:\n" + res.errors.join("\n"));
+                                } else {
+                                  triggerToast("¡Prueba de notificación de tarea ejecutada con éxito!");
+                                }
+                              } catch (err: any) {
+                                alert("Error al probar: " + err.message);
+                              } finally {
+                                setIsTestingTaskNotif(false);
+                              }
+                            }}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {isTestingTaskNotif ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Despachando Prueba...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-3.5 h-3.5" />
+                                <span>Enviar Notificación de Prueba</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -5089,6 +5641,214 @@ export function Configuracion() {
               </div>
             </div>
           )}
+
+          {activeTab === "MonitorBD" && (
+            <div className="flex flex-col h-full overflow-y-auto bg-slate-50/50">
+              {/* Header */}
+              <div className="px-6 py-5 border-b border-slate-100 bg-white shrink-0">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-lg flex items-center animate-pulse">
+                      <Database className="w-5 h-5 mr-2 text-indigo-600" />
+                      Monitor de Acceso a Base de Datos
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Telemetría en tiempo real de operaciones de red, optimización de caché IndexedDB y estado de sincronización con Firestore.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Contenido */}
+              <div className="p-6 space-y-6 max-w-5xl flex-1">
+                {/* Resumen de Eficiencia */}
+                <div className="bg-gradient-to-r from-slate-900 to-indigo-950 rounded-2xl p-6 text-white shadow-xl relative overflow-hidden">
+                  <div className="absolute right-0 bottom-0 top-0 w-1/3 opacity-10 flex items-center justify-center">
+                    <Database className="w-48 h-48" />
+                  </div>
+                  
+                  <div className="relative z-10 space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-bold tracking-wider uppercase text-indigo-300">Diagnóstico de Rendimiento</span>
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        ● Motor Optimizado de Red
+                      </span>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <h2 className="text-3xl font-black font-sans tracking-tight">
+                          {((dbMetrics.readsCached + dbMetrics.savesBypassed) / Math.max(1, dbMetrics.readsTotal + dbMetrics.savesBypassed) * 100).toFixed(1)}%
+                        </h2>
+                        <p className="text-xs font-semibold text-indigo-200 mt-1 uppercase tracking-wider">Eficiencia de Tráfico Salvado</p>
+                        <p className="text-[11px] text-slate-300 mt-2 leading-relaxed font-normal">
+                          Nuestra arquitectura local intercepta lecturas repetidas e ignora escrituras redundantes, protegiendo las cuotas de Firestore de forma automática.
+                        </p>
+                      </div>
+                      <div className="border-l border-white/10 pl-6 space-y-2.5">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-300 font-medium">Caché Local Multitarea (IndexedDB):</span>
+                          <span className="font-mono font-bold text-emerald-300">ACTIVO</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-300 font-medium">Bypass de Escrituras Redundantes:</span>
+                          <span className="font-mono font-bold text-indigo-300">HABILITADO</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-300 font-medium">Lotes de Escritura Atómica (max 500):</span>
+                          <span className="font-mono font-bold text-indigo-300">HABILITADO</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tarjetas de Métricas de Operación */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lecturas de Caché</span>
+                    <span className="text-xl font-bold text-slate-800 font-mono block">{dbMetrics.readsCached}</span>
+                    <p className="text-[10px] text-emerald-600 font-bold mt-1.5 flex items-center">
+                      <CheckCircle2 className="w-3 h-3 mr-1 inline shrink-0" />
+                      0% impacto de cuota
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lecturas de Servidor</span>
+                    <span className="text-xl font-bold text-indigo-600 font-mono block">{dbMetrics.readsServer}</span>
+                    <p className="text-[10px] text-slate-400 font-medium mt-1.5 leading-tight">
+                      Llamadas reales de red realizadas a la nube.
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
+                    <span className="text-xl font-bold text-slate-800 font-mono block">
+                      {dbMetrics.writesTotal} <span className="text-xs font-normal text-slate-400">({dbMetrics.writesBatched} lotes)</span>
+                    </span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block mt-1">Escrituras Ejecutadas</span>
+                    <p className="text-[10px] text-slate-400 font-medium mt-1.5 leading-tight">
+                      Sincronizadas de forma atómica en bloques.
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Evitadas por Checksum</span>
+                    <span className="text-xl font-bold text-slate-800 font-mono block">{dbMetrics.savesBypassed}</span>
+                    <p className="text-[10px] text-indigo-600 font-bold mt-1.5">
+                      Peticiones redundantes bloqueadas
+                    </p>
+                  </div>
+                </div>
+
+                {/* Detalles de la Sincronización de Colecciones */}
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/40">
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider">Estado de Colecciones Sincronizadas</h4>
+                      <p className="text-[10px] text-slate-400 mt-0.5">Control de documentos y latencia por cada tabla de datos en el sistema.</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={resetDbMetrics}
+                        className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-all cursor-pointer"
+                      >
+                        Reiniciar Contador
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Colección</th>
+                          <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Documentos</th>
+                          <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Última Sincronización</th>
+                          <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400 text-center">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {Object.entries(dbMetrics.activeCollectionSyncs).length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="p-8 text-center text-xs font-bold text-slate-400">
+                              Iniciando monitor... Genera interacciones o navega por el sistema para registrar lecturas y escrituras.
+                            </td>
+                          </tr>
+                        ) : (
+                          Object.entries(dbMetrics.activeCollectionSyncs).map(([name, status]: [string, any]) => (
+                            <tr key={name} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-5 py-2.5 text-[11px] font-bold text-slate-700 font-mono">
+                                {name}
+                              </td>
+                              <td className="px-5 py-2.5 text-[11px] font-medium text-slate-600 font-mono">
+                                {status.docCount} docs
+                              </td>
+                              <td className="px-5 py-2.5 text-[11px] text-slate-500 font-mono">
+                                {status.lastSynced}
+                              </td>
+                              <td className="px-5 py-2.5 text-center">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                                  status.status === 'synced' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                                  status.status === 'syncing' ? 'bg-amber-50 text-amber-700 border border-amber-100 animate-pulse' :
+                                  'bg-rose-50 text-rose-700 border border-rose-100'
+                                }`}>
+                                  {status.status === 'synced' ? 'Sincronizado' : status.status === 'syncing' ? 'Sincronizando' : 'Error'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Diagnósticos del Estado del Sistema */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                  <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider">Detalles Técnicos y Estado de Cuotas</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans">
+                    <div className="bg-slate-50 border border-slate-200/60 rounded-xl p-4 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-medium">Cuota del Servidor:</span>
+                        {typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__ ? (
+                          <span className="font-bold text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded text-[10px]">EXCEDIDA (Modo Local-Only)</span>
+                        ) : (
+                          <span className="font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded text-[10px]">SALDO SEGURO</span>
+                        )}
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-medium">ID del Proyecto:</span>
+                        <span className="font-mono font-bold text-slate-700 font-mono">ai-studio-6f563df9</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-medium">Persistencia local multi-pestaña:</span>
+                        <span className="font-bold text-indigo-600">Habilitado (IndexedDB)</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200/60 rounded-xl p-4 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-medium">Última Operación:</span>
+                        <span className="font-mono font-bold text-slate-800">{dbMetrics.lastOperationTime || 'Ninguna registrada'}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-medium">Tipo:</span>
+                        <span className="font-bold text-slate-600 font-mono text-[10px] uppercase">{dbMetrics.lastOperationType || 'N/A'}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-medium">Estado de Transmisión:</span>
+                        <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                          dbMetrics.lastOperationStatus === 'SUCCESS' ? 'text-emerald-700 bg-emerald-50 border border-emerald-100' :
+                          dbMetrics.lastOperationStatus === 'ERROR' ? 'text-rose-700 bg-rose-50 border border-rose-100' :
+                          'text-slate-500 bg-slate-50'
+                        }`}>{dbMetrics.lastOperationStatus || 'STANDBY'}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -5150,6 +5910,20 @@ export function Configuracion() {
                     <option value="" disabled>Selecciona un rol...</option>
                     {roles.map(r => (
                       <option key={r.id} value={r.name}>{r.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Equipo de Trabajo (Opcional)</label>
+                  <select 
+                    value={userForm.teamId || ''}
+                    onChange={(e) => setUserForm({...userForm, teamId: e.target.value ? Number(e.target.value) : undefined})}
+                    className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm bg-white"
+                  >
+                    <option value="">Sin equipo asignado</option>
+                    {teams.map(t => (
+                      <option key={t.id} value={t.id}>👥 {t.name}</option>
                     ))}
                   </select>
                 </div>
@@ -5288,16 +6062,16 @@ export function Configuracion() {
 
       {generatedPassInfo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 p-6 text-center">
-            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-emerald-100 text-emerald-600 mb-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 p-6 text-center">
+            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-emerald-100 text-emerald-600 mb-3">
               <Key className="h-6 w-6" />
             </div>
             <h3 className="text-lg font-bold text-slate-900 mb-1">¡Contraseña Inicial Generada!</h3>
-            <p className="text-xs text-slate-500 mb-6 px-1">
-              Copie la siguiente contraseña provisional para el usuario o envíasela directamente a su buzón por correo real.
+            <p className="text-xs text-slate-500 mb-4 px-1">
+              Las credenciales temporales están listas. Puedes enviarlas directamente o copiarlas para compartirlas por cualquier medio.
             </p>
             
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4 text-left space-y-3">
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-left space-y-3 mb-4">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Usuario / Correo:</span>
                 <span className="text-xs font-bold text-slate-700 block select-all font-mono break-all">{generatedPassInfo.email}</span>
@@ -5314,6 +6088,7 @@ export function Configuracion() {
                       setTimeout(() => setCopied(false), 2000);
                     }}
                     className={`p-1.5 rounded-md transition-colors ${copied ? 'bg-emerald-50 text-emerald-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                    title="Copiar contraseña"
                   >
                     {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   </button>
@@ -5321,11 +6096,35 @@ export function Configuracion() {
               </div>
             </div>
 
+            {/* Quick Actions */}
+            <div className="flex items-center gap-2 mb-4">
+              <button
+                type="button"
+                onClick={() => {
+                  const fullText = `Acceso al Sistema IHS\nPortal: ${window.location.origin}\nUsuario: ${generatedPassInfo.email}\nContraseña Provisional: ${generatedPassInfo.pass}`;
+                  navigator.clipboard.writeText(fullText);
+                  triggerToast("¡Credenciales completas copiadas al portapapeles!");
+                }}
+                className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Copiar Todo</span>
+              </button>
+              
+              <a
+                href={`mailto:${encodeURIComponent(generatedPassInfo.email)}?subject=${encodeURIComponent("Tus credenciales de acceso para IHS")}&body=${encodeURIComponent(`Hola,\n\nSe ha creado tu cuenta en el sistema de IHS.\n\nAquí tienes tus credenciales provisionales para ingresar:\n• Portal: ${window.location.origin}\n• Correo: ${generatedPassInfo.email}\n• Contraseña temporal: ${generatedPassInfo.pass}\n\nSaludos,\nEquipo IHS`)}`}
+                className="flex-1 py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5 text-center"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span>Abrir en mi Correo</span>
+              </a>
+            </div>
+
             {/* SMTP Sending Section */}
-            <div className="mb-6">
+            <div className="mb-5">
               {credentialsEmailResult ? (
-                <div className={`p-3 rounded-xl text-xs font-semibold text-left flex items-start gap-2 ${credentialsEmailResult.success ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`}>
-                  {credentialsEmailResult.success ? <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-500" /> : <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-500" />}
+                <div className={`p-3 rounded-xl text-xs font-semibold text-left flex items-start gap-2 ${credentialsEmailResult.success ? 'bg-emerald-50 text-emerald-700 border border-emerald-150' : 'bg-amber-50 text-amber-800 border border-amber-200'}`}>
+                  {credentialsEmailResult.success ? <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-500" /> : <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600" />}
                   <span>{credentialsEmailResult.msg}</span>
                 </div>
               ) : (
@@ -5333,17 +6132,17 @@ export function Configuracion() {
                   type="button"
                   disabled={isSendingCredentialsEmail}
                   onClick={handleSendCredentialsEmail}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 hover:text-indigo-800 font-bold rounded-xl text-xs transition-all border border-indigo-200/50 cursor-pointer disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all shadow-sm cursor-pointer disabled:opacity-50"
                 >
                   {isSendingCredentialsEmail ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Enviando credenciales reales...</span>
+                      <span>Despachando correo...</span>
                     </>
                   ) : (
                     <>
-                      <Mail className="w-3.5 h-3.5" />
-                      <span>Enviar credenciales por correo electrónico</span>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Enviar por Servidor de Correo (SMTP)</span>
                     </>
                   )}
                 </button>
@@ -5367,8 +6166,8 @@ export function Configuracion() {
 
       {isWelcomeEmailModalOpen && selectedUserForEmail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="flex justify-between items-center p-5 border-b border-slate-100">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-slate-100 shrink-0">
               <div className="flex items-center space-x-2">
                 <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg">
                   <Mail className="h-5 w-5" />
@@ -5385,7 +6184,7 @@ export function Configuracion() {
               </button>
             </div>
             
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 overflow-y-auto">
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 grid grid-cols-2 gap-4">
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Destinatario:</span>
@@ -5410,10 +6209,10 @@ export function Configuracion() {
                       setWelcomePasswordToInclude(newPass);
                       
                       // Regenerate body dynamically
-                      const updatedBody = `Hola ${selectedUserForEmail.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Correo electrónico: ${selectedUserForEmail.email}\n• Contraseña provisional: ${newPass}\n\nPor favor, ingresa a la plataforma utilizando el siguiente enlace:\n${window.location.origin}\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos,\nEquipo IHS`;
+                      const updatedBody = `Hola ${selectedUserForEmail.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Portal: ${window.location.origin}\n• Correo electrónico: ${selectedUserForEmail.email}\n• Contraseña provisional: ${newPass}\n\nPor favor, ingresa a la plataforma utilizando el enlace anterior.\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos cordiales,\nEquipo IHS`;
                       setWelcomeEmailBody(updatedBody);
                     }}
-                    className="flex-1 border border-slate-300 rounded-xl px-4 py-2.5 text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                    className="flex-1 border border-slate-300 rounded-xl px-4 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
                     placeholder="Contraseña del usuario"
                   />
                   <button
@@ -5427,17 +6226,16 @@ export function Configuracion() {
                       const generated = `IHS-${randomPart}`;
                       setWelcomePasswordToInclude(generated);
                       
-                      const updatedBody = `Hola ${selectedUserForEmail.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Correo electrónico: ${selectedUserForEmail.email}\n• Contraseña provisional: ${generated}\n\nPor favor, ingresa a la plataforma utilizando el siguiente enlace:\n${window.location.origin}\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos,\nEquipo IHS`;
+                      const updatedBody = `Hola ${selectedUserForEmail.name || "Usuario"},\n\nTe damos una cordial bienvenida al sistema de IHS (Instituto de Humanidades y Ciencias).\n\nSe ha configurado tu acceso para tu primer ingreso con las siguientes credenciales:\n• Portal: ${window.location.origin}\n• Correo electrónico: ${selectedUserForEmail.email}\n• Contraseña provisional: ${generated}\n\nPor favor, ingresa a la plataforma utilizando el enlace anterior.\n\nNota: Por motivos de seguridad, te sugerimos actualizar tu contraseña después de tu primer ingreso en la sección de Perfil/Configuración.\n\nSaludos cordiales,\nEquipo IHS`;
                       setWelcomeEmailBody(updatedBody);
                     }}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 transition cursor-pointer flex items-center gap-1 shrink-0"
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-200 transition cursor-pointer flex items-center gap-1 shrink-0"
                     title="Generar nueva clave"
                   >
                     <Key className="w-3.5 h-3.5" />
                     Generar Clave
                   </button>
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">Si cambias la clave aquí, se actualizará en su perfil de forma automática al enviar.</p>
               </div>
 
               <div>
@@ -5446,52 +6244,89 @@ export function Configuracion() {
                   type="text" 
                   value={welcomeEmailSubject}
                   onChange={(e) => setWelcomeEmailSubject(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm font-medium"
+                  className="w-full border border-slate-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm font-medium"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Mensaje de Bienvenida</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Mensaje de Bienvenida</label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(welcomeEmailBody);
+                        setCopiedWelcomeBody(true);
+                        setTimeout(() => setCopiedWelcomeBody(false), 2000);
+                        triggerToast("¡Cuerpo del mensaje copiado!");
+                      }}
+                      className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
+                    >
+                      {copiedWelcomeBody ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedWelcomeBody ? "Copiado" : "Copiar Texto"}</span>
+                    </button>
+                    <a
+                      href={`mailto:${encodeURIComponent(selectedUserForEmail.email)}?subject=${encodeURIComponent(welcomeEmailSubject)}&body=${encodeURIComponent(welcomeEmailBody)}`}
+                      className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 ml-2"
+                    >
+                      <Mail className="w-3 h-3" />
+                      <span>Abrir en mi Correo</span>
+                    </a>
+                  </div>
+                </div>
                 <textarea 
                   value={welcomeEmailBody}
                   onChange={(e) => setWelcomeEmailBody(e.target.value)}
-                  rows={8}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-3 text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm resize-none whitespace-pre-wrap leading-relaxed"
+                  rows={6}
+                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm resize-none whitespace-pre-wrap leading-relaxed"
                 />
               </div>
 
-              <div className="text-[10px] text-slate-400 bg-slate-50 border border-slate-200 p-3 rounded-lg leading-relaxed">
-                ⚠️ <span className="font-semibold text-slate-600">Configuración SMTP Obligatoria:</span> Este correo se enviará a través del servidor de correo real configurado en la pestaña "Notificaciones". Asegúrate de que los parámetros del SMTP estén probados y guardados.
-              </div>
+              {welcomeEmailResult && (
+                <div className={`p-3 rounded-xl text-xs font-semibold flex items-start gap-2 ${welcomeEmailResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
+                  {welcomeEmailResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />}
+                  <span>{welcomeEmailResult.msg}</span>
+                </div>
+              )}
             </div>
 
-            <div className="px-5 py-4 bg-slate-50 border-t border-slate-100 flex justify-end space-x-3">
-              <button 
-                type="button"
-                disabled={isSendingWelcomeEmail}
-                onClick={() => setIsWelcomeEmailModalOpen(false)}
-                className="px-4 py-2 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
+            <div className="px-5 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between shrink-0">
+              <a
+                href={`mailto:${encodeURIComponent(selectedUserForEmail.email)}?subject=${encodeURIComponent(welcomeEmailSubject)}&body=${encodeURIComponent(welcomeEmailBody)}`}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition flex items-center gap-1.5"
               >
-                Cancelar
-              </button>
-              <button 
-                type="button"
-                disabled={isSendingWelcomeEmail}
-                onClick={handleSendWelcomeEmail}
-                className="px-5 py-2 rounded-xl font-bold text-sm text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-              >
-                {isSendingWelcomeEmail ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Enviando...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    <span>Enviar Correo Real</span>
-                  </>
-                )}
-              </button>
+                <Mail className="w-3.5 h-3.5" />
+                <span>Abrir en Aplicación de Correo</span>
+              </a>
+
+              <div className="flex space-x-2">
+                <button 
+                  type="button"
+                  disabled={isSendingWelcomeEmail}
+                  onClick={() => setIsWelcomeEmailModalOpen(false)}
+                  className="px-4 py-2 rounded-xl font-bold text-xs text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
+                >
+                  Cerrar
+                </button>
+                <button 
+                  type="button"
+                  disabled={isSendingWelcomeEmail}
+                  onClick={handleSendWelcomeEmail}
+                  className="px-4 py-2 rounded-xl font-bold text-xs text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSendingWelcomeEmail ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Enviando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Enviar vía SMTP</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

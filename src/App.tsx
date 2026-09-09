@@ -14,9 +14,11 @@ import { FormInstitucion } from "./pages/FormInstitucion";
 import { InstitucionDetail } from "./pages/InstitucionDetail";
 import { Instituciones } from "./pages/Instituciones";
 import { InstitucionesDashboard } from "./pages/InstitucionesDashboard";
+import { InstitucionesNotificaciones } from "./pages/InstitucionesNotificaciones";
 import { Alumnos } from "./pages/Alumnos";
 import { AlumnosDashboard } from "./pages/AlumnosDashboard";
 import { AlumnosPorClase } from "./pages/AlumnosPorClase";
+import { AlumnosExtension } from "./pages/AlumnosExtension";
 import { FormAlumno } from "./pages/FormAlumno";
 import { AlumnoDetail } from "./pages/AlumnoDetail";
 import { Clases } from "./pages/Clases";
@@ -33,30 +35,62 @@ import { Perfil } from "./pages/Perfil";
 import { Finanzas } from "./pages/Finanzas";
 import { Agentes } from "./pages/Agentes";
 import { CRM } from "./pages/CRM";
-import { PermissionMenu, hasPermission } from "./utils/permissionCheck";
+import { PermissionMenu, hasPermission, Permission } from "./utils/permissionCheck";
+import { AccessDenied } from "./components/ui/AccessDenied";
 
 interface RoleGuardProps {
-  allowedRoles: string[];
-  fallbackTo: string;
+  allowedRoles?: string[];
+  fallbackTo?: string;
   permission?: PermissionMenu;
+  action?: keyof Permission;
   children: React.ReactElement;
 }
 
-function RoleGuard({ allowedRoles, fallbackTo, permission, children }: RoleGuardProps) {
+function RoleGuard({ allowedRoles, fallbackTo = "/", permission, action = "view", children }: RoleGuardProps) {
   const { currentUser } = useAppContext();
   if (!currentUser) return <Navigate to="/" replace />;
   
-  if (!allowedRoles.includes(currentUser.role)) {
-    return <Navigate to={fallbackTo} replace />;
-  }
+  const normRole = currentUser.role?.trim().toLowerCase() || '';
 
-  // Bypass extra permission check for Alumno and Coordinador basic access
-  if (currentUser.role === "Alumno" || currentUser.role === "Coordinador") {
+  // Superadmin, Admin Principal, Director bypass all restrictions
+  if (normRole === 'superadministrador' || normRole === 'admin principal' || normRole === 'director') {
     return children;
   }
 
-  if (permission && !hasPermission(currentUser.role, permission, "view")) {
-    return <Navigate to={fallbackTo} replace />;
+  // Alumno strict sandbox: only student profile
+  if (currentUser.role === "Alumno") {
+    if (permission === "Alumnos" && action === "view") {
+      return children;
+    }
+    return <AccessDenied permission={permission} action={action} fallbackTo={fallbackTo} message="El portal de alumnos tiene acceso exclusivo a tu expediente personal y calificaciones." />;
+  }
+
+  // Coordinador strict sandbox: only their institution and assigned students
+  if (currentUser.role === "Coordinador") {
+    if (permission === "Instituciones" || permission === "Alumnos" || permission === "Clases") {
+      return children;
+    }
+    return <AccessDenied permission={permission} action={action} fallbackTo={fallbackTo} message="El perfil de Coordinador Institucional solo tiene acceso a los alumnos y datos académicos de su sede." />;
+  }
+
+  // Check centralized permission system
+  if (permission && !hasPermission(currentUser.role, permission, action)) {
+    return <AccessDenied permission={permission} action={action} fallbackTo={fallbackTo} />;
+  }
+
+  // Check allowed roles if specified (with alias support)
+  if (allowedRoles && allowedRoles.length > 0) {
+    const isRoleAllowed = allowedRoles.some(r => {
+      const rLower = r.toLowerCase().trim();
+      if (rLower === normRole) return true;
+      if (['academia', 'académico', 'academico'].includes(rLower) && ['academia', 'académico', 'academico', 'coordinador académico'].includes(normRole)) return true;
+      if (['finanzas', 'administrativo', 'administración', 'administracion'].includes(rLower) && ['finanzas', 'administrativo', 'administración', 'administracion', 'director financiero'].includes(normRole)) return true;
+      return false;
+    });
+
+    if (!isRoleAllowed) {
+      return <AccessDenied permission={permission} action={action} fallbackTo={fallbackTo} />;
+    }
   }
   
   return children;
@@ -127,7 +161,7 @@ export default function App() {
           <Route 
             path="alumnos/nuevo" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos">
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos" action="create">
                 <FormAlumno />
               </RoleGuard>
             } 
@@ -135,7 +169,7 @@ export default function App() {
           <Route 
             path="alumnos/editar/:id" 
             element={
-              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos">
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos" action="edit">
                 <FormAlumno />
               </RoleGuard>
             } 
@@ -145,7 +179,7 @@ export default function App() {
           <Route 
             index 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Dashboard">
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
                 <Inicio />
               </RoleGuard>
             } 
@@ -169,8 +203,56 @@ export default function App() {
           <Route 
             path="crm" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Dashboard">
-                <CRM />
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="CRM - Prospectos">
+                <CRM initialTab="Kanban" />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="crm/dashboard" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="CRM - Dashboard">
+                <CRM initialTab="Analytics" />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="crm/campanas" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="CRM - Campañas">
+                <CRM initialTab="Campanas" />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="crm/reportes" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="CRM - Reportes">
+                <CRM initialTab="Reportes" />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="crm/correos" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="CRM - Correos">
+                <CRM initialTab="Correos" />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="crm/repositorio" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="CRM - Repositorio">
+                <CRM initialTab="Repositorio" />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="crm/tareas" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="CRM - Tareas">
+                <CRM initialTab="Tareas" />
               </RoleGuard>
             } 
           />
@@ -191,9 +273,17 @@ export default function App() {
             } 
           />
           <Route 
+            path="instituciones/notificaciones" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Instituciones - Notificaciones">
+                <InstitucionesNotificaciones />
+              </RoleGuard>
+            } 
+          />
+          <Route 
             path="instituciones/nueva" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Instituciones">
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Instituciones" action="create">
                 <FormFormInstitucionGuard />
               </RoleGuard>
             } 
@@ -209,15 +299,23 @@ export default function App() {
           <Route 
             path="alumnos/por-clase" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Alumnos">
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Clases">
                 <AlumnosPorClase />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="alumnos/extension" 
+            element={
+              <RoleGuard allowedRoles={[...allRolesExceptStudentAndCoordinator, 'Coordinador']} fallbackTo={fallbackRoute} permission="Alumnos">
+                <AlumnosExtension />
               </RoleGuard>
             } 
           />
           <Route 
             path="agentes" 
             element={
-              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Dashboard">
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Agentes">
                 <Agentes />
               </RoleGuard>
             } 

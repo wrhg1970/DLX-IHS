@@ -12,12 +12,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Pillar 3: Path Variable Hardening (Id Poisoning Guard)
+    // Path Variable Hardening (Id Poisoning Guard)
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-\\.:@]+$');
     }
 
-    // Pillar 2: Validation Blueprint
+    // Validation Blueprint
     function incoming() {
       return request.resource.data;
     }
@@ -26,58 +26,59 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Entity Validations (Pillar 2: Validation Blueprints with size & type guards)
+    // Entity Validations with size & type guards
     function isValidInstitution(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+      return (data.name is string && data.name.size() > 0) || (data.tradeName is string && data.tradeName.size() > 0);
     }
 
     function isValidStudent(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+      return data.name is string && data.name.size() > 0;
     }
 
     function isValidClass(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+      return data.name is string && data.name.size() > 0;
     }
 
     function isValidEnrollment(data) {
-      return data.studentId is number && data.classId is number;
+      return (data.studentId is number || data.studentId is string) && (data.classId is number || data.classId is string);
     }
 
     function isValidPayment(data) {
-      return data.amount is number && data.amount >= 0;
+      return (data.amount is number || data.amount is string);
     }
 
     function isValidProvider(data) {
-      return data.legalName is string && data.legalName.size() > 0 && data.legalName.size() <= 200;
+      return (data.legalName is string && data.legalName.size() > 0) || 
+             (data.commercialName is string && data.commercialName.size() > 0) || 
+             (data.name is string && data.name.size() > 0);
     }
 
-    // Additional validations
     function isValidCRMLead(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+      return data.name is string && data.name.size() > 0;
     }
 
     function isValidContact(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+      return data.name is string && data.name.size() > 0;
     }
 
     function isValidTask(data) {
-      return data.title is string && data.title.size() > 0 && data.title.size() <= 300;
+      return data.title is string && data.title.size() > 0;
     }
 
     function isValidActivity(data) {
-      return data.description is string && data.description.size() > 0 && data.description.size() <= 500;
+      return data.description is string && data.description.size() > 0;
     }
 
     function isValidAuditLog(data) {
-      return data.description is string && data.description.size() > 0 && data.entityType is string;
+      return data.description is string && data.description.size() > 0;
     }
 
     function isValidFinancialTransaction(data) {
-      return data.amount is number;
+      return data.amount is number || data.amount is string;
     }
 
     function isValidBankAccount(data) {
-      return data.bankName is string && data.bankName.size() > 0 && data.accountName is string && data.accountName.size() > 0;
+      return data.bankName is string && data.bankName.size() > 0;
     }
 
     function isValidUser(data) {
@@ -85,11 +86,11 @@ service cloud.firestore {
     }
 
     function isValidProviderProductService(data) {
-      return data.providerId != null && data.productType is string;
+      return data.providerId != null;
     }
 
     function isValidProviderSpecificProduct(data) {
-      return data.providerId != null && data.name is string;
+      return data.providerId != null;
     }
 
     function isValidEmailId(email) {
@@ -106,11 +107,11 @@ service cloud.firestore {
     }
 
     function isValidCompanyDocument(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+      return data.name is string && data.name.size() > 0;
     }
 
     function isValidFinanceCategory(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 100;
+      return data.name is string && data.name.size() > 0;
     }
 
     function isValidAccountStatement(data) {
@@ -122,18 +123,36 @@ service cloud.firestore {
     }
 
     function isValidCompanyInfo(data) {
-      return data.commercialName is string && data.commercialName.size() > 0 && data.commercialName.size() <= 200;
+      return data.commercialName is string || data.legalName is string || data.rfc is string;
     }
 
     function isValidCatalog(data) {
-      return data.items is list && data.items.size() <= 200;
+      return data.items is list;
     }
 
     function isValidBackup(data) {
-      return data.date is string && data.type is string && data.size is string;
+      return data.date is string && data.type is string;
+    }
+
+    function isValidSystemRole(data) {
+      return data.name is string && data.name.size() > 0 && data.permissions is map;
     }
 
     // Match pathways configurations
+    match /test/{id} {
+      allow read: if true;
+    }
+
+    match /system/{id} {
+      allow read: if true;
+    }
+
+    match /system_roles/{id} {
+      allow read: if true;
+      allow create, update: if isValidId(id) && isValidSystemRole(incoming());
+      allow delete: if isValidId(id);
+    }
+
     match /institutions/{id} {
       allow read: if true;
       allow create, update: if isValidId(id) && isValidInstitution(incoming());

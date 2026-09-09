@@ -30,8 +30,9 @@ import {
   ShieldCheck,
   Building
 } from 'lucide-react';
-import { useAppContext, resolveCreditPrices } from '../context/AppContext';
+import { useAppContext, resolveCreditPrices, calculateInstitutionFinancials, isColombia } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
+import { hasPermission } from '../utils/permissionCheck';
 
 export function InstitucionesDashboard() {
   const { 
@@ -43,10 +44,15 @@ export function InstitucionesDashboard() {
     classes, 
     financialTransactions,
     providerProductServices,
-    providers
+    providers,
+    currentUser
   } = useAppContext();
   
   const navigate = useNavigate();
+
+  const canViewFinancials = 
+    hasPermission(currentUser?.role, "Finanzas", "view") || 
+    hasPermission(currentUser?.role, "Administración", "view");
 
   // Filter States
   const [filterCountry, setFilterCountry] = useState<string>('all');
@@ -55,90 +61,33 @@ export function InstitucionesDashboard() {
 
   // Helper to compute institution statistics
   const getInstStats = (instId: number) => {
-    const instStudents = students.filter(s => s.institutionId === instId);
-    const instStudentIds = instStudents.map(s => s.id);
-    const instContacts = contacts.filter(c => c.institutionId === instId);
+    const instObj = institutions.find(i => Number(i.id) === Number(instId));
+    const instContacts = contacts.filter(c => Number(c.institutionId) === Number(instId));
 
-    // Ingresos Totales (Vendido) - treating class prices in USD converted to MXN
-    const instEnrollments = enrollments.filter(e => instStudentIds.includes(e.studentId));
-    const totalVendidoUSD = instEnrollments.reduce((sum, e) => {
-      let cp = e.price;
-      if (cp === undefined || cp === null) {
-        const cl = classes.find(c => c.id === e.classId);
-        if (cl) {
-          const cType = cl.creditType;
-          const inst = institutions.find(i => i.id === instId);
-          let valStr = "";
-          if (inst) {
-            const resolvedPrices = resolveCreditPrices(inst.tarifasId, catalogs, inst.mainProviderId, providerProductServices);
-            if (cType === 'Medio Crédito') valStr = resolvedPrices.priceHalfCredit || "";
-            else if (cType === 'Crédito completo AP') valStr = resolvedPrices.priceFullApCredit || "";
-            else if (cType === 'Medio Crédito AP') valStr = resolvedPrices.priceHalfApCredit || "";
-            else if (cType === 'Crédito completo') valStr = resolvedPrices.priceFullCredit || "";
-          }
-          if (valStr) {
-            cp = parseFloat(valStr.replace(/[^0-9.-]+/g, "") || "0");
-          } else {
-            if (cType === 'Medio Crédito') cp = 250;
-            else if (cType === 'Crédito completo AP') cp = 600;
-            else if (cType === 'Medio Crédito AP') cp = 300;
-            else cp = 500;
-          }
-        } else {
-          cp = 0;
-        }
-      }
-      return sum + (cp || 0);
-    }, 0);
-    const totalVendidoMXN = totalVendidoUSD * 18.5;
-
-    // Membership in USD converted to MXN
-    const inst = institutions.find(i => i.id === instId);
-    const activeMemb = catalogs['Membresías']?.find((m: any) => m.id === inst?.membershipId);
-    const membUnitAmount = activeMemb ? Number(activeMemb.amount || 0) : 0;
-    const customMembPrice = inst?.membershipPrice ? parseFloat((inst.membershipPrice || "").replace(/[^0-9.-]+/g, "")) : null;
-    const finalMembUnitAmount = customMembPrice !== null && !isNaN(customMembPrice) ? customMembPrice : membUnitAmount;
-    const totalMembUSD = finalMembUnitAmount;
-    const totalMembMXN = totalMembUSD * 18.5;
-
-    // Combined Projected Ingresos in MXN
-    const totalVendido = totalVendidoMXN + totalMembMXN;
-
-    // Ingresos Recibidos (Pagado) - always in MXN
-    const instPayments = financialTransactions.filter(p => 
-      (p.institutionId === instId || (p.studentId && instStudentIds.includes(p.studentId))) && 
-      p.type === 'income' && 
-      (p.status === 'Aplicado' || p.status === 'Pagado')
+    const metrics = calculateInstitutionFinancials(
+      instObj,
+      students,
+      enrollments,
+      classes,
+      catalogs,
+      providerProductServices,
+      financialTransactions
     );
-    const totalPagado = instPayments.reduce((sum, p) => sum + p.amountMXN, 0);
-
-    // Costo Clases to providers (USD converted to MXN)
-    const totalCostUSD = instEnrollments.reduce((sum, e) => {
-      const cl = classes.find(c => c.id === e.classId);
-      if (!cl) return sum;
-      const cType = cl.creditType;
-      let cost = 300;
-      if (cType === 'Medio Crédito') cost = 150;
-      else if (cType === 'Crédito completo AP') cost = 350;
-      else if (cType === 'Medio Crédito AP') cost = 175;
-      return sum + cost;
-    }, 0);
-    const totalCost = totalCostUSD * 18.5;
-
-    const instExpenses = financialTransactions.filter(p => p.studentId && instStudentIds.includes(p.studentId) && p.type === 'expense');
-    const egresosPagados = instExpenses.reduce((sum, p) => sum + p.amountMXN, 0);
-
-    const totalPorRecaudar = Math.max(0, totalVendido - totalPagado);
-    const saldoPorPagar = Math.max(0, totalCost - egresosPagados);
 
     return {
-      numStudents: instStudents.length,
+      numStudents: metrics.numStudents,
       numContacts: instContacts.length,
-      totalVendido,
-      totalPagado,
-      totalCost,
-      totalPorRecaudar,
-      saldoPorPagar,
+      numActiveEnrollments: metrics.numActiveEnrollments,
+      numActiveClasses: metrics.numActiveClasses,
+      numActiveFullCredits: metrics.numActiveFullCredits,
+      numActiveHalfCredits: metrics.numActiveHalfCredits,
+      activeClassIds: metrics.activeClassIds,
+      totalVendido: metrics.totalIngresosProyectadosMXN,
+      totalVendidoUSD: metrics.totalIngresosProyectadosUSD,
+      totalPagado: metrics.totalPagadoMXN,
+      totalCost: metrics.totalCostMXN,
+      totalPorRecaudar: metrics.totalPorRecaudarMXN,
+      saldoPorPagar: metrics.saldoPorPagarMXN,
     };
   };
 
@@ -191,6 +140,10 @@ export function InstitucionesDashboard() {
     let totalPag = 0;
     let totalPend = 0;
     let totalStudCount = 0;
+    let totalActiveMaterias = 0;
+    let totalActiveFullCredits = 0;
+    let totalActiveHalfCredits = 0;
+    const distinctClassesSet = new Set<string>();
 
     filteredInstitutions.forEach(inst => {
       const stats = getInstStats(inst.id);
@@ -200,10 +153,13 @@ export function InstitucionesDashboard() {
       
       // Sum student counts actually linked
       totalStudCount += stats.numStudents;
+      totalActiveMaterias += stats.numActiveEnrollments;
+      totalActiveFullCredits += stats.numActiveFullCredits;
+      totalActiveHalfCredits += stats.numActiveHalfCredits;
+      stats.activeClassIds.forEach((id: string) => distinctClassesSet.add(id));
     });
 
     const activeCount = filteredInstitutions.filter(inst => {
-      const stats = getInstStats(inst.id);
       const isArchived = inst.status === 'Archivada' || inst.status === 'Archivado';
       return !isArchived;
     }).length;
@@ -215,7 +171,11 @@ export function InstitucionesDashboard() {
       totalVendido: totalVend,
       totalPagado: totalPag,
       totalPorRecaudar: totalPend,
-      totalStudentsLinked: totalStudCount
+      totalStudentsLinked: totalStudCount,
+      totalActiveMaterias,
+      totalActiveFullCredits,
+      totalActiveHalfCredits,
+      totalDistinctClasses: distinctClassesSet.size
     };
   }, [filteredInstitutions, students, enrollments, classes, catalogs, providerProductServices]);
 
@@ -262,12 +222,42 @@ export function InstitucionesDashboard() {
       const stats = getInstStats(inst.id);
       return {
         name: inst.name,
-        commercialName: inst.commercialName || inst.name,
+        commercialName: (inst as any).commercialName || inst.name,
         vendido: stats.totalVendido,
         pagado: stats.totalPagado,
         estudiantes: stats.numStudents
       };
     }).sort((a, b) => b.vendido - a.vendido).slice(0, 8);
+  }, [filteredInstitutions]);
+
+  // Charts data: Top 8 Institutions by Student Enrollment (Academic view)
+  const topInstByStudentsData = useMemo(() => {
+    return filteredInstitutions.map(inst => {
+      const stats = getInstStats(inst.id);
+      return {
+        name: inst.name,
+        commercialName: (inst as any).commercialName || inst.name,
+        estudiantes: stats.numStudents,
+        materias: stats.numActiveEnrollments
+      };
+    }).sort((a, b) => b.estudiantes - a.estudiantes).slice(0, 8);
+  }, [filteredInstitutions]);
+
+  // Operational status distribution (Academic view)
+  const operationalStatusData = useMemo(() => {
+    let activas = 0;
+    let inactivas = 0;
+    filteredInstitutions.forEach(inst => {
+      if (inst.status === 'Archivada' || inst.status === 'Archivado' || inst.active === false) {
+        inactivas++;
+      } else {
+        activas++;
+      }
+    });
+    return [
+      { name: 'Instituciones Activas', value: activas, color: '#10b981' },
+      { name: 'Archivadas / Inactivas', value: inactivas, color: '#94a3b8' },
+    ].filter(item => item.value > 0);
   }, [filteredInstitutions]);
 
   // Modality Breakdown
@@ -356,7 +346,7 @@ export function InstitucionesDashboard() {
       </div>
 
       {/* KPI Info blocks */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 shrink-0">
         
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
@@ -373,10 +363,10 @@ export function InstitucionesDashboard() {
 
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Estudiantes Vinculados</p>
+            <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Estudiantes</p>
             <span className="text-3xl font-light text-emerald-600 tracking-tight">{kpis.totalStudentsLinked.toLocaleString()}</span>
             <p className="text-[10px] text-slate-400 mt-1">
-              Alumnos registrados en estas sedes
+              Alumnos en estas sedes
             </p>
           </div>
           <div className="p-3 bg-emerald-50 rounded-xl text-emerald-600">
@@ -386,68 +376,149 @@ export function InstitucionesDashboard() {
 
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Ingresos Facturados</p>
-            <span className="text-2xl font-semibold text-indigo-600 tracking-tight">
-              ${kpis.totalVendido.toLocaleString("es-MX", { maximumFractionDigits: 0 })} <span className="text-xs text-slate-400 font-normal">MXN</span>
-            </span>
-            <p className="text-[10px] text-slate-400 mt-1">
-              Venta bruta calculada por inscripciones
-            </p>
+            <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Materias Activas</p>
+            <span className="text-3xl font-light text-blue-600 tracking-tight">{kpis.totalActiveMaterias.toLocaleString()}</span>
+            <div className="flex items-center gap-1 text-[10px] font-semibold mt-1">
+              <span className="text-emerald-700 font-bold" title="Materias con Crédito Completo">{kpis.totalActiveFullCredits} Full</span>
+              <span className="text-slate-300">•</span>
+              <span className="text-amber-700 font-bold" title="Materias con Medio Crédito">{kpis.totalActiveHalfCredits} Half</span>
+              <span className="text-slate-400 font-normal ml-0.5">({kpis.totalDistinctClasses} distintas)</span>
+            </div>
           </div>
-          <div className="p-3 bg-violet-50 rounded-xl text-violet-600">
-            <DollarSign className="w-6 h-6" />
+          <div className="p-3 bg-blue-50 rounded-xl text-blue-600">
+            <BookOpen className="w-6 h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Por Recaudar (Cuentas por Cobrar)</p>
-            <span className={`text-2xl font-semibold tracking-tight ${kpis.totalPorRecaudar > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
-              ${kpis.totalPorRecaudar.toLocaleString("es-MX", { maximumFractionDigits: 0 })} <span className="text-xs text-slate-400 font-normal">MXN</span>
-            </span>
-            <p className="text-[10px] text-slate-400 mt-1">
-              Cobros correspondientes pendientes
-            </p>
-          </div>
-          <div className="p-3 bg-amber-50 rounded-xl text-amber-600">
-            <CreditCard className="w-6 h-6" />
-          </div>
-        </div>
+        {canViewFinancials ? (
+          <>
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Ingresos Facturados</p>
+                <span className="text-2xl font-semibold text-indigo-600 tracking-tight">
+                  ${kpis.totalVendido.toLocaleString("es-MX", { maximumFractionDigits: 0 })} <span className="text-xs text-slate-400 font-normal">MXN</span>
+                </span>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Venta bruta calculada
+                </p>
+              </div>
+              <div className="p-3 bg-violet-50 rounded-xl text-violet-600">
+                <DollarSign className="w-6 h-6" />
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Por Recaudar</p>
+                <span className={`text-2xl font-semibold tracking-tight ${kpis.totalPorRecaudar > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
+                  ${kpis.totalPorRecaudar.toLocaleString("es-MX", { maximumFractionDigits: 0 })} <span className="text-xs text-slate-400 font-normal">MXN</span>
+                </span>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Cobros pendientes
+                </p>
+              </div>
+              <div className="p-3 bg-amber-50 rounded-xl text-amber-600">
+                <CreditCard className="w-6 h-6" />
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Modalidades Registradas</p>
+                <span className="text-3xl font-light text-indigo-600 tracking-tight">
+                  {modalityDistribution.length}
+                </span>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Variedad de programas activos
+                </p>
+              </div>
+              <div className="p-3 bg-indigo-50 rounded-xl text-indigo-600">
+                <Layers className="w-6 h-6" />
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Promedio por Sede</p>
+                <span className="text-3xl font-light text-purple-600 tracking-tight">
+                  {kpis.active > 0 ? Math.round(kpis.totalStudentsLinked / kpis.active) : 0}
+                </span>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Estudiantes por institución
+                </p>
+              </div>
+              <div className="p-3 bg-purple-50 rounded-xl text-purple-600">
+                <GraduationCap className="w-6 h-6" />
+              </div>
+            </div>
+          </>
+        )}
 
       </div>
 
       {/* Primary Analytics Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        {/* Chart A: Top 8 Institutions by gross tuition volume */}
+        {/* Chart A: Top 8 Institutions */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col min-h-[380px]">
           <div className="mb-4">
             <div className="flex items-center space-x-2">
               <TrendingUp className="w-4 h-4 text-indigo-500" />
-              <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Volumen Financiero por Institución (Top 8)</h3>
+              <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wider">
+                {canViewFinancials ? "Volumen Financiero por Institución (Top 8)" : "Instituciones con Mayor Matrícula (Top 8)"}
+              </h3>
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">Comparativa de valor total pactado (Vendido) vs montos liquidados (Pagado)</p>
+            <p className="text-[10px] text-slate-400 mt-1">
+              {canViewFinancials 
+                ? "Comparativa de valor total pactado (Vendido) vs montos liquidados (Pagado)"
+                : "Comparativa de estudiantes matriculados y materias activas asignadas"}
+            </p>
           </div>
           <div className="flex-1 min-h-[250px]">
-            {topInstByRevenueData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">
-                Sin datos financieros en el segmento actual.
-              </div>
+            {canViewFinancials ? (
+              topInstByRevenueData.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">
+                  Sin datos financieros en el segmento actual.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topInstByRevenueData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="commercialName" tick={{ fontSize: 9 }} stroke="#94a3b8" tickLine={false} />
+                    <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} />
+                    <Tooltip 
+                      formatter={(value) => [`$${Number(value).toLocaleString("es-MX")}`, '']}
+                      contentStyle={{ fontSize: '11px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
+                    <Bar dataKey="vendido" name="Vendido (Pactado)" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="pagado" name="Pagado (Ingresado)" fill="#10b981" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topInstByRevenueData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="commercialName" tick={{ fontSize: 9 }} stroke="#94a3b8" tickLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} />
-                  <Tooltip 
-                    formatter={(value) => [`$${Number(value).toLocaleString("es-MX")}`, '']}
-                    contentStyle={{ fontSize: '11px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
-                  <Bar dataKey="vendido" name="Vendido (Pactado)" fill="#6366f1" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="pagado" name="Pagado (Ingresado)" fill="#10b981" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              topInstByStudentsData.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">
+                  Sin datos de estudiantes en el segmento actual.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topInstByStudentsData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="commercialName" tick={{ fontSize: 9 }} stroke="#94a3b8" tickLine={false} />
+                    <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} />
+                    <Tooltip 
+                      formatter={(value) => [Number(value).toLocaleString(), '']}
+                      contentStyle={{ fontSize: '11px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
+                    <Bar dataKey="estudiantes" name="Alumnos Matriculados" fill="#4f46e5" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="materias" name="Materias Asignadas" fill="#06b6d4" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )
             )}
           </div>
         </div>
@@ -491,12 +562,14 @@ export function InstitucionesDashboard() {
       {/* Advanced info partitions */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
-        {/* Partition 1: Billing and Ledger status distribution */}
+        {/* Partition 1: Billing and Ledger status distribution OR Operational Status */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <div>
-            <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider mb-4">Estado de Cobros (Saldos)</h4>
+            <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider mb-4">
+              {canViewFinancials ? "Estado de Cobros (Saldos)" : "Estado Operativo (Sedes)"}
+            </h4>
             <div className="space-y-4">
-              {statusChartData.map((item, index) => {
+              {(canViewFinancials ? statusChartData : operationalStatusData).map((item) => {
                 const percentage = kpis.total > 0 ? ((item.value / kpis.total) * 100).toFixed(1) : '0';
                 return (
                   <div key={item.name} className="space-y-1">
@@ -513,7 +586,7 @@ export function InstitucionesDashboard() {
                   </div>
                 );
               })}
-              {statusChartData.length === 0 && (
+              {(canViewFinancials ? statusChartData : operationalStatusData).length === 0 && (
                 <p className="text-slate-400 text-xs italic text-center py-6">No hay datos en esta categoría.</p>
               )}
             </div>
@@ -592,10 +665,21 @@ export function InstitucionesDashboard() {
                 <th className="px-6 py-3">Nombre Tradicional</th>
                 <th className="px-6 py-3">Ubicación</th>
                 <th className="px-6 py-3 text-center">Alumnos</th>
-                <th className="px-6 py-3 text-right">Vendido (Bruto)</th>
-                <th className="px-6 py-3 text-right">Saldo Pendiente</th>
+                {canViewFinancials ? (
+                  <>
+                    <th className="px-6 py-3 text-right">Vendido (Bruto)</th>
+                    <th className="px-6 py-3 text-right">Saldo Pendiente</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="px-6 py-3 text-center">Materias Activas</th>
+                    <th className="px-6 py-3 text-center">Modalidad</th>
+                  </>
+                )}
                 <th className="px-6 py-3 text-center">Membresía</th>
-                <th className="px-6 py-3 text-center">Estado Auditoría</th>
+                <th className="px-6 py-3 text-center">
+                  {canViewFinancials ? "Estado Auditoría" : "Estado Sede"}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-105 text-xs">
@@ -618,44 +702,74 @@ export function InstitucionesDashboard() {
                       onClick={() => navigate(`/instituciones/${inst.id}`)}
                     >
                       <td className="px-6 py-3.5 font-semibold text-slate-900">
-                        {inst.commercialName || inst.name}
+                        {(inst as any).commercialName || inst.name}
                         {inst.tradeName && inst.tradeName !== inst.name && (
                           <div className="text-[10px] text-slate-400 font-normal mt-0.5">{inst.name}</div>
                         )}
                       </td>
                       <td className="px-6 py-3.5 text-slate-500">
-                        <span className="inline-flex items-center gap-1">
-                          🌎 {inst.country || 'No especificado'}
-                          {inst.city && <span className="text-slate-300">/ {inst.city}</span>}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center gap-1">
+                            🌎 {inst.country || 'No especificado'}
+                            {inst.city && <span className="text-slate-300">/ {inst.city}</span>}
+                          </span>
+                          {isColombia(inst.country) && inst.colombiaCalendar && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-50 text-amber-900 border border-amber-300 shadow-2xs">
+                              🇨🇴 {inst.colombiaCalendar}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-3.5 text-center font-mono font-semibold">
                         {stats.numStudents}
                       </td>
-                      <td className="px-6 py-3.5 text-right font-mono text-slate-600">
-                        ${stats.totalVendido.toLocaleString("es-MX", { minimumFractionDigits: 0 })}
-                      </td>
-                      <td className="px-6 py-3.5 text-right font-mono font-medium">
-                        <span className={isPendiente ? 'text-amber-600 font-bold' : 'text-emerald-600'}>
-                          ${stats.totalPorRecaudar.toLocaleString("es-MX", { minimumFractionDigits: 0 })}
-                        </span>
-                      </td>
+                      {canViewFinancials ? (
+                        <>
+                          <td className="px-6 py-3.5 text-right font-mono text-slate-600">
+                            ${stats.totalVendido.toLocaleString("es-MX", { minimumFractionDigits: 0 })}
+                          </td>
+                          <td className="px-6 py-3.5 text-right font-mono font-medium">
+                            <span className={isPendiente ? 'text-amber-600 font-bold' : 'text-emerald-600'}>
+                              ${stats.totalPorRecaudar.toLocaleString("es-MX", { minimumFractionDigits: 0 })}
+                            </span>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="px-6 py-3.5 text-center font-mono text-blue-600 font-semibold">
+                            {stats.numActiveEnrollments}
+                          </td>
+                          <td className="px-6 py-3.5 text-center text-slate-600">
+                            <span className="text-[10px] font-medium bg-slate-100 px-2 py-0.5 rounded">
+                              {inst.modality || 'Dual'}
+                            </span>
+                          </td>
+                        </>
+                      )}
                       <td className="px-6 py-3.5 text-center">
                         <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 border border-indigo-110 text-indigo-700">
                           ⚡ {catalogs['Membresías']?.find(m => m.id === inst.membershipId)?.name || (inst.membershipId ? inst.membershipId : 'Básica')}
                         </span>
                       </td>
                       <td className="px-6 py-3.5 text-center">
-                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
-                          isArchived ? 'bg-slate-100 text-slate-600' :
-                          isPendiente ? 'bg-amber-50 text-amber-700 border border-amber-100' :
-                          'bg-emerald-50 text-emerald-700 border border-emerald-110'
-                        }`}>
-                          {isArchived ? 'Archivado' : isPendiente ? 'Pendiente' : 'Al Corriente'}
-                        </span>
+                        {canViewFinancials ? (
+                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                            isArchived ? 'bg-slate-100 text-slate-600' :
+                            isPendiente ? 'bg-amber-50 text-amber-700 border border-amber-100' :
+                            'bg-emerald-50 text-emerald-700 border border-emerald-110'
+                          }`}>
+                            {isArchived ? 'Archivado' : isPendiente ? 'Pendiente' : 'Al Corriente'}
+                          </span>
+                        ) : (
+                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                            inst.active !== false && !isArchived ? 'bg-emerald-50 text-emerald-700 border border-emerald-110' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {inst.active !== false && !isArchived ? 'Activa' : 'Inactiva'}
+                          </span>
+                        )}
                       </td>
                     </tr>
-                  )
+                  );
                 })
               )}
             </tbody>

@@ -1,8 +1,10 @@
 import React, { useState } from "react";
-import { Search, Filter, Trash2, Archive, AlertTriangle, CheckCircle, HelpCircle, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
-import { useAppContext, Institution, resolveCreditPrices } from "../context/AppContext";
+import { Search, Filter, Trash2, Archive, AlertTriangle, CheckCircle, HelpCircle, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, Eye, Clock, Zap, BookOpen, FileSpreadsheet, Lock } from "lucide-react";
+import { useAppContext, Institution, resolveCreditPrices, calculateInstitutionFinancials, isColombia } from "../context/AppContext";
 import { useNavigate } from "react-router-dom";
 import { Modal } from "../components/ui/Modal";
+import { hasPermission } from "../utils/permissionCheck";
+import { InstitutionFinancialReportModal } from "../components/InstitutionFinancialReportModal";
 
 export function Instituciones() {
   const { 
@@ -19,7 +21,12 @@ export function Instituciones() {
     clearAllInstitutions,
     providerProductServices,
     providers,
-    currentUser
+    currentUser,
+    users,
+    companyInfo,
+    bankAccounts,
+    getInstitutionSLA,
+    updateInstitutionLastInteraction
   } = useAppContext();
   const navigate = useNavigate();
 
@@ -29,6 +36,10 @@ export function Instituciones() {
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
 
+  // Financial Report Modal State
+  const [financialReportModalInst, setFinancialReportModalInst] = useState<Institution | null>(null);
+  const [financialReportType, setFinancialReportType] = useState<'institucion' | 'interno'>('institucion');
+
   // New Filters
   const [filterCountry, setFilterCountry] = useState("Todas");
   const [filterMembership, setFilterMembership] = useState("Todas");
@@ -37,6 +48,8 @@ export function Instituciones() {
   const [filterType, setFilterType] = useState("Todas");
   const [filterActive, setFilterActive] = useState("Todas");
   const [filterIva, setFilterIva] = useState("Todas");
+  const [filterSLA, setFilterSLA] = useState("Todas");
+  const [filterCalendar, setFilterCalendar] = useState("Todas");
 
   // Selection & Bulk Modification State
   const [selectedInstIds, setSelectedInstIds] = useState<number[]>([]);
@@ -51,6 +64,7 @@ export function Instituciones() {
     updatePaymentMethod: false,
     updateMembershipExpiration: false,
     updateActive: false,
+    updateColombiaCalendar: false,
   });
 
   const [bulkValues, setBulkValues] = useState({
@@ -61,93 +75,55 @@ export function Instituciones() {
     paymentMethod: "",
     membershipExpiration: "",
     active: true,
+    colombiaCalendar: "",
   });
 
   const isSuperAdmin = currentUser?.role?.toLowerCase()?.includes('super') || 
                        currentUser?.role?.toLowerCase()?.includes('admin principal') || 
-                       currentUser?.role?.toLowerCase()?.includes('director');
+                       currentUser?.role?.toLowerCase()?.includes('director') ||
+                       currentUser?.role?.toLowerCase()?.includes('finanzas');
+
+  const isSuperAdminOnly = currentUser?.role?.trim().toLowerCase() === 'superadministrador';
 
   // Helper inside the page to check pending balances & associated records
   const getInstStats = (instId: number) => {
-    const instStudents = students.filter(s => s.institutionId === instId);
-    const instStudentIds = instStudents.map(s => s.id);
-    const instContacts = contacts.filter(c => c.institutionId === instId);
-    const instTasks = tasks.filter(t => t.institutionId === instId);
+    const instObj = institutions.find(i => Number(i.id) === Number(instId));
+    const instContacts = contacts.filter(c => Number(c.institutionId) === Number(instId));
+    const instTasks = tasks.filter(t => Number(t.institutionId) === Number(instId));
 
-    // Ingresos Totales (Vendido)
-    const instEnrollments = enrollments.filter(e => instStudentIds.includes(e.studentId));
-    const totalVendido = instEnrollments.reduce((sum, e) => {
-      let cp = e.price;
-      if (cp === undefined || cp === null) {
-        const cl = classes.find(c => c.id === e.classId);
-        if (cl) {
-          const cType = cl.creditType;
-          const inst = institutions.find(i => i.id === instId);
-          let valStr = "";
-          if (inst) {
-            const resolvedPrices = resolveCreditPrices(inst.tarifasId, catalogs, inst.mainProviderId, providerProductServices);
-            if (cType === 'Medio Crédito') valStr = resolvedPrices.priceHalfCredit || "";
-            else if (cType === 'Crédito completo AP') valStr = resolvedPrices.priceFullApCredit || "";
-            else if (cType === 'Medio Crédito AP') valStr = resolvedPrices.priceHalfApCredit || "";
-            else if (cType === 'Crédito completo') valStr = resolvedPrices.priceFullCredit || "";
-          }
-          if (valStr) {
-            cp = parseFloat(valStr.replace(/[^0-9.-]+/g, "") || "0");
-          } else {
-            if (cType === 'Medio Crédito') cp = 250;
-            else if (cType === 'Crédito completo AP') cp = 600;
-            else if (cType === 'Medio Crédito AP') cp = 300;
-            else cp = 500;
-          }
-        } else {
-          cp = 0;
-        }
-      }
-      return sum + (cp || 0);
-    }, 0);
-
-    // Ingresos Recibidos (Pagado)
-    const instPayments = financialTransactions.filter(p => 
-      (p.institutionId === instId || (p.studentId && instStudentIds.includes(p.studentId))) && 
-      p.type === 'income' && 
-      (p.status === 'Aplicado' || p.status === 'Pagado')
+    const metrics = calculateInstitutionFinancials(
+      instObj,
+      students,
+      enrollments,
+      classes,
+      catalogs,
+      providerProductServices,
+      financialTransactions
     );
-    const totalPagado = instPayments.reduce((sum, p) => sum + p.amountMXN, 0);
-
-    // Costo Clases (Cargos)
-    const totalCost = instEnrollments.reduce((sum, e) => {
-      const cl = classes.find(c => c.id === e.classId);
-      if (!cl) return sum;
-      const cType = cl.creditType;
-      let cost = 300;
-      if (cType === 'Medio Crédito') cost = 150;
-      else if (cType === 'Crédito completo AP') cost = 350;
-      else if (cType === 'Medio Crédito AP') cost = 175;
-      return sum + cost;
-    }, 0);
-
-    // Egresos Pagados
-    const instExpenses = financialTransactions.filter(p => p.studentId && instStudentIds.includes(p.studentId) && p.type === 'expense');
-    const egresosPagados = instExpenses.reduce((sum, p) => sum + p.amountMXN, 0);
-
-    const totalPorRecaudar = Math.max(0, totalVendido - totalPagado); // Accounts receivable (Pending client payments)
-    const saldoPorPagar = Math.max(0, totalCost - egresosPagados); // Accounts payable (Pending charges/costs)
-
-    const numStudents = instStudents.length;
-    const numContacts = instContacts.length;
-    const numTasks = instTasks.length;
-
-    const hasPendingBalances = totalPorRecaudar > 0 || saldoPorPagar > 0;
-    const hasAssociatedRecords = numStudents > 0 || numContacts > 0 || numTasks > 0;
 
     return {
-      numStudents,
-      numContacts,
-      numTasks,
-      totalPorRecaudar,
-      saldoPorPagar,
-      hasPendingBalances,
-      hasAssociatedRecords
+      numStudents: metrics.numStudents,
+      numContacts: instContacts.length,
+      numTasks: instTasks.length,
+      numActiveEnrollments: metrics.numActiveEnrollments,
+      numActiveClasses: metrics.numActiveClasses,
+      numActiveFullCredits: metrics.numActiveFullCredits,
+      numActiveHalfCredits: metrics.numActiveHalfCredits,
+      numDistinctFullCredits: metrics.numDistinctFullCredits,
+      numDistinctHalfCredits: metrics.numDistinctHalfCredits,
+      totalVendidoUSD: metrics.totalVendidoUSD,
+      totalVendidoMXN: metrics.totalVendidoMXN,
+      totalMembUSD: metrics.totalMembUSD,
+      totalMembMXN: metrics.totalMembMXN,
+      totalIngresosProyectadosUSD: metrics.totalIngresosProyectadosUSD,
+      totalIngresosProyectadosMXN: metrics.totalIngresosProyectadosMXN,
+      totalPagado: metrics.totalPagadoMXN,
+      totalPorRecaudar: metrics.totalPorRecaudarMXN,
+      totalCost: metrics.totalCostMXN,
+      egresosPagados: metrics.egresosPagadosMXN,
+      saldoPorPagar: metrics.saldoPorPagarMXN,
+      hasPendingBalances: metrics.hasPendingBalances,
+      hasAssociatedRecords: metrics.numStudents > 0 || instContacts.length > 0 || instTasks.length > 0
     };
   };
 
@@ -225,6 +201,9 @@ export function Instituciones() {
     if (bulkFields.updateActive) {
       updatedData.active = bulkValues.active;
     }
+    if (bulkFields.updateColombiaCalendar) {
+      updatedData.colombiaCalendar = (bulkValues.colombiaCalendar as any) || undefined;
+    }
 
     selectedInstIds.forEach((id) => {
       updateInstitution(id, updatedData);
@@ -239,10 +218,10 @@ export function Instituciones() {
   };
 
   // Sorting State
-  const [sortBy, setSortBy] = useState<"name" | "status" | "membership" | null>("name");
+  const [sortBy, setSortBy] = useState<"name" | "status" | "membership" | "students" | "materias" | null>("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
-  const handleSort = (field: "name" | "status" | "membership") => {
+  const handleSort = (field: "name" | "status" | "membership" | "students" | "materias") => {
     if (sortBy === field) {
       setSortOrder(prev => prev === "asc" ? "desc" : "asc");
     } else {
@@ -276,6 +255,7 @@ export function Instituciones() {
       (inst.tradeName || '').toLowerCase().includes(searchString) ||
       (inst.institutionCode || '').toLowerCase().includes(searchString) ||
       inst.country.toLowerCase().includes(searchString) ||
+      (inst.colombiaCalendar || '').toLowerCase().includes(searchString) ||
       (inst.contact || '').toLowerCase().includes(searchString);
 
     if (!matchesSearch) return false;
@@ -318,6 +298,23 @@ export function Instituciones() {
       if (filterIva === "No" && playsIva) return false;
     }
 
+    // SLA Inactivity status filter
+    if (filterSLA !== "Todas") {
+      const sla = getInstitutionSLA(inst);
+      if (filterSLA === "Al día" && sla.status !== "en_tiempo") return false;
+      if (filterSLA === "Por vencer" && sla.status !== "por_vencer") return false;
+      if (filterSLA === "Vencidas" && sla.status !== "vencido") return false;
+    }
+
+    // Calendario Colombia filter
+    if (filterCalendar !== "Todas") {
+      if (filterCalendar === "Sin especificar") {
+        if (inst.colombiaCalendar) return false;
+      } else if (inst.colombiaCalendar !== filterCalendar) {
+        return false;
+      }
+    }
+
     return true;
   });
 
@@ -348,6 +345,18 @@ export function Instituciones() {
       valB = (b.membershipId 
         ? (catalogs['Membresías']?.find(m => m.id === b.membershipId)?.name || 'Desconocida') 
         : 'Ninguna').toLowerCase();
+    } else if (sortBy === "students") {
+      const numA = students.filter(s => s.institutionId === a.id).length;
+      const numB = students.filter(s => s.institutionId === b.id).length;
+      if (numA < numB) return sortOrder === "asc" ? -1 : 1;
+      if (numA > numB) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    } else if (sortBy === "materias") {
+      const statsA = getInstStats(a.id);
+      const statsB = getInstStats(b.id);
+      if (statsA.numActiveEnrollments < statsB.numActiveEnrollments) return sortOrder === "asc" ? -1 : 1;
+      if (statsA.numActiveEnrollments > statsB.numActiveEnrollments) return sortOrder === "asc" ? 1 : -1;
+      return 0;
     }
     
     if (valA < valB) return sortOrder === "asc" ? -1 : 1;
@@ -386,7 +395,7 @@ export function Instituciones() {
             ))}
           </div>
 
-          {institutions.length > 0 && (
+          {isSuperAdminOnly && institutions.length > 0 && (
             <button 
               onClick={() => setIsDeleteAllModalOpen(true)}
               className="border border-rose-250 bg-rose-50/40 hover:bg-rose-50 text-rose-600 px-4 py-2 rounded-lg text-xs font-bold transition uppercase tracking-wider flex items-center gap-1.5 shadow-sm"
@@ -397,12 +406,14 @@ export function Instituciones() {
             </button>
           )}
 
-          <button 
-            onClick={() => navigate('/instituciones/nueva')}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-indigo-700 transition uppercase tracking-wider"
-          >
-            + Añadir Institución
-          </button>
+          {hasPermission(currentUser?.role, "Instituciones", "create") && (
+            <button 
+              onClick={() => navigate('/instituciones/nueva')}
+              className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-indigo-700 transition uppercase tracking-wider"
+            >
+              + Añadir Institución
+            </button>
+          )}
         </div>
       </div>
 
@@ -413,7 +424,7 @@ export function Instituciones() {
             <Filter className="w-3.5 h-3.5 text-indigo-500" />
             Filtros Avanzados
           </h4>
-          {(filterCountry !== "Todas" || filterMembership !== "Todas" || filterProvider !== "Todas" || filterModality !== "Todas" || filterType !== "Todas" || filterActive !== "Todas" || filterIva !== "Todas") && (
+          {(filterCountry !== "Todas" || filterMembership !== "Todas" || filterProvider !== "Todas" || filterModality !== "Todas" || filterType !== "Todas" || filterActive !== "Todas" || filterIva !== "Todas" || filterSLA !== "Todas") && (
             <button
               onClick={() => {
                 setFilterCountry("Todas");
@@ -423,6 +434,7 @@ export function Instituciones() {
                 setFilterType("Todas");
                 setFilterActive("Todas");
                 setFilterIva("Todas");
+                setFilterSLA("Todas");
               }}
               className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold uppercase tracking-widest"
             >
@@ -431,7 +443,24 @@ export function Instituciones() {
           )}
         </div>
         
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-3.5">
+          {/* SLA Inactivity Filter */}
+          <div className="space-y-1">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+              <Clock className="w-3 h-3 text-indigo-500" /> Alerta SLA
+            </label>
+            <select
+              value={filterSLA}
+              onChange={(e) => setFilterSLA(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700"
+            >
+              <option value="Todas">Todas las Alertas</option>
+              <option value="Al día">Al día (En tiempo)</option>
+              <option value="Por vencer">Por vencer</option>
+              <option value="Vencidas">Vencidas / Inactivas</option>
+            </select>
+          </div>
+
           {/* País Filter */}
           <div className="space-y-1">
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">País</label>
@@ -534,6 +563,21 @@ export function Instituciones() {
               <option value="No">No (Sin IVA)</option>
             </select>
           </div>
+
+          {/* Calendario Escolar (Colombia) Filter */}
+          <div className="space-y-1">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Calendario (Col.)</label>
+            <select
+              value={filterCalendar}
+              onChange={(e) => setFilterCalendar(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 pointer-events-auto"
+            >
+              <option value="Todas">Todos los Cal.</option>
+              <option value="Calendario A">🇨🇴 Calendario A</option>
+              <option value="Calendario B">🇨🇴 Calendario B</option>
+              <option value="Sin especificar">Sin especificar</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -586,7 +630,38 @@ export function Instituciones() {
                 </th>
                 
                 <th className="px-6 py-3">Contacto Ppal.</th>
-                <th className="px-6 py-3 text-center">Alumnos</th>
+                
+                {/* Clickable Header for Alumnos */}
+                <th 
+                  onClick={() => handleSort("students")} 
+                  className="px-6 py-3 text-center cursor-pointer select-none hover:bg-slate-100 group/th transition-all"
+                >
+                  <div className="flex items-center justify-center space-x-1 hover:text-slate-755">
+                    <span>Alumnos</span>
+                    {sortBy === "students" ? (
+                      sortOrder === "asc" ? <ArrowUp className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 group-hover/th:text-slate-400 shrink-0 opacity-70" />
+                    )}
+                  </div>
+                </th>
+
+                {/* Clickable Header for Materias Activas */}
+                <th 
+                  onClick={() => handleSort("materias")} 
+                  className="px-6 py-3 text-center cursor-pointer select-none hover:bg-slate-100 group/th transition-all"
+                >
+                  <div className="flex items-center justify-center space-x-1 hover:text-slate-755">
+                    <span>Materias Activas</span>
+                    {sortBy === "materias" ? (
+                      sortOrder === "asc" ? <ArrowUp className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-300 group-hover/th:text-slate-400 shrink-0 opacity-70" />
+                    )}
+                  </div>
+                </th>
+
+                <th className="px-6 py-3">Alerta Inactividad (SLA)</th>
                 
                 {/* Clickable Header for Estado */}
                 <th 
@@ -609,7 +684,7 @@ export function Instituciones() {
             <tbody className="divide-y divide-slate-100 text-xs bg-white">
               {sortedInstitutions.length === 0 ? (
                 <tr>
-                  <td colSpan={isSuperAdmin ? 8 : 7} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={isSuperAdmin ? 10 : 9} className="px-6 py-12 text-center text-slate-400">
                     Ninguna institución coincide con los criterios de búsqueda.
                   </td>
                 </tr>
@@ -619,6 +694,7 @@ export function Instituciones() {
                   const resolvedStatus = (inst.status === 'Archivada' || inst.status === 'Archivado')
                     ? inst.status
                     : (stats.totalPorRecaudar > 0 ? 'Pendiente' : 'Al corriente');
+                  const sla = getInstitutionSLA(inst);
 
                   return (
                     <tr key={inst.id} onClick={() => navigate(`/instituciones/${inst.id}`)} className="hover:bg-slate-50 cursor-pointer group">
@@ -659,7 +735,22 @@ export function Instituciones() {
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-3 text-slate-500">{inst.country}</td>
+                      <td className="px-6 py-3 text-slate-500">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{inst.country}</span>
+                          {isColombia(inst.country) && (
+                            inst.colombiaCalendar ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-50 text-amber-900 border border-amber-300">
+                                🇨🇴 {inst.colombiaCalendar}
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[8px] font-semibold bg-slate-100 text-slate-400 border border-slate-200 italic" title="Pendiente especificar Calendario A o B">
+                                Sin cal.
+                              </span>
+                            )
+                          )}
+                        </div>
+                      </td>
                       <td className="px-6 py-3 text-slate-600">
                         {inst.membershipId 
                           ? <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-[10px] font-bold border border-indigo-100">{catalogs['Membresías']?.find(m => m.id === inst.membershipId)?.name || 'Desconocida'}</span>
@@ -674,8 +765,44 @@ export function Instituciones() {
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-3 text-center font-mono">
+                      <td className="px-6 py-3 text-center font-mono font-medium text-slate-700">
                         {students.filter(s => s.institutionId === inst.id).length}
+                      </td>
+                      <td className="px-6 py-3 text-center">
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-100/80 font-mono shadow-2xs">
+                            <BookOpen className="w-3 h-3 text-indigo-500" />
+                            {stats.numActiveEnrollments}
+                          </span>
+                          {stats.numActiveEnrollments > 0 ? (
+                            <div className="flex items-center gap-1 text-[10px] font-semibold whitespace-nowrap leading-none mt-0.5">
+                              <span className="text-emerald-700 font-bold" title="Materias con Crédito Completo (Full Credit)">{stats.numActiveFullCredits} Full</span>
+                              <span className="text-slate-300">•</span>
+                              <span className="text-amber-700 font-bold" title="Materias con Medio Crédito (Half Credit)">{stats.numActiveHalfCredits} Half</span>
+                            </div>
+                          ) : (
+                            <span className="text-[9px] text-slate-400 font-medium">0 Full • 0 Half</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-3">
+                        <div className="flex flex-col gap-1 min-w-[130px]">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${sla.dotColorClass} shrink-0`} />
+                            <span className="text-[11px] font-bold text-slate-800 tracking-tight leading-none">
+                              {sla.indicatorName}
+                            </span>
+                          </div>
+                          <div>
+                            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border ${sla.badgeClass}`}>
+                              {sla.status === 'vencido' 
+                                ? `${sla.daysInactive}d inactiva (${sla.overdueDays}d venc)` 
+                                : sla.status === 'por_vencer' 
+                                ? `${sla.daysInactive}d / ${sla.slaLimitDays}d (Por vencer)` 
+                                : `${sla.daysInactive}d / ${sla.slaLimitDays}d (Al día)`}
+                            </span>
+                          </div>
+                        </div>
                       </td>
                       <td className="px-6 py-3 text-center">
                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-extrabold tracking-wide uppercase ${
@@ -688,13 +815,59 @@ export function Instituciones() {
                         </span>
                       </td>
                       <td className="px-6 py-3 text-right">
-                        <button 
-                          onClick={(e) => handleActionClick(inst, e)}
-                          className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors flex items-center justify-center ml-auto border border-transparent hover:border-slate-200/50"
-                          title="Borrar o Archivar"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setFinancialReportModalInst(inst);
+                              setFinancialReportType('institucion');
+                            }}
+                            className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-[11px] transition-colors flex items-center gap-1 shadow-2xs border-0 cursor-pointer"
+                            title="Ver Estado de Cuenta Oficial (Reporte Institucional)"
+                          >
+                            <FileSpreadsheet className="h-3.5 w-3.5" />
+                            <span>Reporte</span>
+                          </button>
+
+                          {isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFinancialReportModalInst(inst);
+                                setFinancialReportType('interno');
+                              }}
+                              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold rounded-lg text-[11px] transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
+                              title="Ver Reporte Financiero y Rentabilidad (Uso Interno ERP)"
+                            >
+                              <Lock className="h-3 w-3" />
+                              <span className="hidden xl:inline">Interno</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/instituciones/${inst.id}`);
+                            }}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs transition-colors flex items-center gap-1 border border-slate-200 shadow-2xs"
+                            title="Ver perfil y detalles completos de la institución"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            <span>Detalle</span>
+                          </button>
+                          {isSuperAdminOnly && (
+                            <button 
+                              onClick={(e) => handleActionClick(inst, e)}
+                              className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors flex items-center justify-center border border-transparent hover:border-slate-200/50"
+                              title="Borrar o Archivar"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -728,6 +901,13 @@ export function Instituciones() {
                   <p className="font-extrabold text-slate-800 text-sm">{currentStats.numStudents} alumnos</p>
                 </div>
                 <div className="space-y-1">
+                  <p className="text-slate-400 font-medium">Materias Activas:</p>
+                  <p className="font-extrabold text-blue-700 text-sm">{currentStats.numActiveEnrollments} ({currentStats.numActiveClasses} distintas)</p>
+                  <p className="text-[11px] font-semibold text-slate-600">
+                    <span className="text-emerald-700 font-bold">{currentStats.numActiveFullCredits} Full Credit</span> &bull; <span className="text-amber-700 font-bold">{currentStats.numActiveHalfCredits} Half Credit</span>
+                  </p>
+                </div>
+                <div className="space-y-1">
                   <p className="text-slate-400 font-medium">Contactos Registrados:</p>
                   <p className="font-extrabold text-slate-800 text-sm">{currentStats.numContacts} contactos</p>
                 </div>
@@ -735,7 +915,7 @@ export function Instituciones() {
                   <p className="text-slate-400 font-medium">Tareas de Seguimiento:</p>
                   <p className="font-extrabold text-slate-800 text-sm">{currentStats.numTasks} tareas</p>
                 </div>
-                <div className="space-y-1">
+                <div className="space-y-1 col-span-2">
                   <p className="text-slate-400 font-medium">Estatus Actual:</p>
                   <p className="font-extrabold text-slate-800 text-sm uppercase">{selectedInst.status}</p>
                 </div>
@@ -832,13 +1012,15 @@ export function Instituciones() {
                     <Archive className="w-4 h-4" />
                     Archivar en su lugar (Recomendado)
                   </button>
-                  <button
-                    onClick={executeDelete}
-                    className="w-full bg-rose-600 hover:bg-rose-700 text-white rounded-lg py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Eliminar por Completo de la Base de Datos
-                  </button>
+                  {isSuperAdminOnly && (
+                    <button
+                      onClick={executeDelete}
+                      className="w-full bg-rose-600 hover:bg-rose-700 text-white rounded-lg py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Eliminar por Completo de la Base de Datos
+                    </button>
+                  )}
                 </div>
               )}
               
@@ -928,6 +1110,7 @@ export function Instituciones() {
                   updatePaymentMethod: false,
                   updateMembershipExpiration: false,
                   updateActive: false,
+                  updateColombiaCalendar: false,
                 });
                 setBulkValues({
                   institutionTypeId: "",
@@ -937,6 +1120,7 @@ export function Instituciones() {
                   paymentMethod: "",
                   membershipExpiration: "",
                   active: true,
+                  colombiaCalendar: "",
                 });
                 setIsBulkEditModalOpen(true);
               }}
@@ -1149,6 +1333,32 @@ export function Instituciones() {
                 </select>
               </div>
             </div>
+
+            {/* Calendario Escolar (Colombia) */}
+            <div className="pt-3 flex items-start gap-3">
+              <input
+                type="checkbox"
+                id="updateColombiaCalendar"
+                checked={bulkFields.updateColombiaCalendar}
+                onChange={(e) => setBulkFields({ ...bulkFields, updateColombiaCalendar: e.target.checked })}
+                className="mt-1 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <div className="flex-1 space-y-1">
+                <label htmlFor="updateColombiaCalendar" className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider cursor-pointer">
+                  🇨🇴 Calendario Escolar (Colombia)
+                </label>
+                <select
+                  disabled={!bulkFields.updateColombiaCalendar}
+                  value={bulkValues.colombiaCalendar}
+                  onChange={(e) => setBulkValues({ ...bulkValues, colombiaCalendar: e.target.value })}
+                  className="w-full bg-white disabled:bg-slate-50 disabled:text-slate-450 border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700"
+                >
+                  <option value="">-- Sin Calendario / Despejar --</option>
+                  <option value="Calendario A">Calendario A (Ene/Feb - Nov)</option>
+                  <option value="Calendario B">Calendario B (Ago/Sep - Jun)</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <div className="flex gap-2 pt-4 border-t border-slate-100">
@@ -1179,6 +1389,26 @@ export function Instituciones() {
             <span className="opacity-90">Las escuelas seleccionadas han sido actualizadas masivamente.</span>
           </div>
         </div>
+      )}
+
+      {financialReportModalInst && (
+        <InstitutionFinancialReportModal
+          isOpen={!!financialReportModalInst}
+          onClose={() => setFinancialReportModalInst(null)}
+          institution={financialReportModalInst}
+          students={students}
+          enrollments={enrollments}
+          classes={classes}
+          catalogs={catalogs}
+          providerProductServices={providerProductServices}
+          providers={providers}
+          financialTransactions={financialTransactions}
+          users={users}
+          companyInfo={companyInfo}
+          bankAccounts={bankAccounts}
+          isUserAdminOrSuperAdmin={isSuperAdmin}
+          initialType={financialReportType}
+        />
       )}
 
     </div>

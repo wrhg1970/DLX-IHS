@@ -3,7 +3,9 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Building, MapPin, Phone, Mail, Network, Landmark, Receipt, Plus, Users, BookOpen, Trash2 } from "lucide-react";
 import { useAppContext, ProviderProductService } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
+import { hasPermission } from "../utils/permissionCheck";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
+import { getEnrollmentStatusBadge } from "../utils/enrollmentStatus";
 
 const academicSubcats = [
   "Syllabus Académico",
@@ -21,7 +23,7 @@ export function ProveedorDetail() {
   const { 
     providers, contacts, bankAccounts, financialTransactions, addContact, addBankAccount, updateProvider, deleteFinancialTransaction, students, enrollments, classes, institutions,
     providerProductServices, addProviderProductService, updateProviderProductService, deleteProviderProductService,
-    catalogs
+    catalogs, currentUser
   } = useAppContext();
   
   const [activeTab, setActiveTab] = useState("Información General");
@@ -215,7 +217,7 @@ export function ProveedorDetail() {
   const enrolledStudentIds = Array.from(new Set(providerEnrollments.map(e => e.studentId)));
   const enrolledStudents = students?.filter(s => enrolledStudentIds.includes(s.id)) || [];
 
-  const activeEnrollmentsCount = providerEnrollments.filter(e => e.status === 'Active' || !e.status).length;
+  const activeEnrollmentsCount = providerEnrollments.filter(e => e.status === 'Active' || e.status === 'Extended' || !e.status).length;
   const completedEnrollmentsCount = providerEnrollments.filter(e => e.status === 'Completed').length;
   const onHoldEnrollmentsCount = providerEnrollments.filter(e => e.status === 'On hold').length;
   const withdrawnEnrollmentsCount = providerEnrollments.filter(e => e.status === 'Withdrawn').length;
@@ -287,14 +289,16 @@ export function ProveedorDetail() {
         {/* Header content */}
         <div className="bg-white px-8 pt-8 pb-1 relative border-b border-slate-100">
           <div className="absolute top-6 right-6 flex items-center space-x-2">
-            <button 
-              onClick={() => setIsEditModalOpen(true)} 
-              className="p-2 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-xl transition-all duration-150 border border-indigo-100 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
-              title="Editar proveedor"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
-              <span>Editar</span>
-            </button>
+            {hasPermission(currentUser?.role, "Proveedores", "edit") && (
+              <button 
+                onClick={() => setIsEditModalOpen(true)} 
+                className="p-2 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-xl transition-all duration-150 border border-indigo-100 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+                title="Editar proveedor"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                <span>Editar</span>
+              </button>
+            )}
             <button 
               onClick={() => navigate('/proveedores')} 
               className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all border border-slate-200 flex items-center justify-center cursor-pointer"
@@ -781,18 +785,7 @@ export function ProveedorDetail() {
 
                         if (!student) return null;
 
-                        const statusVal = env.status || 'Active';
-                        let statusColor = "bg-slate-50 text-slate-600 border-slate-100";
-                        if (statusVal === 'Active') {
-                          statusColor = "bg-emerald-50 text-emerald-700 border-emerald-100";
-                        } else if (statusVal === 'Completed') {
-                          statusColor = "bg-blue-50 text-blue-700 border-blue-100";
-                        } else if (statusVal === 'On hold') {
-                          statusColor = "bg-amber-50 text-amber-700 border-amber-100";
-                        } else if (statusVal === 'Withdrawn') {
-                          statusColor = "bg-slate-100 text-slate-705 border-slate-200";
-                        }
-
+                        const badge = getEnrollmentStatusBadge(env.status || 'Active');
                         const studentInitials = `${student.name[0] || 'A'}${student.lastName ? student.lastName[0] : ''}`.toUpperCase();
 
                         return (
@@ -838,8 +831,8 @@ export function ProveedorDetail() {
                               )}
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[9px] font-black border uppercase tracking-widest ${statusColor}`}>
-                                {statusVal}
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[9px] font-black border uppercase tracking-widest ${badge.badgeClass}`}>
+                                {badge.label}
                               </span>
                             </td>
                             <td className="px-6 py-4">

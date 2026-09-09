@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 import { Modal } from '../components/ui/Modal';
 import { FinancialTransaction, StatementTransaction } from '../context/AppContext';
 import { FinancialTransactionForm } from '../components/FinancialTransactionForm';
+import { PaymentAttachmentsManager, PaymentAttachmentsBadges } from '../components/PaymentAttachmentsManager';
 
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9'];
 const CURRENCIES = ['MXN', 'USD', 'EUR', 'GBP'];
@@ -69,6 +70,13 @@ export function Finanzas() {
                        currentUser?.role?.toLowerCase()?.includes('finanzas') ||
                        currentUser?.role?.toLowerCase()?.includes('academia');
 
+  const isSuperAdminOnly = currentUser?.role?.trim().toLowerCase() === 'superadministrador' ||
+                           currentUser?.role?.trim().toLowerCase() === 'super administrador' ||
+                           currentUser?.role?.trim().toLowerCase() === 'super admin' ||
+                           currentUser?.role?.trim().toLowerCase() === 'admin principal' ||
+                           currentUser?.role?.trim().toLowerCase()?.includes('super') ||
+                           currentUser?.role?.trim().toLowerCase() === 'director';
+
   const handleEditWithAuth = (tx: any) => {
     // Para editar no se necesita previa autorizacion, se abre directo
     setViewingTransaction(null);
@@ -85,11 +93,7 @@ export function Finanzas() {
   };
 
   const handleDeleteWithAuth = (tx: any) => {
-    setAuthActionType('delete');
-    setAuthTargetTx(tx);
-    setAuthCheckboxApproved(false);
-    setAuthConfirmationInput('');
-    setIsAuthConfirmOpen(true);
+    setTransactionToDelete(tx.id);
   };
 
   const handleAuthConfirmSubmit = (e?: React.FormEvent) => {
@@ -1900,13 +1904,17 @@ export function Finanzas() {
                   >
                     Aplicar Cambios Seleccionados
                   </button>
-                  <div className="h-4 w-px bg-slate-200 self-center"></div>
-                  <button
-                    onClick={handleDeleteMass}
-                    className="bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1 border border-rose-200 shadow-sm cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" /> Borrar Seleccionados
-                  </button>
+                  {isSuperAdminOnly && (
+                    <>
+                      <div className="h-4 w-px bg-slate-200 self-center"></div>
+                      <button
+                        onClick={handleDeleteMass}
+                        className="bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1 border border-rose-200 shadow-sm cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Borrar Seleccionados
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -1946,6 +1954,7 @@ export function Finanzas() {
                 <th className="p-4 font-bold text-right text-emerald-700">IVA en MXN</th>
                 <th className="p-4 font-bold text-right text-indigo-700">Monto Total</th>
                 <th className="p-4 font-bold text-center">Estado</th>
+                <th className="p-4 font-bold text-center">Comprobantes / Facturas</th>
                 <th className="p-4 font-bold text-right text-indigo-700">Monto Total {viewCurrency}</th>
                 <th className="p-4"></th>
               </tr>
@@ -2095,6 +2104,17 @@ export function Finanzas() {
                         {tx.status === 'Aplicado' || tx.status === 'Pagado' ? 'Pagado' : tx.status}
                       </span>
                     </td>
+                    <td className="p-4 text-center">
+                      <PaymentAttachmentsBadges
+                        invoicePdfUrl={tx.invoicePdfUrl}
+                        invoicePdfName={tx.invoicePdfName}
+                        invoiceXmlUrl={tx.invoiceXmlUrl}
+                        invoiceXmlName={tx.invoiceXmlName}
+                        receiptPdfUrl={tx.receiptPdfUrl || tx.attachmentUrl}
+                        receiptPdfName={tx.receiptPdfName}
+                        attachmentUrl={tx.attachmentUrl}
+                      />
+                    </td>
                     <td className={`p-4 text-right font-bold ${tx.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
                       {(() => {
                         const totalMXNFull = tx.currency === 'MXN' ? txAmountMXN : (txAmountMXN + ivaMXN);
@@ -2119,17 +2139,17 @@ export function Finanzas() {
                             <CheckCircle className="w-4.5 h-4.5" />
                           </button>
                         )}
-                        {isSuperAdmin ? (
-                          <>
-                            <button onClick={() => handleEditWithAuth(tx)} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition" title="Editar registro (Superusuario)">
-                              <Edit className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => handleDeleteWithAuth(tx)} className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Eliminar registro (Superusuario)">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </>
+                        {isSuperAdmin && (
+                          <button onClick={() => handleEditWithAuth(tx)} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition" title="Editar registro (Superusuario)">
+                            <Edit className="w-4 h-4" />
+                          </button>
+                        )}
+                        {isSuperAdminOnly ? (
+                          <button onClick={() => handleDeleteWithAuth(tx)} className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Eliminar registro (Superusuario)">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         ) : (
-                          <span className="p-1.5 text-[10px] text-slate-300 font-mono select-none" title="Edición/Eliminación restringida a Superusuario">🔒</span>
+                          <span className="p-1.5 text-[10px] text-slate-300 font-mono select-none" title="Eliminación restringida a Superadministrador">🔒</span>
                         )}
                       </div>
                     </td>
@@ -2138,7 +2158,7 @@ export function Finanzas() {
               })}
               {filteredTransactions.length === 0 && (
                 <tr>
-                  <td colSpan={isSuperAdmin ? 11 : 10} className="p-8 text-center text-slate-500">
+                  <td colSpan={isSuperAdmin ? 12 : 11} className="p-8 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center">
                       <SearchX className="w-8 h-8 text-slate-300 mb-3" />
                       <p>No se encontraron transacciones con los filtros actuales.</p>
@@ -2239,16 +2259,18 @@ export function Finanzas() {
                                 <span className="text-rose-600">-{formatCurrency(stmt.totalExpense)}</span>
                               </div>
                             </div>
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setStatementToDelete(stmt.id);
-                              }}
-                              className="p-1.5 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                              title="Eliminar documento"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            {isSuperAdminOnly && (
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setStatementToDelete(stmt.id);
+                                }}
+                                className="p-1.5 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                                title="Eliminar documento"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -2710,9 +2732,11 @@ export function Finanzas() {
                                       <button onClick={() => handleSaveStatementTransaction(tx)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-slate-100 bg-white rounded-lg transition-all shadow-xs" title="Conciliar esta transacción">
                                         <Save className="w-4 h-4" />
                                       </button>
-                                      <button onClick={() => deleteStatementTransaction(tx.id)} className="p-1.5 text-rose-400 hover:bg-rose-50 border border-slate-100 bg-white rounded-lg transition-all shadow-xs" title="Ignorar transación">
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
+                                      {isSuperAdminOnly && (
+                                        <button onClick={() => deleteStatementTransaction(tx.id)} className="p-1.5 text-rose-400 hover:bg-rose-50 border border-slate-100 bg-white rounded-lg transition-all shadow-xs" title="Ignorar transación">
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      )}
                                     </div>
                                   ) : (
                                     <div className="flex justify-center items-center gap-2">
@@ -3026,16 +3050,19 @@ export function Finanzas() {
                   </div>
                 )}
 
-                {tx.attachmentUrl && (
-                  <div className="col-span-1 md:col-span-2">
-                    <span className="block text-[10px] font-black uppercase text-slate-400 tracking-wider">Archivo Comprobante</span>
-                    <div className="flex items-center gap-2 mt-1 p-2 bg-slate-50 rounded-lg border border-slate-200">
-                      <FileText className="w-5 h-5 text-indigo-500" />
-                      <span className="text-xs font-medium text-slate-600 truncate">{tx.attachmentUrl}</span>
-                      <a href="#" onClick={(e) => { e.preventDefault(); alert(`Descargando comprobante de pago: ${tx.attachmentUrl}`); }} className="ml-auto text-xs font-bold text-indigo-600 hover:underline">Descargar</a>
-                    </div>
-                  </div>
-                )}
+                <div className="col-span-1 md:col-span-2 pt-2">
+                  <PaymentAttachmentsManager
+                    data={{
+                      invoicePdfUrl: tx.invoicePdfUrl,
+                      invoicePdfName: tx.invoicePdfName,
+                      invoiceXmlUrl: tx.invoiceXmlUrl,
+                      invoiceXmlName: tx.invoiceXmlName,
+                      receiptPdfUrl: tx.receiptPdfUrl || tx.attachmentUrl,
+                      receiptPdfName: tx.receiptPdfName,
+                    }}
+                    readOnly={true}
+                  />
+                </div>
 
                 {agent && (
                   <div className="col-span-1 md:col-span-2 border-t border-slate-50 pt-3 flex items-center justify-between">
@@ -3070,26 +3097,34 @@ export function Finanzas() {
                   )}
                 </div>
 
-                {isSuperAdmin ? (
-                  <div className="flex gap-2">
+                <div className="flex gap-2">
+                  {isSuperAdmin && (
                     <button
                       onClick={() => handleEditWithAuth(tx)}
                       className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white transition flex items-center shadow-xs"
                     >
                       <Edit className="w-3.5 h-3.5 mr-1" /> Editar Pago
                     </button>
+                  )}
+                  {isSuperAdminOnly && (
                     <button
                       onClick={() => handleDeleteWithAuth(tx)}
                       className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-500 hover:bg-rose-600 text-white transition flex items-center shadow-xs"
                     >
                       <Trash2 className="w-3.5 h-3.5 mr-1" /> Eliminar Pago
                     </button>
-                  </div>
-                ) : (
-                  <div className="text-[10px] font-semibold text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100 flex items-center gap-1">
-                    <Lock className="w-3 h-3 text-slate-400" /> Edición y borrado restringidos a Superadministrador
-                  </div>
-                )}
+                  )}
+                  {!isSuperAdmin && (
+                    <div className="text-[10px] font-semibold text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100 flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400" /> Edición y borrado restringidos a Superusuario
+                    </div>
+                  )}
+                  {isSuperAdmin && !isSuperAdminOnly && (
+                    <div className="text-[10px] font-semibold text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100 flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400" /> Borrado restringido a Superadministrador
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -3170,30 +3205,92 @@ export function Finanzas() {
         />
       </Modal>
 
-      <Modal isOpen={!!transactionToDelete} onClose={() => setTransactionToDelete(null)} title="Confirmar Eliminación">
-        <div className="p-4 text-center">
-          <Trash2 className="w-12 h-12 text-rose-500 mx-auto mb-4" />
-          <h3 className="text-lg font-bold text-slate-800 mb-2">¿Eliminar registro financiero?</h3>
-          <p className="text-slate-500 text-sm mb-6">
-            Esta acción eliminará permanentemente esta transacción de sus registros. Esta acción no se puede deshacer.
-          </p>
-          <div className="flex justify-center gap-3">
+      <Modal isOpen={!!transactionToDelete} onClose={() => setTransactionToDelete(null)} title="Confirmar Eliminación de Registro Financiero">
+        <div className="p-4 text-left space-y-4">
+          <div className="flex items-center gap-3 bg-rose-50 border border-rose-100 rounded-xl p-3.5 text-rose-800">
+            <Trash2 className="w-6 h-6 text-rose-600 shrink-0" />
+            <div>
+              <p className="text-xs font-bold leading-snug">¿Está seguro de que desea eliminar permanentemente este registro financiero?</p>
+              <p className="text-[11px] text-rose-600/80">Esta acción no se puede deshacer y actualizará los balances generales inmediatamente.</p>
+            </div>
+          </div>
+
+          {transactionToDelete && (() => {
+            const tx = financialTransactions.find(t => String(t.id) === String(transactionToDelete));
+            if (!tx) return null;
+            const studentObj = tx.studentId ? studentsMap.get(Number(tx.studentId)) : null;
+            const instObj = tx.institutionId ? institutionsMap.get(Number(tx.institutionId)) : null;
+            const provObj = tx.providerId ? providersMap.get(Number(tx.providerId)) : null;
+
+            return (
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="font-semibold text-slate-400">ID Pago / Transacción:</span>
+                  <span className="font-mono font-bold text-slate-800">{tx.id}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-semibold text-slate-400">Descripción / Concepto:</span>
+                  <span className="font-bold text-slate-900 text-right max-w-[260px] truncate">{tx.description}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-semibold text-slate-400">Tipo:</span>
+                  <span className={`font-black uppercase text-[10px] px-2 py-0.5 rounded ${tx.type === 'income' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                    {tx.type === 'income' ? 'Ingreso / Cobro' : 'Egreso / Pago'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-semibold text-slate-400">Monto:</span>
+                  <span className="font-black font-mono text-sm text-slate-900">
+                    ${(tx.amount || 0).toLocaleString()} {tx.currency || 'MXN'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-semibold text-slate-400">Fecha:</span>
+                  <span className="font-mono text-slate-700">{tx.date}</span>
+                </div>
+                {studentObj && (
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-400">Alumno:</span>
+                    <span className="font-bold text-slate-800">{studentObj.name} {studentObj.lastName}</span>
+                  </div>
+                )}
+                {instObj && (
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-400">Institución:</span>
+                    <span className="font-bold text-slate-800">{instObj.name}</span>
+                  </div>
+                )}
+                {provObj && (
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-400">Proveedor:</span>
+                    <span className="font-bold text-slate-800">{provObj.name}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <div className="flex justify-end gap-3 pt-2">
             <button
+              type="button"
               onClick={() => setTransactionToDelete(null)}
-              className="px-4 py-2 rounded-xl text-sm font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+              className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer border-0"
             >
               Cancelar
             </button>
             <button
+              type="button"
               onClick={() => {
                 if (transactionToDelete) {
                   deleteFinancialTransaction(transactionToDelete);
                   setTransactionToDelete(null);
+                  setViewingTransaction(null);
                 }
               }}
-              className="px-4 py-2 rounded-xl text-sm font-bold text-white bg-rose-500 hover:bg-rose-600 transition-colors shadow-md shadow-rose-500/20"
+              className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider text-white bg-rose-600 hover:bg-rose-700 transition-colors shadow-md shadow-rose-600/20 inline-flex items-center gap-1.5 cursor-pointer border-0"
             >
-              Sí, eliminar
+              <Trash2 className="w-3.5 h-3.5" />
+              Sí, eliminar permanentemente
             </button>
           </div>
         </div>

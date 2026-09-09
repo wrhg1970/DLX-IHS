@@ -4,7 +4,8 @@ import { useAppContext, CatalogTypes, CatalogItem } from "../context/AppContext"
 import { Modal } from "../components/ui/Modal";
 
 export function Catalogos() {
-  const { catalogs, addCatalogItem, updateCatalogItem, deleteCatalogItem, providers } = useAppContext();
+  const { catalogs, addCatalogItem, updateCatalogItem, deleteCatalogItem, providers, currentUser } = useAppContext();
+  const isSuperAdminOnly = currentUser?.role?.trim().toLowerCase() === 'superadministrador';
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogTypes | null>(null);
   
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -25,6 +26,9 @@ export function Catalogos() {
   const [formSwift, setFormSwift] = useState("");
   const [formAba, setFormAba] = useState("");
   const [formNotes, setFormNotes] = useState("");
+
+  // SLA specific state
+  const [formSlaDays, setFormSlaDays] = useState<number | "" | null>("");
 
   useEffect(() => {
     if (selectedCatalog === 'Cuentas bancarias') {
@@ -49,7 +53,10 @@ export function Catalogos() {
     'Membresías',
     'Cuentas bancarias',
     'Modalidades',
-    'Tipo de Producto'
+    'Tipo de Producto',
+    'Fases y Alertas de Inactividad (SLA)',
+    'Categorías de Documentos',
+    'Programas Homeschool'
   ];
 
   const handleOpenModal = (item?: CatalogItem) => {
@@ -68,6 +75,7 @@ export function Catalogos() {
       setFormAba(item.aba || "");
       setFormNotes(item.notes || "");
       setFormProviderIds((item.providerIds || []).map(Number));
+      setFormSlaDays(item.slaDays !== undefined ? item.slaDays : "");
     } else {
       setEditingItem(null);
       setFormName("");
@@ -83,6 +91,7 @@ export function Catalogos() {
       setFormAba("");
       setFormNotes("");
       setFormProviderIds([]);
+      setFormSlaDays("");
     }
     setIsModalOpen(true);
   };
@@ -136,6 +145,10 @@ export function Catalogos() {
 
     if (selectedCatalog === 'Tipo de Producto') {
       data.providerIds = formProviderIds;
+    }
+
+    if (selectedCatalog === 'Fases y Alertas de Inactividad (SLA)') {
+      data.slaDays = (formSlaDays === "" || formSlaDays === null || formSlaDays === undefined) ? null : Number(formSlaDays);
     }
 
     if (editingItem) {
@@ -208,13 +221,15 @@ export function Catalogos() {
                       >
                         <Edit2 className="w-4 h-4" />
                       </button>
-                      <button 
-                         onClick={(e) => { e.stopPropagation(); handleDelete(item); }}
-                         className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
-                         title="Eliminar"
-                      >
-                         <Trash2 className="w-4 h-4" />
-                      </button>
+                      {isSuperAdminOnly && (
+                        <button 
+                           onClick={(e) => { e.stopPropagation(); handleDelete(item); }}
+                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                           title="Eliminar"
+                        >
+                           <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                     
                     <h4 className="font-bold text-slate-800 pr-16 text-base">{item.name}</h4>
@@ -313,8 +328,24 @@ export function Catalogos() {
                         </div>
                       </div>
                     )}
+                    {selectedCatalog === 'Fases y Alertas de Inactividad (SLA)' && (
+                      <div className="mt-3 flex flex-col space-y-1 border-t border-slate-100 pt-2.5">
+                        <div className="flex items-center text-xs">
+                          <span className="font-bold text-slate-500 w-24 shrink-0">Límite SLA:</span>
+                          {item.slaDays !== null && item.slaDays !== undefined ? (
+                            <span className="px-2 py-0.5 rounded text-xs font-black bg-amber-50 text-amber-700 border border-amber-200">
+                              ⏱️ {item.slaDays} días
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                              N/A (Sin límite)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     {item.description && selectedCatalog !== 'Cuentas bancarias' && (
-                      <p className="text-sm text-slate-500 mt-2 line-clamp-2">{item.description}</p>
+                      <p className="text-sm text-slate-500 mt-2 line-clamp-3">{item.description}</p>
                     )}
                  </div>
                ))}
@@ -558,6 +589,28 @@ export function Catalogos() {
                     </div>
                     <p className="text-[10px] text-slate-400 mt-1.5 italic leading-relaxed">
                       Selecciona los proveedores que ofrecen este tipo de producto. Solo se visualizará en las fichas de los proveedores seleccionados.
+                    </p>
+                  </div>
+                )}
+
+                {selectedCatalog === 'Fases y Alertas de Inactividad (SLA)' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Límite SLA (Días de inactividad permitidos)
+                    </label>
+                    <div className="relative">
+                      <input 
+                        type="number"
+                        min="0"
+                        value={formSlaDays === null ? "" : formSlaDays}
+                        onChange={(e) => setFormSlaDays(e.target.value === "" ? "" : Number(e.target.value))}
+                        className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all shadow-sm"
+                        placeholder="Ej. 3, 5, 10 (Dejar en blanco para N/A)"
+                      />
+                      <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-bold">días</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1 italic">
+                      Dejar en blanco para indicar N/A (etapas sin vencimiento como Cliente Activo, Perdido, etc.)
                     </p>
                   </div>
                 )}

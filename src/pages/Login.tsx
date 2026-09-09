@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAppContext, generateUniqueId } from '../context/AppContext';
 import { auth, db } from '../lib/firebase';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { 
   Building2, 
   Mail, 
@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 export function Login() {
-  const { users, students, contacts, setCurrentUser, updateUser } = useAppContext();
+  const { users, students, contacts, providers, firebaseSyncCompleted, companyInfo, setCurrentUser, updateUser } = useAppContext();
   const [activeTab, setActiveTab] = useState<'otp' | 'password' | 'google'>('google');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -60,14 +60,25 @@ export function Login() {
   } | null>(null);
 
   // Helper to find a user matching the target email address in our system rosters
-  const findSystemUser = (targetEmail: string) => {
+  const findSystemUser = async (targetEmail: string) => {
     const emailLower = targetEmail.trim().toLowerCase();
     
-    // 1. Check in explicit users
+    // 1. Check in explicit users (local state)
     const matchedUser = users.find(u => u.email?.trim().toLowerCase() === emailLower);
     if (matchedUser) return { ...matchedUser };
 
-    // 2. Check in students roster
+    // Direct Firestore users query fallback
+    try {
+      const q = query(collection(db, 'users'), where('email', '==', emailLower));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        return { ...snap.docs[0].data() };
+      }
+    } catch (fsErr) {
+      console.warn("Direct Firestore users query fallback failed:", fsErr);
+    }
+
+    // 2. Check in students roster (local state)
     const matchedStudent = students.find(s => s.email?.trim().toLowerCase() === emailLower);
     if (matchedStudent) {
       return {
@@ -79,11 +90,26 @@ export function Login() {
       };
     }
 
-    // 3. Check in focal contacts
-    const matchedContact = contacts.find(c => {
-      // Allow searching contact lists
-      return c.email?.trim().toLowerCase() === emailLower;
-    });
+    // Direct Firestore students query fallback
+    try {
+      const q = query(collection(db, 'students'), where('email', '==', emailLower));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const s = snap.docs[0].data();
+        return {
+          id: Number(s.id) || generateUniqueId(),
+          name: `${s.firstName || s.name || ''} ${s.lastName || ''}`,
+          role: 'Alumno',
+          email: s.email,
+          studentId: Number(s.id)
+        };
+      }
+    } catch (fsErr) {
+      console.warn("Direct Firestore students query fallback failed:", fsErr);
+    }
+
+    // 3. Check in focal contacts (local state)
+    const matchedContact = contacts.find(c => c.email?.trim().toLowerCase() === emailLower);
     if (matchedContact) {
       return {
         id: Number(matchedContact.id) || generateUniqueId(),
@@ -92,6 +118,54 @@ export function Login() {
         email: matchedContact.email,
         institutionId: matchedContact.institutionId
       };
+    }
+
+    // Direct Firestore contacts query fallback
+    try {
+      const q = query(collection(db, 'contacts'), where('email', '==', emailLower));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const c = snap.docs[0].data();
+        return {
+          id: Number(c.id) || generateUniqueId(),
+          name: `${c.name}`,
+          role: 'Coordinador',
+          email: c.email,
+          institutionId: c.institutionId
+        };
+      }
+    } catch (fsErr) {
+      console.warn("Direct Firestore contacts query fallback failed:", fsErr);
+    }
+
+    // 4. Check in providers roster (local state)
+    const matchedProvider = providers?.find(p => p.email?.trim().toLowerCase() === emailLower);
+    if (matchedProvider) {
+      return {
+        id: Number(matchedProvider.id) || generateUniqueId(),
+        name: matchedProvider.commercialName || matchedProvider.legalName,
+        role: 'Proveedor',
+        email: matchedProvider.email,
+        providerId: Number(matchedProvider.id)
+      };
+    }
+
+    // Direct Firestore providers query fallback
+    try {
+      const q = query(collection(db, 'providers'), where('email', '==', emailLower));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const p = snap.docs[0].data();
+        return {
+          id: Number(p.id) || generateUniqueId(),
+          name: p.commercialName || p.legalName,
+          role: 'Proveedor',
+          email: p.email,
+          providerId: Number(p.id)
+        };
+      }
+    } catch (fsErr) {
+      console.warn("Direct Firestore providers query fallback failed:", fsErr);
     }
 
     return null;
@@ -110,7 +184,7 @@ export function Login() {
       return;
     }
 
-    const matchedUserObj = findSystemUser(emailTrimmed);
+    const matchedUserObj = await findSystemUser(emailTrimmed);
     if (!matchedUserObj) {
       setError(`El correo "${emailTrimmed}" no está registrado en el sistema. Puedes intentar otro o usar admin@ihs.com.`);
       return;
@@ -335,7 +409,7 @@ export function Login() {
 
       if (enteredCode === correctCode || (enteredCode === '123456' && !correctCode)) {
         // Authenticate user successfully
-        const userObj = findSystemUser(email);
+        const userObj = await findSystemUser(email);
         if (userObj) {
           // Delete OTP to enforce single-use limit
           if (otpSnap.exists()) {
@@ -374,7 +448,7 @@ export function Login() {
 
     setLoading(true);
     try {
-      const userObj = findSystemUser(emailTrimmed);
+      const userObj = await findSystemUser(emailTrimmed);
       if (!userObj) {
         setError(`El correo "${emailTrimmed}" no está registrado en el sistema. Puedes intentar otro, o solicitar un OTP.`);
         setLoading(false);
@@ -431,7 +505,7 @@ export function Login() {
     setLoading(true);
     try {
       const emailTrimmed = email.trim();
-      const userObj = findSystemUser(emailTrimmed);
+      const userObj = await findSystemUser(emailTrimmed);
       if (!userObj) {
         setError('No se pudo localizar el registro del usuario.');
         setLoading(false);
@@ -481,7 +555,7 @@ export function Login() {
         throw new Error('Google no retornó ningún correo electrónico válido.');
       }
 
-      const matchedUser = findSystemUser(gEmail);
+      const matchedUser = await findSystemUser(gEmail);
       if (matchedUser) {
         setSuccess(`¡Ingreso correcto con la cuenta ${gEmail}! Accediendo...`);
         setTimeout(() => {
@@ -559,16 +633,22 @@ export function Login() {
             <Building2 className="w-8 h-8" />
           </div>
         </div>
-        <h2 className="mt-6 text-center text-3xl font-extrabold text-slate-900 tracking-tight">
-          Ingreso Seguro
+        <h2 className="mt-6 text-center text-3xl font-extrabold text-slate-900 tracking-tight text-balance">
+          {companyInfo?.commercialName || 'IHS'}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-600">
-          Selecciona tu método de autenticación preferido
+          Ingreso Seguro al Portal de Administración
         </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md animate-in fade-in zoom-in-95 duration-500 delay-150">
         <div className="bg-white py-8 px-4 shadow-2xl shadow-slate-200/50 sm:rounded-2xl sm:px-10 border border-slate-100">
+          {!firebaseSyncCompleted && (
+            <div className="mb-4 flex items-center justify-center gap-2 py-1.5 px-3 bg-indigo-50/50 rounded-lg text-xs text-indigo-600 font-medium animate-pulse border border-indigo-100/30">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Sincronizando base de datos en tiempo real...</span>
+            </div>
+          )}
           
           {forceEmailVerificationMode ? (
             <div className="space-y-4 animate-in fade-in duration-300">

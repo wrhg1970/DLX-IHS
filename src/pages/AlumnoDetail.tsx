@@ -28,11 +28,18 @@ import {
   Bell,
   Search,
   Users,
+  Send,
+  RefreshCw,
+  Lock,
+  ExternalLink,
 } from "lucide-react";
 import React, { useState, useRef } from "react";
-import { useAppContext, resolveCreditPrices, generateUniqueId } from "../context/AppContext";
+import { useAppContext, resolveCreditPrices, generateUniqueId, CourseGradeOutcome } from "../context/AppContext";
+import { calculateEnrollmentStatus, getEnrollmentStatusBadge, EnrollmentStatus } from "../utils/enrollmentStatus";
 import { Modal } from "../components/ui/Modal";
+import { hasPermission } from "../utils/permissionCheck";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
+import { UniversityAdmissionsProcess } from "../components/UniversityAdmissionsProcess";
 
 export function AlumnoDetail() {
   const { id } = useParams();
@@ -129,6 +136,18 @@ export function AlumnoDetail() {
     taxId: '',
   });
 
+  // State for new custom charge modal (Homeschool only)
+  const [isNewChargeModalOpen, setIsNewChargeModalOpen] = useState(false);
+  const [newChargeForm, setNewChargeForm] = useState({
+    concepto: 'Inscripción', // 'Inscripción' | 'Revalidación' | 'Apostillado' | 'Membresía' | 'Colegiatura' | 'Otros'
+    customConcepto: '',
+    amount: '',
+    currency: 'USD',
+    exchangeRate: '18.5',
+    date: new Date().toISOString().split('T')[0],
+    description: '',
+  });
+
   const getScheduledDate = (baseDate: string, periodicity: string, index: number) => {
     let d = new Date(baseDate + 'T12:00:00');
     if (periodicity === 'monthly-first') {
@@ -143,6 +162,45 @@ export function AlumnoDetail() {
       d.setDate(d.getDate() + (index * 7));
     }
     return d.toISOString().split('T')[0];
+  };
+
+  const get45DaysLater = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr + 'T12:00:00');
+      if (!isNaN(d.getTime())) {
+        d.setDate(d.getDate() + 45);
+        return d.toISOString().split('T')[0];
+      }
+    } catch (e) {
+      // Ignore
+    }
+    return "";
+  };
+
+  const get30DaysLater = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr + 'T12:00:00');
+      if (!isNaN(d.getTime())) {
+        d.setDate(d.getDate() + 30);
+        return d.toISOString().split('T')[0];
+      }
+    } catch (e) {
+      // Ignore
+    }
+    return "";
+  };
+
+  const get1DayLater = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr + 'T12:00:00');
+      if (!isNaN(d.getTime())) {
+        d.setDate(d.getDate() + 1);
+        return d.toISOString().split('T')[0];
+      }
+    } catch (e) {
+      // Ignore
+    }
+    return "";
   };
 
   const handleOpenConfirmPaymentModal = (p: any) => {
@@ -305,11 +363,229 @@ export function AlumnoDetail() {
     setConfirmingPayment(null);
   };
 
+  const handleCreateNewCharge = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!student) return;
+
+    const amt = parseFloat(newChargeForm.amount);
+    if (!amt || isNaN(amt)) return;
+
+    const rate = parseFloat(newChargeForm.exchangeRate) || 18.5;
+    const finAmt = newChargeForm.currency === 'MXN' ? (amt / rate) : amt;
+    const amtMxn = newChargeForm.currency === 'MXN' ? amt : (amt * rate);
+
+    const activeConcepto = newChargeForm.concepto === 'Otros' 
+      ? (newChargeForm.customConcepto || 'Otro Cargo')
+      : newChargeForm.concepto;
+
+    const desc = newChargeForm.description 
+      ? `${activeConcepto} - ${newChargeForm.description}` 
+      : activeConcepto;
+
+    addFinancialTransaction({
+      type: 'income',
+      date: newChargeForm.date,
+      description: desc,
+      amount: amt,
+      currency: newChargeForm.currency as any,
+      exchangeRate: rate,
+      amountMXN: amtMxn,
+      finalAmount: finAmt,
+      status: 'Programado',
+      categoryId: 'cat_ingreso_servicios',
+      subcategory: newChargeForm.concepto === 'Membresía' ? 'sub_membresia' : 'sub_cursos_ingreso',
+      paymentMethod: 'Transferencia',
+      institutionId: student.institutionId || undefined,
+      studentId: student.id,
+      agentId: student.agentId || currentUser?.id,
+      originalAmount: amt,
+      originalCurrency: newChargeForm.currency as any,
+    });
+
+    if (addActivity) {
+      addActivity({
+        institutionId: student.institutionId || 1,
+        studentId: student.id,
+        date:
+          new Date().toLocaleDateString("es-MX", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }) +
+          " " +
+          new Date().toLocaleTimeString("es-MX", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        type: "Finanzas",
+        title: "Cargo Registrado",
+        description: `Se registró un nuevo cargo de ${activeConcepto} por $${amt.toLocaleString()} ${newChargeForm.currency}`,
+        user: currentUser?.name || "Sistema",
+      });
+    }
+
+    setNewChargeForm({
+      concepto: 'Inscripción',
+      customConcepto: '',
+      amount: '',
+      currency: 'USD',
+      exchangeRate: '18.5',
+      date: new Date().toISOString().split('T')[0],
+      description: '',
+    });
+    setIsNewChargeModalOpen(false);
+  };
+
   const [activeTab, setActiveTab] = useState("Datos Generales");
   const [activeSubTab, setActiveSubTab] = useState("Información Personal");
   const [timelineSearch, setTimelineSearch] = useState('');
   const [timelineFilter, setTimelineFilter] = useState<'all' | 'cargos' | 'cobros'>('all');
   const [timelineSortOrder, setTimelineSortOrder] = useState<'desc' | 'asc'>('desc');
+
+  // DocuSign integration states
+  const [docusignEnvelopes, setDocusignEnvelopes] = useState<any[]>([]);
+  const [isDsModalOpen, setIsDsModalOpen] = useState(false);
+  const [dsLoading, setDsLoading] = useState(false);
+  const [dsForm, setDsForm] = useState({
+    documentType: 'Contrato de Inscripción IHS',
+    signerName: student?.name || '',
+    signerEmail: student?.email || '',
+    customText: '',
+  });
+  const [dsSigningEnvelope, setDsSigningEnvelope] = useState<any | null>(null);
+
+  // Load DocuSign Envelopes for this student
+  const fetchDsEnvelopes = async () => {
+    if (!student?.id) return;
+    try {
+      const response = await fetch(`/api/docusign/envelopes/student/${student.id}`);
+      if (response.ok) {
+        const data = await response.json();
+        setDocusignEnvelopes(data);
+      }
+    } catch (e) {
+      console.error("Error fetching DocuSign envelopes:", e);
+    }
+  };
+
+  React.useEffect(() => {
+    if (activeTab === "Documentos" && student?.id) {
+      fetchDsEnvelopes();
+    }
+  }, [activeTab, student?.id]);
+
+  React.useEffect(() => {
+    if (student) {
+      setDsForm(prev => ({
+        ...prev,
+        signerName: student.name || '',
+        signerEmail: student.email || '',
+      }));
+    }
+  }, [student]);
+
+  // Handle Send DocuSign Envelope
+  const handleSendDsEnvelope = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!student || !dsForm.signerName || !dsForm.signerEmail) return;
+
+    setDsLoading(true);
+    try {
+      const res = await fetch('/api/docusign/send-envelope', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          studentId: student.id,
+          name: dsForm.signerName,
+          email: dsForm.signerEmail,
+          documentName: dsForm.documentType,
+          documentId: 'doc-' + Date.now(),
+          customText: dsForm.customText
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setIsDsModalOpen(false);
+        setDsForm(prev => ({ ...prev, customText: '' }));
+        await fetchDsEnvelopes();
+        
+        // Add log activity
+        addActivity({
+          institutionId: student.institutionId || 1,
+          studentId: student.id,
+          date: new Date().toLocaleDateString("es-MX") + " " + new Date().toLocaleTimeString("es-MX"),
+          description: `DocuSign: Se envió el documento "${dsForm.documentType}" para firma a ${dsForm.signerName} (${dsForm.signerEmail}).`
+        });
+      } else {
+        alert("Error al enviar documento por DocuSign: " + (data.error || "Error desconocido"));
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert("Error en el servidor: " + err.message);
+    } finally {
+      setDsLoading(false);
+    }
+  };
+
+  // Handle Refresh Envelope Status
+  const handleRefreshDsStatus = async (envelopeId: string) => {
+    try {
+      const res = await fetch(`/api/docusign/envelope-status/${envelopeId}`);
+      if (res.ok) {
+        await fetchDsEnvelopes();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Handle Simulate Signing Completion
+  const handleSimulateSigningCompletion = async (envelope: any) => {
+    try {
+      const res = await fetch(`/api/docusign/simulate-completion/${envelope.envelopeId}`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        await fetchDsEnvelopes();
+        
+        // Put signed document inside regular student documents list!
+        const docName = `[Firmado DocuSign] ${envelope.documentName}`;
+        
+        // Prevent duplicate loads
+        const alreadyExists = (student?.documentsList || []).some((d: any) => d.name === docName);
+        if (!alreadyExists && student) {
+          const freshDocs = [
+            ...(student.documentsList || []),
+            {
+              id: 'ds-signed-' + envelope.envelopeId,
+              name: docName,
+              fileName: `${envelope.documentName.replace(/\s+/g, '_')}_Firmado_DocuSign.pdf`,
+              fileSize: '1.24 MB',
+              uploadDate: new Date().toISOString().split('T')[0],
+              fileData: `data:application/pdf;base64,JVBERi0xLjQKJ...`, // Placeholder Base64 indicating signed PDF
+              isDocuSignSigned: true,
+              envelopeId: envelope.envelopeId,
+            }
+          ];
+          updateStudent(student.id, { documentsList: freshDocs });
+        }
+
+        // Add log activity
+        addActivity({
+          institutionId: student?.institutionId || 1,
+          studentId: student?.id,
+          date: new Date().toLocaleDateString("es-MX") + " " + new Date().toLocaleTimeString("es-MX"),
+          description: `DocuSign: El documento "${envelope.documentName}" fue firmado exitosamente y se anexó al expediente escolar.`
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
   const [enrollModalType, setEnrollModalType] = useState<"Academic" | "Service">("Academic");
@@ -335,7 +611,9 @@ export function AlumnoDetail() {
     enrollmentDate: "",
     activationDate: "",
     endDate: "",
-    status: "Active" as "Active" | "Completed" | "On hold" | "Withdrawn",
+    status: "Active" as EnrollmentStatus,
+    gradeOutcome: "Pendiente" as CourseGradeOutcome,
+    finalGrade: "",
     price: 0,
     notes: "",
     curp: "",
@@ -348,6 +626,9 @@ export function AlumnoDetail() {
     contrasena: "",
     area: "",
     destino: "",
+    hasExtension: false,
+    extensionDate: "",
+    extensionChargeGenerated: false,
   });
 
   const [newActivityText, setNewActivityText] = useState("");
@@ -534,6 +815,38 @@ export function AlumnoDetail() {
     return c ? isExtraServiceClass(c.name) : false;
   });
 
+  const hasUniversityAdmission = React.useMemo(() => {
+    if (!student) return false;
+    // 1. Check extraServices in student
+    const inExtra = (student.extraServices || []).some(
+      (es) =>
+        es.name.toLowerCase().includes("university admission") ||
+        es.id.toLowerCase().includes("university_admission") ||
+        es.name.toLowerCase().includes("admission") ||
+        es.name.toLowerCase().includes("admision")
+    );
+    if (inExtra) return true;
+
+    // 2. Check enrolled classes for university admission
+    const inEnrollments = studentEnrollments.some((env) => {
+      const c = classes.find((cls) => cls.id === env.classId);
+      if (!c) return false;
+      const sType = getServiceTypeFromClassName(c.name);
+      return (
+        sType === "university_admission" ||
+        c.name.toLowerCase().includes("university admission") ||
+        c.name.toLowerCase().includes("admision universitaria") ||
+        c.name.toLowerCase().includes("admisión universitaria")
+      );
+    });
+    if (inEnrollments) return true;
+
+    // 3. Process previously initialized
+    if (student.universityAdmissionProcess) return true;
+
+    return false;
+  }, [student, studentEnrollments, classes]);
+
   const enrolledClasses = studentEnrollments
     .map((e) => classes.find((c) => Number(c.id) === Number(e.classId)))
     .filter(Boolean);
@@ -568,7 +881,7 @@ export function AlumnoDetail() {
     (sum, ex) => sum + (ex.cost || 0),
     0,
   );
-  const totalPrograma =
+  const totalProgramaRaw =
     studentEnrollments.reduce((sum, e) => {
       let cp = e.price;
       if (cp === undefined || cp === null) {
@@ -597,6 +910,14 @@ export function AlumnoDetail() {
       }
       return sum + (cp || 0);
     }, 0) + extraServicesTotal;
+
+  const scholarshipDiscount = student.hasScholarship && student.scholarshipTarget === 'Estudiante'
+    ? (student.scholarshipType === 'Porcentaje'
+        ? (totalProgramaRaw * ((student.scholarshipValue || 0) / 100))
+        : (student.scholarshipValue || 0))
+    : 0;
+
+  const totalPrograma = Math.max(0, totalProgramaRaw - scholarshipDiscount);
 
   const studentPayments = financialTransactions.filter(
     (p) => p.studentId === student.id && p.type === "income",
@@ -703,7 +1024,7 @@ export function AlumnoDetail() {
     e.preventDefault();
     if (!enrollForm.classId) return;
 
-    const payload = {
+    const payload: any = {
       classId: Number(enrollForm.classId),
       providerId: enrollForm.providerId
         ? Number(enrollForm.providerId)
@@ -725,7 +1046,98 @@ export function AlumnoDetail() {
       contrasena: enrollForm.contrasena,
       area: enrollForm.area,
       destino: enrollForm.destino,
+      hasExtension: enrollForm.hasExtension,
+      extensionDate: enrollForm.extensionDate,
+      extensionChargeGenerated: enrollForm.extensionChargeGenerated,
+      gradeOutcome: enrollForm.gradeOutcome,
+      finalGrade: enrollForm.finalGrade,
     };
+
+    const computedStatus = calculateEnrollmentStatus({
+      ...payload,
+      gradeOutcome: enrollForm.gradeOutcome,
+      finalGrade: enrollForm.finalGrade,
+      hasExtension: enrollForm.hasExtension,
+      extensionDate: enrollForm.extensionDate,
+      endDate: enrollForm.endDate,
+      activationDate: enrollForm.activationDate,
+      startDate: enrollForm.activationDate,
+    });
+    payload.status = enrollForm.status === 'Withdrawn' ? 'Withdrawn' : computedStatus;
+
+    if (enrollForm.hasExtension) {
+      const currentClassItem = classes.find((c) => c.id === Number(enrollForm.classId));
+      const currentProvId = enrollForm.providerId ? Number(enrollForm.providerId) : currentClassItem?.providerId;
+      const currentProv = providers.find((p) => p.id === currentProvId);
+      const isKeystoneClass = currentProv?.commercialName?.toLowerCase()?.includes('keystone') || 
+                              currentProv?.legalName?.toLowerCase()?.includes('keystone');
+      const isNelsonClass = currentProv?.commercialName?.toLowerCase()?.includes('nelson') || 
+                            currentProv?.legalName?.toLowerCase()?.includes('nelson');
+
+      if (!payload.extensionDate) {
+        if (isKeystoneClass) {
+          payload.extensionDate = get45DaysLater(enrollForm.endDate);
+        } else if (isNelsonClass) {
+          payload.extensionDate = get30DaysLater(enrollForm.endDate);
+        } else {
+          payload.extensionDate = get30DaysLater(enrollForm.endDate);
+        }
+      }
+
+      const hasChargeBeenGenerated = editingEnrollment
+        ? (editingEnrollment.extensionChargeGenerated || enrollForm.extensionChargeGenerated)
+        : enrollForm.extensionChargeGenerated;
+
+      if (!hasChargeBeenGenerated) {
+        payload.extensionChargeGenerated = true;
+        const className = classes.find((c) => c.id === Number(enrollForm.classId))?.name || "Clase Académica";
+        
+        if (isKeystoneClass) {
+          addFinancialTransaction({
+            type: 'income',
+            date: new Date().toISOString().split('T')[0],
+            description: `Extensión de clase Keystone (+45 días) - ${className} (Hasta: ${payload.extensionDate})`,
+            amount: 150,
+            currency: 'USD',
+            exchangeRate: 18.5,
+            amountMXN: 150 * 18.5,
+            finalAmount: 150,
+            status: 'Programado',
+            categoryId: 'cat_ingreso_servicios',
+            subcategory: 'sub_cursos_ingreso',
+            paymentMethod: 'Transferencia',
+            institutionId: student.institutionId || undefined,
+            studentId: student.id,
+            agentId: student.agentId || currentUser?.id,
+            originalAmount: 150,
+            originalCurrency: 'USD',
+          });
+        } else if (isNelsonClass) {
+          // Nelson Academy extension is 30 days without cost. After that, a charge of $100 USD is generated.
+          // Charge date: 1 day after the extensionDate
+          const chargeDate = get1DayLater(payload.extensionDate);
+          addFinancialTransaction({
+            type: 'income',
+            date: chargeDate,
+            description: `Renovación / Cargo post-extensión Nelson Academy - ${className} (Extensión hasta: ${payload.extensionDate})`,
+            amount: 100,
+            currency: 'USD',
+            exchangeRate: 18.5,
+            amountMXN: 100 * 18.5,
+            finalAmount: 100,
+            status: 'Programado',
+            categoryId: 'cat_ingreso_servicios',
+            subcategory: 'sub_cursos_ingreso',
+            paymentMethod: 'Transferencia',
+            institutionId: student.institutionId || undefined,
+            studentId: student.id,
+            agentId: student.agentId || currentUser?.id,
+            originalAmount: 100,
+            originalCurrency: 'USD',
+          });
+        }
+      }
+    }
 
     if (editingEnrollment) {
       updateEnrollment(editingEnrollment.id, payload);
@@ -787,6 +1199,9 @@ export function AlumnoDetail() {
       contrasena: "",
       area: "",
       destino: "",
+      hasExtension: false,
+      extensionDate: "",
+      extensionChargeGenerated: false,
     });
     setEditingEnrollment(null);
   };
@@ -843,6 +1258,8 @@ export function AlumnoDetail() {
       activationDate: formatToInputDate(env.activationDate || env.startDate),
       endDate: formatToInputDate(env.endDate),
       status: env.status || "Active",
+      gradeOutcome: (env.gradeOutcome || "Pendiente") as CourseGradeOutcome,
+      finalGrade: env.finalGrade || "",
       price: env.price || 0,
       notes: env.notes || "",
       curp: env.curp || "",
@@ -855,6 +1272,9 @@ export function AlumnoDetail() {
       contrasena: env.contrasena || "",
       area: env.area || "",
       destino: env.destino || "",
+      hasExtension: env.hasExtension || false,
+      extensionDate: env.extensionDate || "",
+      extensionChargeGenerated: env.extensionChargeGenerated || false,
     });
     setIsEnrollModalOpen(true);
   };
@@ -870,6 +1290,8 @@ export function AlumnoDetail() {
       activationDate: "",
       endDate: "",
       status: "Active",
+      gradeOutcome: "Pendiente",
+      finalGrade: "",
       price: 0,
       notes: "",
       curp: "",
@@ -882,6 +1304,9 @@ export function AlumnoDetail() {
       contrasena: "",
       area: "",
       destino: "",
+      hasExtension: false,
+      extensionDate: "",
+      extensionChargeGenerated: false,
     });
     setIsEnrollModalOpen(true);
   };
@@ -896,6 +1321,8 @@ export function AlumnoDetail() {
       activationDate: "",
       endDate: "",
       status: "Active",
+      gradeOutcome: "Pendiente",
+      finalGrade: "",
       price: 0,
       notes: "",
       curp: "",
@@ -908,6 +1335,9 @@ export function AlumnoDetail() {
       contrasena: "",
       area: "",
       destino: "",
+      hasExtension: false,
+      extensionDate: "",
+      extensionChargeGenerated: false,
     });
     setIsEnrollModalOpen(true);
   };
@@ -937,28 +1367,48 @@ export function AlumnoDetail() {
     setEditingEnrollment(null);
   };
 
+  const canViewFinancialsData =
+    hasPermission(currentUser?.role, "Finanzas", "view") ||
+    hasPermission(currentUser?.role, "Administración", "view");
+
+  const canViewAcademicHistory =
+    hasPermission(currentUser?.role, "Clases", "view") ||
+    hasPermission(currentUser?.role, "Alumnos", "view") ||
+    currentUser?.role === "Alumno" ||
+    currentUser?.role === "Coordinador";
+
   const canEditAcademicHistory =
+    hasPermission(currentUser?.role, "Clases", "edit") ||
     currentUser?.role === "Superadministrador" ||
     currentUser?.role === "Academia" ||
     currentUser?.role === "Coordinador";
 
   const canDeletePayment =
-    currentUser?.role === "Superadministrador" ||
-    currentUser?.role === "Finanzas";
+    hasPermission(currentUser?.role, "Finanzas", "delete") ||
+    currentUser?.role === "Superadministrador";
+
+  const isSuperAdminOnly = currentUser?.role === "Superadministrador";
 
   // Ensure active tab is valid
   React.useEffect(() => {
-    if ((activeTab === "Pagos" || activeTab === "Timeline Financiero") && !isHomeschool) {
+    if ((activeTab === "Pagos" || activeTab === "Timeline Financiero") && (!isHomeschool || !canViewFinancialsData)) {
       setActiveTab("Datos Generales");
     }
-  }, [activeTab, isHomeschool]);
+    if (activeTab === "Historial Académico" && !canViewAcademicHistory) {
+      setActiveTab("Datos Generales");
+    }
+    if (activeTab === "University Admissions" && !hasUniversityAdmission) {
+      setActiveTab("Datos Generales");
+    }
+  }, [activeTab, isHomeschool, hasUniversityAdmission, canViewFinancialsData, canViewAcademicHistory]);
 
   const mainTabs = [
     { name: "Datos Generales", icon: User },
-    { name: "Historial Académico", icon: BookOpen },
-    ...(isHomeschool ? [{ name: "Timeline Financiero", icon: Calendar }] : []),
-    ...(isHomeschool ? [{ name: "Pagos", icon: CreditCard }] : []),
+    ...(canViewAcademicHistory ? [{ name: "Historial Académico", icon: BookOpen }] : []),
+    ...(isHomeschool && canViewFinancialsData ? [{ name: "Timeline Financiero", icon: Calendar }] : []),
+    ...(isHomeschool && canViewFinancialsData ? [{ name: "Pagos", icon: CreditCard }] : []),
     { name: "Documentos", icon: FileText },
+    ...(hasUniversityAdmission ? [{ name: "University Admissions", icon: GraduationCap }] : []),
     { name: "Bitácora", icon: ClipboardList },
     { name: "Actividad", icon: Clock },
   ];
@@ -997,39 +1447,45 @@ export function AlumnoDetail() {
         <div className="flex items-center space-x-2">
           {currentUser?.role !== 'Alumno' && (
             <>
-              <button 
-                type="button"
-                onClick={() => {
-                  if (window.confirm(`¿Está seguro de que desea cambiar el estado de este alumno a "Archivado"?`)) {
-                    updateStudent(student.id, { status: "Archivado" });
-                  }
-                }}
-                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-slate-50 transition shadow-sm cursor-pointer"
-              >
-                Archivar
-              </button>
-              <button 
-                type="button"
-                onClick={() => {
-                  if (window.confirm(`¿Está seguro de que desea eliminar permanentemente a este estudiante?`)) {
-                    deleteStudent(student.id);
-                    navigate("/alumnos");
-                  }
-                }}
-                className="px-3 py-1.5 border border-rose-200 text-rose-600 bg-rose-50/20 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-rose-50 hover:text-rose-700 transition shadow-sm flex items-center gap-1 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Eliminar
-              </button>
+              {hasPermission(currentUser?.role, "Alumnos", "edit") && (
+                <button 
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`¿Está seguro de que desea cambiar el estado de este alumno a "Archivado"?`)) {
+                      updateStudent(student.id, { status: "Archivado" });
+                    }
+                  }}
+                  className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-slate-50 transition shadow-sm cursor-pointer"
+                >
+                  Archivar
+                </button>
+              )}
+              {hasPermission(currentUser?.role, "Alumnos", "delete") && (
+                <button 
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`¿Está seguro de que desea eliminar permanentemente a este estudiante?`)) {
+                      deleteStudent(student.id);
+                      navigate("/alumnos");
+                    }
+                  }}
+                  className="px-3 py-1.5 border border-rose-200 text-rose-600 bg-rose-50/20 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-rose-50 hover:text-rose-700 transition shadow-sm flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Eliminar
+                </button>
+              )}
             </>
           )}
-          <button 
-            type="button"
-            onClick={() => navigate(`/alumnos/editar/${student.id}`)}
-            className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-700 transition shadow-sm cursor-pointer"
-          >
-            Editar Perfil
-          </button>
+          {hasPermission(currentUser?.role, "Alumnos", "edit") && (
+            <button 
+              type="button"
+              onClick={() => navigate(`/alumnos/editar/${student.id}`)}
+              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-indigo-700 transition shadow-sm cursor-pointer"
+            >
+              Editar Perfil
+            </button>
+          )}
         </div>
       </div>
 
@@ -1047,6 +1503,11 @@ export function AlumnoDetail() {
                   <div className="min-w-0 flex-1">
                     <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest truncate">Total Programa</p>
                     <p className="text-sm font-bold text-slate-900 tracking-tight">${totalPrograma.toLocaleString()} <span className="text-[10px] font-medium text-slate-400">USD</span></p>
+                    {student.hasScholarship && student.scholarshipTarget === 'Estudiante' && (
+                      <p className="text-[9px] text-emerald-600 font-bold mt-0.5 whitespace-nowrap">
+                        Beca: -${scholarshipDiscount.toLocaleString()} USD ({student.scholarshipType === 'Porcentaje' ? `${student.scholarshipValue}%` : 'Monto'})
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex items-center space-x-3">
@@ -1742,7 +2203,7 @@ export function AlumnoDetail() {
                                       Confirmar
                                     </button>
                                   )}
-                                  {canDeletePayment ? (
+                                  {isSuperAdminOnly ? (
                                     <button
                                       onClick={() => setPaymentToDelete(p.id)}
                                       className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors inline-flex items-center justify-center border-0 cursor-pointer"
@@ -1751,7 +2212,7 @@ export function AlumnoDetail() {
                                       <Trash2 className="w-4 h-4" />
                                     </button>
                                   ) : (
-                                    <span className="text-[10px] text-slate-400 font-semibold bg-slate-100 px-2 py-1 rounded" title="Solo Superadministrador o Finanzas pueden borrar pagos">
+                                    <span className="text-[10px] text-slate-400 font-semibold bg-slate-100 px-2 py-1 rounded" title="Solo Superadministrador puede borrar pagos">
                                       Bloqueado
                                     </span>
                                   )}
@@ -2168,6 +2629,142 @@ export function AlumnoDetail() {
                   </div>
                 </Modal>
 
+                {/* Modal para Crear un Nuevo Cargo Personalizado (Homeschool) */}
+                <Modal
+                  isOpen={isNewChargeModalOpen}
+                  onClose={() => setIsNewChargeModalOpen(false)}
+                  title={`Registrar Nuevo Cargo - ${student.name} ${student.lastName || ''}`}
+                  size="lg"
+                >
+                  <form onSubmit={handleCreateNewCharge} className="space-y-4 text-left p-1">
+                    <p className="text-xs text-slate-500 leading-relaxed mb-4">
+                      Ingresa los detalles para registrar un nuevo cargo financiero directo (ej. Inscripción, revalidación, apostillado, etc.) que se sumará al timeline de este alumno en modalidad Homeschool.
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Concepto de Cargo</label>
+                        <select
+                          value={newChargeForm.concepto}
+                          onChange={(e) => setNewChargeForm(prev => ({ ...prev, concepto: e.target.value }))}
+                          className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500 font-bold"
+                          required
+                        >
+                          <option value="Inscripción">Inscripción</option>
+                          <option value="Revalidación">Revalidación</option>
+                          <option value="Apostillado">Apostillado</option>
+                          <option value="Colegiatura">Colegiatura</option>
+                          <option value="Membresía">Membresía</option>
+                          <option value="Otros">Otro (Especificar)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Fecha de Vencimiento</label>
+                        <input
+                          type="date"
+                          value={newChargeForm.date}
+                          onChange={(e) => setNewChargeForm(prev => ({ ...prev, date: e.target.value }))}
+                          className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500 font-semibold"
+                          required
+                        />
+                      </div>
+
+                      {newChargeForm.concepto === 'Otros' && (
+                        <div className="col-span-1 sm:col-span-2">
+                          <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Especificar Concepto</label>
+                          <input
+                            type="text"
+                            placeholder="Ej. Seguro Médico, Certificación Extra, etc."
+                            value={newChargeForm.customConcepto}
+                            onChange={(e) => setNewChargeForm(prev => ({ ...prev, customConcepto: e.target.value }))}
+                            className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500 font-semibold"
+                            required={newChargeForm.concepto === 'Otros'}
+                          />
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Importe del Cargo</label>
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder="0.00"
+                          value={newChargeForm.amount}
+                          onChange={(e) => setNewChargeForm(prev => ({ ...prev, amount: e.target.value }))}
+                          className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500 font-mono font-black"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Moneda</label>
+                        <div className="flex bg-slate-100 p-1 rounded-xl mt-1">
+                          <button
+                            type="button"
+                            onClick={() => setNewChargeForm(prev => ({ ...prev, currency: 'USD' }))}
+                            className={`flex-1 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition ${
+                              newChargeForm.currency === 'USD' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 bg-transparent'
+                            }`}
+                          >
+                            USD
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNewChargeForm(prev => ({ ...prev, currency: 'MXN' }))}
+                            className={`flex-1 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition ${
+                              newChargeForm.currency === 'MXN' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800 bg-transparent'
+                            }`}
+                          >
+                            MXN
+                          </button>
+                        </div>
+                      </div>
+
+                      {newChargeForm.currency === 'USD' && (
+                        <div className="col-span-1 sm:col-span-2">
+                          <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Tipo de Cambio (MXN por USD)</label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={newChargeForm.exchangeRate}
+                            onChange={(e) => setNewChargeForm(prev => ({ ...prev, exchangeRate: e.target.value }))}
+                            className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500 font-semibold"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      <div className="col-span-1 sm:col-span-2">
+                        <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Descripción o Notas Adicionales (Opcional)</label>
+                        <textarea
+                          placeholder="Detalles sobre este cargo específico..."
+                          rows={2}
+                          value={newChargeForm.description}
+                          onChange={(e) => setNewChargeForm(prev => ({ ...prev, description: e.target.value }))}
+                          className="mt-1 block w-full rounded-xl border-slate-200 bg-slate-50/50 text-xs focus:border-indigo-500 focus:ring-indigo-500 font-semibold"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-4 border-t border-slate-100 flex justify-end gap-2 mt-6">
+                      <button
+                        type="button"
+                        onClick={() => setIsNewChargeModalOpen(false)}
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer border-0 transition"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="bg-indigo-650 hover:bg-indigo-700 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer border-0 shadow-sm transition"
+                      >
+                        Registrar Cargo
+                      </button>
+                    </div>
+                  </form>
+                </Modal>
+
                 {/* Modal para Confirmar Recepción de Pago Programado (Integrado) */}
                 <Modal
                   isOpen={confirmingPayment !== null}
@@ -2382,15 +2979,19 @@ export function AlumnoDetail() {
                         const provId = env.providerId || c.providerId;
                         const prov = providers.find((p) => p.id === provId);
 
-                        const statusColors = {
-                          Active: "bg-emerald-50 text-emerald-700 border-emerald-100",
-                          Completed: "bg-blue-50 text-blue-700 border-blue-100",
-                          "On hold": "bg-amber-50 text-amber-700 border-amber-100",
+                        const statusColors: Record<string, string> = {
+                          Active: "bg-emerald-50 text-emerald-700 border-emerald-200",
+                          Extended: "bg-indigo-50 text-indigo-700 border-indigo-200",
+                          Ended: "bg-rose-50 text-rose-700 border-rose-200",
+                          Completed: "bg-blue-50 text-blue-700 border-blue-200",
+                          "On hold": "bg-amber-50 text-amber-700 border-amber-200",
                           Withdrawn: "bg-slate-100 text-slate-700 border-slate-200",
                         };
 
-                        const statusLabel = {
+                        const statusLabel: Record<string, string> = {
                           Active: "Active",
+                          Extended: "Extended",
+                          Ended: "Ended",
                           Completed: "Completed",
                           "On hold": "On hold",
                           Withdrawn: "Withdrawn",
@@ -2422,6 +3023,40 @@ export function AlumnoDetail() {
                                   {c.code}
                                 </p>
                               )}
+                              {(() => {
+                                const isKeystone = prov?.commercialName?.toLowerCase()?.includes("keystone") || 
+                                                   prov?.legalName?.toLowerCase()?.includes("keystone");
+                                const isNelson = prov?.commercialName?.toLowerCase()?.includes("nelson") || 
+                                                 prov?.legalName?.toLowerCase()?.includes("nelson");
+                                if (!isKeystone && !isNelson) return null;
+                                
+                                let daysToExpiration: number | null = null;
+                                if (env.endDate) {
+                                  const expDate = new Date(env.endDate + 'T12:00:00');
+                                  if (!isNaN(expDate.getTime())) {
+                                    const today = new Date();
+                                    const todayReset = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                                    const expReset = new Date(expDate.getFullYear(), expDate.getMonth(), expDate.getDate());
+                                    const diffTime = expReset.getTime() - todayReset.getTime();
+                                    daysToExpiration = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                  }
+                                }
+                                const isEligibleForExtension = daysToExpiration !== null && daysToExpiration <= 30;
+
+                                return (
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    {env.hasExtension ? (
+                                      <span className="inline-flex items-center text-[9px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                        ✨ Extensión Activa (hasta {env.extensionDate})
+                                      </span>
+                                    ) : isEligibleForExtension ? (
+                                      <span className="inline-flex items-center text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded uppercase tracking-wider animate-pulse">
+                                        ⚠️ Extensión Disponible ({daysToExpiration !== null && daysToExpiration <= 0 ? 'Expirada' : `faltan ${daysToExpiration} días`})
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                );
+                              })()}
                               {env.notes && (
                                 <p className="text-[11px] text-slate-500 italic mt-1 bg-slate-100/50 rounded px-2 py-0.5 border border-slate-100 inline-block">
                                   {env.notes}
@@ -2456,6 +3091,16 @@ export function AlumnoDetail() {
                                     {env.endDate || "-"}
                                   </span>
                                 </p>
+                                {env.hasExtension && env.extensionDate && (
+                                  <p className="text-indigo-600 font-bold text-[11px] leading-tight mt-0.5">
+                                    <span className="font-bold text-indigo-700">
+                                      Extendido al:
+                                    </span>{" "}
+                                    <span className="font-mono">
+                                      {env.extensionDate}
+                                    </span>
+                                  </p>
+                                )}
                               </div>
                             </td>
                             <td className="px-6 py-4 text-center">
@@ -2559,9 +3204,11 @@ export function AlumnoDetail() {
                       }
 
                       const statusColors: Record<string, string> = {
-                        Active: "bg-emerald-50 text-emerald-700 border-emerald-100",
-                        Completed: "bg-blue-50 text-blue-700 border-blue-100",
-                        "On hold": "bg-amber-50 text-amber-700 border-amber-100",
+                        Active: "bg-emerald-50 text-emerald-700 border-emerald-200",
+                        Extended: "bg-indigo-50 text-indigo-700 border-indigo-200",
+                        Ended: "bg-rose-50 text-rose-700 border-rose-200",
+                        Completed: "bg-blue-50 text-blue-700 border-blue-200",
+                        "On hold": "bg-amber-50 text-amber-700 border-amber-200",
                         Withdrawn: "bg-slate-100 text-slate-700 border-slate-200",
                       };
                       const statusVal = env.status || "Active";
@@ -2976,7 +3623,7 @@ export function AlumnoDetail() {
             return (
               <div className="space-y-6 animate-in fade-in duration-200 font-sans">
                 {/* Banner Introductorio */}
-                <div className="bg-slate-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden">
+                <div className="bg-slate-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none">
                     <Calendar className="w-56 h-56 translate-x-10 translate-y-10" />
                   </div>
@@ -2988,6 +3635,16 @@ export function AlumnoDetail() {
                     <p className="text-xs text-slate-300 leading-relaxed">
                       Consulta la cronología completa de auditoría financiera de este estudiante. Diferencia instantáneamente entre los cargos programados/pendientes y los cobros que ya fueron ingresados y aplicados con éxito.
                     </p>
+                  </div>
+                  <div className="relative z-10 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setIsNewChargeModalOpen(true)}
+                      className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-750 text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 uppercase tracking-wider cursor-pointer border-0"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Nuevo Cargo
+                    </button>
                   </div>
                 </div>
 
@@ -3314,30 +3971,32 @@ export function AlumnoDetail() {
                               >
                                 <Download className="w-3.5 h-3.5" />
                               </button>
-                              <button 
-                                onClick={() => {
-                                  setDeleteConfirm({
-                                    title: "Eliminar Documento de Alumno",
-                                    message: `¿Estás seguro de que deseas eliminar permanentemente el documento "${doc.name}"? Esta acción no se puede deshacer.`,
-                                    onConfirm: () => {
-                                      const fresh = (student.documentsList || []).filter((d: any) => d.id !== doc.id);
-                                      updateStudent(student.id, { documentsList: fresh });
-                                      
-                                      // Log this activity
-                                      addActivity({
-                                        institutionId: student.institutionId || 1,
-                                        studentId: student.id,
-                                        date: new Date().toLocaleDateString("es-MX") + " " + new Date().toLocaleTimeString("es-MX"),
-                                        description: `Documentos: Se eliminó el documento "${doc.name}".`
-                                      });
-                                    }
-                                  });
-                                }}
-                                className="text-slate-500 hover:text-rose-600 p-1 hover:bg-rose-50 rounded transition"
-                                title="Borrar"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {isSuperAdminOnly && (
+                                <button 
+                                  onClick={() => {
+                                    setDeleteConfirm({
+                                      title: "Eliminar Documento de Alumno",
+                                      message: `¿Estás seguro de que deseas eliminar permanentemente el documento "${doc.name}"? Esta acción no se puede deshacer.`,
+                                      onConfirm: () => {
+                                        const fresh = (student.documentsList || []).filter((d: any) => d.id !== doc.id);
+                                        updateStudent(student.id, { documentsList: fresh });
+                                        
+                                        // Log this activity
+                                        addActivity({
+                                          institutionId: student.institutionId || 1,
+                                          studentId: student.id,
+                                          date: new Date().toLocaleDateString("es-MX") + " " + new Date().toLocaleTimeString("es-MX"),
+                                          description: `Documentos: Se eliminó el documento "${doc.name}".`
+                                        });
+                                      }
+                                    });
+                                  }}
+                                  className="text-slate-500 hover:text-rose-600 p-1 hover:bg-rose-50 rounded transition"
+                                  title="Borrar"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -3346,7 +4005,144 @@ export function AlumnoDetail() {
                   </tbody>
                 </table>
               </div>
+
+              {/* DocuSign eSignature Integration Panel */}
+              <div className="pt-6 border-t border-slate-150 space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="p-1 bg-indigo-600 text-white rounded text-[10px] font-black uppercase tracking-wider">
+                        DocuSign
+                      </span>
+                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                        Integración DocuSign eSignature
+                      </h4>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Envía y firma contratos, reglamentos y acuerdos legalmente vinculantes de forma electrónica.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setIsDsModalOpen(true)}
+                    className="text-xs font-bold text-white bg-indigo-600 px-4 py-2 rounded uppercase hover:bg-indigo-700 transition flex items-center cursor-pointer border-0 shadow-sm font-sans"
+                  >
+                    <Send className="w-3.5 h-3.5 mr-1.5" />
+                    Enviar Contrato para Firma
+                  </button>
+                </div>
+
+                {docusignEnvelopes.length === 0 ? (
+                  <div className="bg-slate-50/50 border border-dashed border-slate-200 rounded-xl p-8 text-center text-slate-500 text-xs">
+                    <p className="font-semibold text-slate-600 mb-1">No hay contratos o acuerdos de DocuSign para este estudiante.</p>
+                    <p className="text-slate-400">Haz clic en "Enviar Contrato para Firma" para iniciar el flujo de firma electrónica.</p>
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                    <table className="w-full text-left font-sans text-xs">
+                      <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
+                        <tr>
+                          <th className="px-4 py-3 border-b border-slate-200">Contrato / Documento</th>
+                          <th className="px-4 py-3 border-b border-slate-200">Destinatario</th>
+                          <th className="px-4 py-3 border-b border-slate-200">Estado</th>
+                          <th className="px-4 py-3 border-b border-slate-200">Enviado</th>
+                          <th className="px-4 py-3 border-b border-slate-200 text-right">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-700">
+                        {docusignEnvelopes.map((env: any) => {
+                          const isCompleted = env.status === 'completed';
+                          const isDelivered = env.status === 'delivered';
+
+                          return (
+                            <tr key={env.envelopeId} className="hover:bg-slate-50/50">
+                              <td className="px-4 py-3 font-semibold text-slate-800">
+                                <div className="flex items-center gap-2">
+                                  <FileText className="w-4 h-4 text-indigo-500 shrink-0" />
+                                  <span>{env.documentName}</span>
+                                  {env.isSimulated && (
+                                    <span className="text-[9px] bg-indigo-50 text-indigo-600 border border-indigo-100 rounded px-1.5 py-0.5 font-bold font-mono">
+                                      Simulado
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="text-slate-800 font-medium">{env.name}</div>
+                                <div className="text-[10px] text-slate-400 font-mono">{env.email}</div>
+                              </td>
+                              <td className="px-4 py-3">
+                                {isCompleted ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                                    <Check className="w-3 h-3" /> Firmado
+                                  </span>
+                                ) : isDelivered ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+                                    <Clock className="w-3 h-3 animate-pulse" /> Entregado
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full animate-pulse">
+                                    <Clock className="w-3 h-3" /> Pendiente
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-slate-500 font-mono">
+                                {new Date(env.sentDateTime).toLocaleDateString("es-MX", {
+                                  day: "2-digit",
+                                  month: "2-digit",
+                                  year: "numeric"
+                                })}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="flex justify-end items-center gap-1.5">
+                                  <button
+                                    onClick={() => handleRefreshDsStatus(env.envelopeId)}
+                                    className="p-1 hover:bg-slate-100 text-slate-500 hover:text-indigo-600 rounded transition cursor-pointer"
+                                    title="Actualizar Estado"
+                                  >
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                  </button>
+
+                                  {!isCompleted && (
+                                    <>
+                                      <button
+                                        onClick={() => setDsSigningEnvelope(env)}
+                                        className="text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-1 rounded transition cursor-pointer"
+                                        title="Firmar documento como Alumno"
+                                      >
+                                        Firmar
+                                      </button>
+                                      {env.isSimulated && (
+                                        <button
+                                          onClick={() => handleSimulateSigningCompletion(env)}
+                                          className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-1 rounded transition cursor-pointer"
+                                          title="Completar firma automáticamente"
+                                        >
+                                          Simular Firma
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+
+                                  {isCompleted && (
+                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded">
+                                      Anexado
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
+          )}
+
+          {activeTab === "University Admissions" && student && (
+            <UniversityAdmissionsProcess student={student} />
           )}
 
           {!mainTabs.some((t) => t.name === activeTab) && (
@@ -3543,11 +4339,11 @@ export function AlumnoDetail() {
                   <option value="">Seleccionar clase...</option>
                   {classes
                     .filter(
-                      (c) => c.providerId?.toString() === enrollForm.providerId,
+                      (c) => c.providerId?.toString() === enrollForm.providerId && (!c.isArchived || c.id.toString() === enrollForm.classId),
                     )
                     .map((c) => (
                       <option key={c.id} value={c.id.toString()}>
-                        {c.name} ({c.code || "SIN CLAVE"})
+                        {c.name} ({c.code || "SIN CLAVE"}){c.isArchived ? " [ARCHIVADA]" : ""}
                       </option>
                     ))}
                 </>
@@ -3604,11 +4400,138 @@ export function AlumnoDetail() {
             </div>
           </div>
 
+          {/* Keystone or Nelson Academy Extension Feature */}
+          {(() => {
+            const currentClassItem = classes.find((c) => c.id === Number(enrollForm.classId));
+            const currentProvId = enrollForm.providerId ? Number(enrollForm.providerId) : currentClassItem?.providerId;
+            const currentProv = providers.find((p) => p.id === currentProvId);
+            const isKeystoneClass = currentProv?.commercialName?.toLowerCase()?.includes('keystone') || 
+                                    currentProv?.legalName?.toLowerCase()?.includes('keystone');
+            const isNelsonClass = currentProv?.commercialName?.toLowerCase()?.includes('nelson') || 
+                                  currentProv?.legalName?.toLowerCase()?.includes('nelson');
+
+            if (!isKeystoneClass && !isNelsonClass) return null;
+
+            let modalDaysToExpiration = null;
+            if (enrollForm.endDate) {
+              const expDate = new Date(enrollForm.endDate + 'T12:00:00');
+              if (!isNaN(expDate.getTime())) {
+                const today = new Date();
+                const todayReset = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                const expReset = new Date(expDate.getFullYear(), expDate.getMonth(), expDate.getDate());
+                const diffTime = expReset.getTime() - todayReset.getTime();
+                modalDaysToExpiration = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+              }
+            }
+
+            const isModalEligibleForExtension = modalDaysToExpiration !== null && modalDaysToExpiration <= 30;
+
+            const providerName = isKeystoneClass ? "Keystone" : "Nelson Academy";
+            const daysAdded = isKeystoneClass ? 45 : 30;
+            const calculatedExtDate = isKeystoneClass ? get45DaysLater(enrollForm.endDate) : get30DaysLater(enrollForm.endDate);
+
+            if (isModalEligibleForExtension || enrollForm.hasExtension) {
+              return (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 space-y-3 animate-in fade-in duration-200 text-left">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="p-1 bg-indigo-500 text-white rounded text-[10px] font-black uppercase tracking-wider">
+                        {providerName}
+                      </span>
+                      <h4 className="text-xs font-black text-indigo-900 uppercase tracking-wide">
+                        Opción de Extensión
+                      </h4>
+                    </div>
+                    {modalDaysToExpiration !== null && (
+                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                        {modalDaysToExpiration <= 0 ? 'Expirado' : `Faltan ${modalDaysToExpiration} días`}
+                      </span>
+                    )}
+                  </div>
+
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      disabled={!canEditAcademicHistory}
+                      checked={enrollForm.hasExtension}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setEnrollForm(prev => ({
+                          ...prev,
+                          hasExtension: checked,
+                          extensionDate: checked ? (prev.extensionDate || calculatedExtDate) : "",
+                        }));
+                      }}
+                      className="mt-0.5 h-4 w-4 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <div className="text-xs">
+                      <span className="font-extrabold text-indigo-900 block">
+                        Activar Extensión (+{daysAdded} días)
+                      </span>
+                      <span className="text-slate-500 leading-relaxed block mt-0.5">
+                        {isKeystoneClass 
+                          ? "Extiende el periodo de la clase 45 días adicionales después de su fecha de vencimiento original."
+                          : "Extiende el periodo de la clase 30 días sin costo. Al término, se generará un cargo de $100 USD."
+                        }
+                      </span>
+                    </div>
+                  </label>
+
+                  {enrollForm.hasExtension && (
+                    <div className="bg-white border border-indigo-150 rounded-lg p-3 space-y-2 text-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-slate-500 text-left">Fecha de Extensión:</span>
+                        <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2.5 py-0.5 rounded border border-indigo-100">
+                          {enrollForm.extensionDate || calculatedExtDate}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center pt-2 border-t border-slate-100">
+                        <span className="font-bold text-slate-500 text-left">Costo / Cargo de Extensión:</span>
+                        <span className="font-bold text-emerald-600 flex items-center gap-1">
+                          {isKeystoneClass ? "$150.00 USD" : "$100.00 USD (Generado post-extensión)"}
+                          {enrollForm.extensionChargeGenerated ? (
+                            <span className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-150 ml-1">
+                              Generado
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-black uppercase text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-150 ml-1">
+                              Pendiente al guardar
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (modalDaysToExpiration !== null && modalDaysToExpiration > 30) {
+              return (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center gap-2.5 text-xs text-slate-500 text-left">
+                  <span className="p-1 bg-slate-200 text-slate-600 rounded text-[9px] font-black uppercase tracking-wider">
+                    {providerName}
+                  </span>
+                  <span>
+                    La opción de extensión estará disponible cuando falten 30 días o menos para el vencimiento (quedan <strong className="text-slate-700">{modalDaysToExpiration} días</strong>).
+                  </span>
+                </div>
+              );
+            }
+
+            return null;
+          })()}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Status
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Status
+                </label>
+                <span className="text-[10px] text-slate-500 font-medium">
+                  Auto-calculado
+                </span>
+              </div>
               <select
                 disabled={!canEditAcademicHistory}
                 value={enrollForm.status}
@@ -3620,11 +4543,16 @@ export function AlumnoDetail() {
                 }
                 className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-55 disabled:text-slate-500"
               >
-                <option value="Active">Active</option>
-                <option value="Completed">Completed</option>
+                <option value="Active">Active (Vigente)</option>
+                <option value="Ended">Ended (Expirada)</option>
+                <option value="Extended">Extended (Extendida)</option>
+                <option value="Completed">Completed (Calificada Pass/Fail)</option>
                 <option value="On hold">On hold</option>
                 <option value="Withdrawn">Withdrawn</option>
               </select>
+              <p className="text-[10px] text-slate-500 mt-1">
+                El sistema recalcula el estado automáticamente según expiración, extensión y resultado.
+              </p>
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
@@ -3644,6 +4572,53 @@ export function AlumnoDetail() {
                   })
                 }
                 className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono disabled:bg-slate-55 disabled:text-slate-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 pt-1 border-t border-slate-100">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Resultado de Calificación (Pass/Fail)
+              </label>
+              <select
+                disabled={!canEditAcademicHistory}
+                value={enrollForm.gradeOutcome || "Pendiente"}
+                onChange={(e) => {
+                  const newOutcome = e.target.value as CourseGradeOutcome;
+                  const newStatus = (newOutcome === "Pass" || newOutcome === "Fail") ? "Completed" : calculateEnrollmentStatus({
+                    ...enrollForm,
+                    gradeOutcome: newOutcome,
+                  });
+                  setEnrollForm({
+                    ...enrollForm,
+                    gradeOutcome: newOutcome,
+                    status: newStatus,
+                  });
+                }}
+                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-55 disabled:text-slate-500 font-semibold"
+              >
+                <option value="Pendiente">Pendiente (En curso)</option>
+                <option value="Pass">Pass (Aprobado - Completed)</option>
+                <option value="Fail">Fail (Reprobado - Completed)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Calificación Final (Opcional)
+              </label>
+              <input
+                type="text"
+                placeholder="Ej. 95, A+, etc."
+                disabled={!canEditAcademicHistory}
+                value={enrollForm.finalGrade || ""}
+                onChange={(e) =>
+                  setEnrollForm({
+                    ...enrollForm,
+                    finalGrade: e.target.value,
+                  })
+                }
+                className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-55 disabled:text-slate-500"
               />
             </div>
           </div>
@@ -3803,7 +4778,7 @@ export function AlumnoDetail() {
 
           <div className="pt-4 flex justify-between items-center border-t border-slate-100">
             <div>
-              {canEditAcademicHistory && editingEnrollment && (
+              {isSuperAdminOnly && editingEnrollment && (
                 <button
                   type="button"
                   onClick={() => handleDeleteEnrollment(editingEnrollment.id)}
@@ -4450,6 +5425,256 @@ export function AlumnoDetail() {
           </div>
         </div>
       </Modal>
+
+      {/* MODAL 1: ENVIAR CONTRATO POR DOCUSIGN */}
+      <Modal
+        isOpen={isDsModalOpen}
+        onClose={() => setIsDsModalOpen(false)}
+        title="Enviar Contrato para Firma Digital (DocuSign)"
+        size="lg"
+      >
+        <form onSubmit={handleSendDsEnvelope} className="space-y-4 font-sans text-left text-xs text-slate-700">
+          <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 flex gap-3 text-indigo-950">
+            <Lock className="w-5 h-5 text-indigo-600 shrink-0" />
+            <div>
+              <p className="font-bold">DocuSign Sandbox Protegido</p>
+              <p className="text-[10px] text-indigo-700/90 mt-0.5">
+                Si no tienes credenciales de producción configuradas en el servidor, el sistema usará un entorno de pruebas interactivo que simula con precisión las respuestas de los webhooks de DocuSign.
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+              Seleccionar Contrato o Plantilla
+            </label>
+            <select
+              value={dsForm.documentType}
+              onChange={(e) => setDsForm(prev => ({ ...prev, documentType: e.target.value }))}
+              className="w-full border border-slate-250 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            >
+              <option value="Contrato de Inscripción IHS">Contrato de Inscripción IHS</option>
+              <option value="Acuerdo de Privacidad Nelson Academy">Acuerdo de Privacidad Nelson Academy</option>
+              <option value="Reglamento General de Estudiantes">Reglamento General de Estudiantes</option>
+              <option value="Convenio de Beca / Financiamiento">Convenio de Beca / Financiamiento</option>
+              <option value="Carta de Aceptación de Términos">Carta de Aceptación de Términos</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Nombre del Firmante
+              </label>
+              <input
+                type="text"
+                required
+                value={dsForm.signerName}
+                onChange={(e) => setDsForm(prev => ({ ...prev, signerName: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Correo Electrónico
+              </label>
+              <input
+                type="email"
+                required
+                value={dsForm.signerEmail}
+                onChange={(e) => setDsForm(prev => ({ ...prev, signerEmail: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+              Cláusulas Especiales o Texto Personalizado (Opcional)
+            </label>
+            <textarea
+              value={dsForm.customText}
+              onChange={(e) => setDsForm(prev => ({ ...prev, customText: e.target.value }))}
+              placeholder="Ej. 'Monto de beca del 15% aplicable al periodo escolar corriente...' o términos de pago pactados."
+              rows={3}
+              className="w-full border border-slate-250 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            />
+          </div>
+
+          <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsDsModalOpen(false)}
+              className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 uppercase tracking-wider transition border-0 bg-transparent cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={dsLoading}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-bold transition uppercase tracking-wider shadow-sm flex items-center gap-1.5 cursor-pointer border-0 disabled:opacity-50"
+            >
+              {dsLoading ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  Procesando...
+                </>
+              ) : (
+                <>
+                  <Send className="w-3.5 h-3.5" />
+                  Enviar Documento
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL 2: INTERFÁZ DE FIRMA SIMULADA DOCUSIGN */}
+      {dsSigningEnvelope && (() => {
+        const env = dsSigningEnvelope;
+        return (
+          <Modal
+            isOpen={true}
+            onClose={() => setDsSigningEnvelope(null)}
+            title="DocuSign Secure Signing Portal"
+            size="3xl"
+          >
+            <div className="space-y-4 font-sans text-left text-xs text-slate-700">
+              <div className="bg-slate-900 text-white -mx-6 -mt-6 px-6 py-3 flex justify-between items-center border-b border-indigo-500/30">
+                <div className="flex items-center gap-2">
+                  <span className="bg-amber-500 text-slate-900 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest">
+                    Demo Mode
+                  </span>
+                  <span className="font-bold uppercase tracking-wider text-xs text-white">DocuSign eSignature</span>
+                </div>
+                <div className="text-[10px] font-mono text-slate-400">
+                  Envelope ID: {env.envelopeId}
+                </div>
+              </div>
+
+              <div className="p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl flex gap-2">
+                <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-xs">Pasarela de Consentimiento del Alumno / Tutor</p>
+                  <p className="text-[10px] text-amber-800/90 mt-0.5">
+                    Estás firmando digitalmente el documento oficial en representación de <strong className="font-bold">{env.name}</strong>. Por favor revisa los términos antes de asentar tu firma digital.
+                  </p>
+                </div>
+              </div>
+
+              {/* MOCK CONTRACT SHEET */}
+              <div className="border border-slate-300 rounded-xl p-8 shadow-inner max-h-[380px] overflow-y-auto font-serif leading-relaxed text-slate-800 bg-white">
+                <div className="text-center mb-6">
+                  <h3 className="text-base font-bold uppercase tracking-wider text-slate-900">{env.documentName}</h3>
+                  <p className="text-[10px] font-mono text-slate-400 mt-1 uppercase">SISTEMA INTEGRAL DE CONTROL DOCUMENTAL - EDULINK</p>
+                </div>
+
+                <div className="space-y-4 text-xs">
+                  <p>
+                    <strong>DECLARACIONES:</strong>
+                  </p>
+                  <p>
+                    I. Declara la institución educativa, a través de sus representantes legales, estar plenamente capacitada para prestar servicios académicos de nivel correspondiente, con planes curriculares vigentes y avalados por las autoridades respectivas.
+                  </p>
+                  <p>
+                    II. Declara el alumno o tutor firmante, en lo sucesivo <strong>"{env.name}"</strong>, con correo de notificación oficial <strong>"{env.email}"</strong>, de manera libre y voluntaria su interés por contratar los servicios de la institución para cursar el programa académico vigente.
+                  </p>
+                  
+                  {env.customText && (
+                    <div className="my-4 p-4 bg-indigo-50/40 border-l-4 border-indigo-500 text-slate-800 font-sans italic rounded-r-lg">
+                      <p className="font-bold text-[10px] text-indigo-700 uppercase tracking-widest font-sans not-italic mb-1">
+                        Cláusulas e Instrucciones Especiales
+                      </p>
+                      "{env.customText}"
+                    </div>
+                  )}
+
+                  <p>
+                    <strong>CLÁUSULAS GENERALES:</strong>
+                  </p>
+                  <p>
+                    <strong>PRIMERA (Objeto del Contrato):</strong> La institución se compromete a impartir la formación académica según la malla curricular seleccionada, asegurando docentes calificados y acceso a las plataformas digitales de EduLink.
+                  </p>
+                  <p>
+                    <strong>SEGUNDA (Compromiso de Pago):</strong> El alumno/tutor se compromete a saldar los montos de colegiaturas, revalidaciones o inscripciones correspondientes en las fechas pactadas y según los lineamientos de cobranza vigentes.
+                  </p>
+                  <p>
+                    <strong>TERCERA (Validez Electrónica):</strong> Las partes expresamente acuerdan que las firmas electrónicas capturadas a través de este portal, en vinculación con el proveedor DocuSign, poseen plena validez civil, mercantil y jurídica en términos del marco legal aplicable.
+                  </p>
+                </div>
+
+                <div className="mt-8 pt-8 border-t border-slate-200 grid grid-cols-2 gap-8 font-sans">
+                  <div>
+                    <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Representante Institucional</p>
+                    <div className="h-12 flex items-center justify-start text-xs font-serif italic text-slate-500">
+                      [ Firma Digital Registrada ]
+                    </div>
+                    <div className="border-b border-slate-300 w-full mt-1"></div>
+                    <p className="text-[10px] text-slate-500 font-bold mt-1">EduLink Academic Board</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Firma Electrónica Autorizada</p>
+                    <div className="h-12 flex items-center justify-start text-indigo-800 font-serif italic text-lg tracking-widest">
+                      {env.name}
+                    </div>
+                    <div className="border-b border-slate-300 w-full mt-1"></div>
+                    <p className="text-[10px] text-slate-500 font-bold mt-1">{env.name} (Firmante)</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* INTERACTIVE SIGNING PAD MOCK */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Asentar Firma Digital
+                  </span>
+                  <span className="text-[10px] text-indigo-600 font-bold font-sans">
+                    ✓ Se registrará con la IP y Hash de Seguridad
+                  </span>
+                </div>
+
+                {/* Simulated Touch Signature Box */}
+                <div className="h-32 border-2 border-dashed border-slate-300 bg-white rounded-lg relative flex flex-col items-center justify-center cursor-pointer group hover:border-indigo-400 transition">
+                  <div className="absolute top-2 left-2 flex items-center gap-1.5 text-[9px] font-bold text-slate-400 bg-slate-100 rounded px-1.5 py-0.5">
+                    <Lock className="w-3 h-3" /> FIRMA CERTIFICADA DOCUSIGN
+                  </div>
+                  
+                  {/* Visual simulated handwriting signature */}
+                  <div className="text-2xl font-serif italic tracking-widest text-indigo-800 select-none animate-pulse">
+                    {env.name}
+                  </div>
+                  <div className="absolute bottom-2 text-[10px] text-slate-400">
+                    Al confirmar, consientes el uso de esta firma digital en el documento.
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setDsSigningEnvelope(null)}
+                  className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 uppercase tracking-wider transition border-0 bg-transparent cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSimulateSigningCompletion(env);
+                    setDsSigningEnvelope(null);
+                  }}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold transition uppercase tracking-wider shadow-sm flex items-center gap-1.5 cursor-pointer border-0"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Aceptar y Firmar Contrato
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {deleteConfirm && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-250" id="custom-delete-confirm-student">

@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Save, Plus, Trash2, Mail, Phone, MapPin, FileText, Upload } from "lucide-react";
-import { useAppContext } from "../context/AppContext";
+import { useAppContext, isColombia } from "../context/AppContext";
+import { hasPermission } from "../utils/permissionCheck";
 
 const tabs = [
   "Información General",
@@ -15,7 +16,18 @@ const tabs = [
 
 export function FormInstitucion() {
   const navigate = useNavigate();
-  const { catalogs, addInstitution, users, addContact, providers } = useAppContext();
+  const { catalogs, addInstitution, users, addContact, providers, currentUser } = useAppContext();
+
+  if (!hasPermission(currentUser?.role, "Instituciones", "create")) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center bg-white rounded-3xl border border-slate-200">
+        <div className="text-rose-500 font-extrabold text-lg mb-2">Acceso Denegado</div>
+        <p className="text-slate-500 text-sm max-w-md">No tienes los permisos necesarios para registrar una nueva institución. Contacta al administrador si crees que esto es un error.</p>
+        <button onClick={() => navigate('/instituciones')} className="mt-6 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold uppercase hover:bg-indigo-700 transition">Volver a Instituciones</button>
+      </div>
+    );
+  }
+
   const [activeTab, setActiveTab] = useState("Información General");
 
   // Form State
@@ -23,6 +35,7 @@ export function FormInstitucion() {
   const [tradeName, setTradeName] = useState("");
   const [institutionCode, setInstitutionCode] = useState("");
   const [country, setCountry] = useState("");
+  const [colombiaCalendar, setColombiaCalendar] = useState<'Calendario A' | 'Calendario B' | ''>("");
   const [contact, setContact] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [institutionTypeId, setInstitutionTypeId] = useState("");
@@ -85,6 +98,7 @@ export function FormInstitucion() {
       tradeName: tradeName || undefined,
       institutionCode: institutionCode || undefined,
       country: country || "Desconocido",
+      colombiaCalendar: isColombia(country) ? (colombiaCalendar || undefined) : undefined,
       contact: contact || "Pendiente",
       contactEmail: contactEmail || undefined,
       contactPhone: contactPhone || undefined,
@@ -276,8 +290,48 @@ export function FormInstitucion() {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">País</label>
-                    <input type="text" value={country} onChange={e => setCountry(e.target.value)} className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="México, España, etc." />
+                    <input 
+                      type="text" 
+                      value={country} 
+                      onChange={e => {
+                        const val = e.target.value;
+                        setCountry(val);
+                        if (!isColombia(val)) {
+                          setColombiaCalendar("");
+                        }
+                      }} 
+                      className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                      placeholder="México, Colombia, España, etc." 
+                    />
                   </div>
+                  {isColombia(country) && (
+                    <div className="bg-amber-50/90 border border-amber-300 rounded-lg p-3 space-y-1.5 transition-all animate-in fade-in slide-in-from-top-1">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
+                          🇨🇴 Calendario Escolar (Colombia)
+                        </label>
+                        <span className="text-[10px] font-bold text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded">
+                          Colombia
+                        </span>
+                      </div>
+                      <select
+                        value={colombiaCalendar}
+                        onChange={e => setColombiaCalendar(e.target.value as any)}
+                        className="w-full border border-amber-300 bg-white rounded p-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 outline-none cursor-pointer"
+                      >
+                        <option value="">-- Seleccionar Calendario Escolar --</option>
+                        <option value="Calendario A">Calendario A (Ene/Feb - Nov)</option>
+                        <option value="Calendario B">Calendario B (Ago/Sep - Jun)</option>
+                      </select>
+                      <p className="text-[10px] text-amber-800 leading-tight">
+                        {colombiaCalendar === 'Calendario A'
+                          ? '• Calendario A: El año escolar inicia en Enero/Febrero y finaliza en Noviembre.'
+                          : colombiaCalendar === 'Calendario B'
+                          ? '• Calendario B: El año escolar inicia en Agosto/Septiembre y finaliza en Junio.'
+                          : 'Selecciona si la institución en Colombia opera bajo Calendario A o Calendario B.'}
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Teléfono Institucional</label>
                     <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" placeholder="+52 ..." />

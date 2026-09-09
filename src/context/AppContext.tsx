@@ -1,5 +1,14 @@
-import React, { createContext, useContext, useState, ReactNode, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, ReactNode, useEffect, useRef, useCallback, useMemo } from "react";
 import { db, handleFirestoreError, OperationType } from "../lib/firebase";
+import { Role, DEFAULT_ROLES, getSystemRoles, setInMemorySystemRoles } from "../utils/permissionCheck";
+import { safeLocalStorageSet } from "../utils/storage";
+import {
+  sendTaskAssignmentNotification,
+  sendTaskDeadlineNotification,
+  checkAndNotifyUpcomingDeadlines,
+  TaskNotificationResult
+} from "../utils/notifications";
+import { calculateEnrollmentStatus, EnrollmentStatus } from "../utils/enrollmentStatus";
 
 let lastId = Date.now();
 export const generateUniqueId = (): number => {
@@ -12,6 +21,27 @@ export const generateUniqueId = (): number => {
   return lastId * 1050 + Math.floor(Math.random() * 1000);
 };
 
+export type SLAStatusLevel = 'en_tiempo' | 'por_vencer' | 'vencido';
+
+export interface InstitutionSLAInfo {
+  institutionId: number;
+  institutionName: string;
+  lastInteractionDate: string | null;
+  lastInteractionType: string;
+  daysInactive: number;
+  slaLimitDays: number;
+  status: SLAStatusLevel;
+  label: string;
+  indicatorName: string;
+  isOverdue: boolean;
+  overdueDays: number;
+  badgeClass: string;
+  badgeBorderClass: string;
+  badgeBgClass: string;
+  badgeTextClass: string;
+  dotColorClass: string;
+}
+
 export interface Institution {
   id: number;
   institutionCode?: string;
@@ -20,6 +50,9 @@ export interface Institution {
   contact: string;
   students: number;
   status: string;
+  createdAt?: string;
+  lastInteractionDate?: string;
+  lastInteractionType?: string;
   revenue?: number;
   membershipId?: string;
   membershipExpiration?: string;
@@ -68,7 +101,14 @@ export interface Institution {
   documentsList?: InstitutionDocument[];
   mainProviderId?: number;
   active?: boolean;
+  colombiaCalendar?: 'Calendario A' | 'Calendario B' | '';
 }
+
+export const isColombia = (country?: string): boolean => {
+  if (!country) return false;
+  const normalized = country.trim().toLowerCase();
+  return normalized === 'colombia' || normalized.includes('colombia');
+};
 
 export interface Campus {
   id: string;
@@ -78,11 +118,18 @@ export interface Campus {
   phone: string;
 }
 
+export type InstitutionDocumentCategory = 'Legal' | 'Académico' | 'Administrativo';
+
 export interface InstitutionDocument {
   id: string;
   name: string;
+  fileName?: string;
   fileSize: string;
   uploadDate: string;
+  fileData?: string;
+  category?: InstitutionDocumentCategory;
+  hasExpiration?: boolean;
+  expirationDate?: string;
 }
 
 export interface ExtraService {
@@ -91,6 +138,163 @@ export interface ExtraService {
   cost: number;
   currency: string;
   notes?: string;
+}
+
+export type AdmissionStepStatus = 'pendiente' | 'en_proceso' | 'completado';
+
+export interface AdmissionUniversityOption {
+  id: string;
+  name: string;
+  country: string;
+  program: string;
+  category: 'Dream / Reach' | 'Target' | 'Safety';
+  status: 'Evaluando' | 'Seleccionada' | 'Descartada';
+  costPerYear?: string;
+  deadline?: string;
+  notes?: string;
+}
+
+export interface AdmissionDocumentCheckItem {
+  id: string;
+  name: string;
+  required: boolean;
+  received: boolean;
+  receivedDate?: string;
+  fileUrl?: string;
+  fileName?: string;
+  notes?: string;
+}
+
+export interface AdmissionScholarshipItem {
+  id: string;
+  name: string;
+  institutionOrProvider: string;
+  type: 'Mérito Académico' | 'Deportiva' | 'Necesidad Financiera' | 'Talento / Otra';
+  amount: string;
+  status: 'En trámite' | 'Otorgada' | 'No aplicable' | 'Rechazada';
+  deadline?: string;
+  notes?: string;
+}
+
+export interface AdmissionApplicationItem {
+  id: string;
+  universityName: string;
+  platform: string;
+  applicationId?: string;
+  submissionDate?: string;
+  decisionType: 'Regular Decision' | 'Early Action' | 'Early Decision' | 'Rolling';
+  status: 'Enviada' | 'En revisión' | 'Aceptada' | 'En lista de espera' | 'Rechazada';
+  confirmationUrl?: string;
+  notes?: string;
+}
+
+export interface UniversityAdmissionData {
+  counselorName?: string;
+  counselorEmail?: string;
+  targetDegree?: string;
+  targetTerm?: string;
+  overallNotes?: string;
+
+  // 1. Fecha de inicio
+  startDateStep?: {
+    status: AdmissionStepStatus;
+    date?: string;
+    counselor?: string;
+    targetCountries?: string;
+    notes?: string;
+  };
+
+  // 2. Llenado formulario
+  formFillingStep?: {
+    status: AdmissionStepStatus;
+    completionDate?: string;
+    formUrl?: string;
+    interestsSummary?: string;
+    notes?: string;
+  };
+
+  // 3. Reunion 1-1
+  meetingStep?: {
+    status: AdmissionStepStatus;
+    meetingDate?: string;
+    meetingTime?: string;
+    modality?: 'Virtual (Zoom/Meet)' | 'Presencial' | 'Telefónica';
+    attendees?: string;
+    meetingLink?: string;
+    summaryNotes?: string;
+  };
+
+  // 4. Evaluacion Perfil
+  profileEvaluationStep?: {
+    status: AdmissionStepStatus;
+    evaluationDate?: string;
+    gpaScore?: string;
+    englishProficiency?: string;
+    standardizedTests?: string;
+    topMajors?: string;
+    extracurricularStrengths?: string;
+    counselorRecommendations?: string;
+  };
+
+  // 5. Revision de opciones
+  optionsReviewStep?: {
+    status: AdmissionStepStatus;
+    reviewDate?: string;
+    options?: AdmissionUniversityOption[];
+    selectedCount?: number;
+    notes?: string;
+  };
+
+  // 6. Solicitud documentos
+  documentsRequestStep?: {
+    status: AdmissionStepStatus;
+    requestDate?: string;
+    deadline?: string;
+    documents?: AdmissionDocumentCheckItem[];
+    notes?: string;
+  };
+
+  // 7. Revisión de becas
+  scholarshipsReviewStep?: {
+    status: AdmissionStepStatus;
+    reviewDate?: string;
+    scholarships?: AdmissionScholarshipItem[];
+    totalEstimatedScholarship?: string;
+    notes?: string;
+  };
+
+  // 8. Aplicación enviada
+  applicationSubmittedStep?: {
+    status: AdmissionStepStatus;
+    submissionDate?: string;
+    applications?: AdmissionApplicationItem[];
+    notes?: string;
+  };
+
+  // 9. Carta Aceptación
+  acceptanceLetterStep?: {
+    status: AdmissionStepStatus;
+    decisionDate?: string;
+    acceptedUniversity?: string;
+    officialMajor?: string;
+    scholarshipAwarded?: string;
+    letterFileUrl?: string;
+    letterFileName?: string;
+    depositPaid?: boolean;
+    depositAmount?: string;
+    depositDate?: string;
+    notes?: string;
+  };
+
+  // 10. Fecha inicio
+  programStartDateStep?: {
+    status: AdmissionStepStatus;
+    classesStartDate?: string;
+    orientationDate?: string;
+    visaStatus?: 'No requerida' | 'En trámite' | 'Aprobada / Emitida';
+    housingStatus?: 'En trámite' | 'Campus Dorms' | 'Off-campus' | 'Confirmado';
+    finalNotes?: string;
+  };
 }
 
 export interface Student {
@@ -123,6 +327,7 @@ export interface Student {
   schoolYear?: string;
   extraServices?: ExtraService[];
   documentsList?: InstitutionDocument[];
+  universityAdmissionProcess?: UniversityAdmissionData;
   notificationPayment?: {
     alumno: boolean;
     instituto: boolean;
@@ -133,6 +338,10 @@ export interface Student {
     instituto: boolean;
     agente: boolean;
   };
+  hasScholarship?: boolean;
+  scholarshipType?: 'Monto' | 'Porcentaje';
+  scholarshipValue?: number;
+  scholarshipTarget?: 'Estudiante' | 'Escuela';
 }
 
 export interface ClassItem {
@@ -149,7 +358,11 @@ export interface ClassItem {
   enrolled?: number;
   hours?: string;
   countryRates?: Record<string, { cost: string; price: string }>;
+  isArchived?: boolean;
+  archived?: boolean;
 }
+
+export type CourseGradeOutcome = 'Pass' | 'Fail' | 'Pendiente';
 
 export interface Enrollment {
   id: number;
@@ -161,7 +374,11 @@ export interface Enrollment {
   providerId?: number;
   enrollmentDate?: string;
   activationDate?: string;
-  status?: 'Active' | 'Completed' | 'On hold' | 'Withdrawn';
+  status?: EnrollmentStatus;
+  gradeOutcome?: CourseGradeOutcome;
+  finalGrade?: string;
+  gradeDate?: string;
+  gradeNotes?: string;
   notes?: string;
   curp?: string;
   lugar?: 'Escuela' | 'Casa';
@@ -171,6 +388,9 @@ export interface Enrollment {
   contrasena?: string;
   area?: string;
   destino?: string;
+  hasExtension?: boolean;
+  extensionDate?: string;
+  extensionChargeGenerated?: boolean;
 }
 
 export interface Payment {
@@ -185,6 +405,12 @@ export interface Payment {
   concept?: string;
   reference?: string;
   bankAccountId?: string | number;
+  invoicePdfUrl?: string;
+  invoicePdfName?: string;
+  invoiceXmlUrl?: string;
+  invoiceXmlName?: string;
+  receiptPdfUrl?: string;
+  receiptPdfName?: string;
 }
 
 export type TransactionType = 'income' | 'expense';
@@ -222,6 +448,13 @@ export interface FinancialTransaction {
   iva?: number;
   originalAmount?: number;
   originalCurrency?: CurrencyCode;
+  paymentLink?: string;
+  invoicePdfUrl?: string;
+  invoicePdfName?: string;
+  invoiceXmlUrl?: string;
+  invoiceXmlName?: string;
+  receiptPdfUrl?: string;
+  receiptPdfName?: string;
 }
 
 export interface StatementTransaction {
@@ -293,6 +526,15 @@ export interface Contact {
 
 export type TaskType = 'Llamada' | 'Correo' | 'Visita' | 'Meet' | 'Otro';
 
+export interface Team {
+  id: number;
+  name: string;
+  description?: string;
+  color?: string;
+  leaderId?: number;
+  createdAt?: string;
+}
+
 export interface Task {
   id: number;
   institutionId?: number;
@@ -300,6 +542,8 @@ export interface Task {
   dueDate: string;
   status: 'Pendiente' | 'Completada';
   userId?: number;
+  userIds?: number[];
+  teamId?: number;
   type?: TaskType;
   leadId?: string;
   notes?: string;
@@ -372,6 +616,21 @@ export interface CompanyDocument {
   fileSize?: string;
 }
 
+export interface DbMetrics {
+  readsTotal: number;
+  readsServer: number;
+  readsCached: number;
+  writesTotal: number;
+  writesBatched: number;
+  deletesTotal: number;
+  savesBypassed: number;
+  lastOperationTime: string | null;
+  lastOperationType: 'READ' | 'WRITE' | 'DELETE' | 'BYPASS' | null;
+  lastOperationStatus: 'SUCCESS' | 'ERROR' | null;
+  cacheEnabled: boolean;
+  activeCollectionSyncs: Record<string, { docCount: number; status: 'syncing' | 'synced' | 'error'; lastSynced: string }>;
+}
+
 export interface CatalogItem {
   id: string;
   name: string;
@@ -387,6 +646,7 @@ export interface CatalogItem {
   aba?: string;
   notes?: string;
   providerIds?: number[];
+  slaDays?: number | null;
 }
 
 export type CatalogTypes = 
@@ -401,7 +661,10 @@ export type CatalogTypes =
   | 'Membresías'
   | 'Cuentas bancarias'
   | 'Modalidades'
-  | 'Tipo de Producto';
+  | 'Tipo de Producto'
+  | 'Fases y Alertas de Inactividad (SLA)'
+  | 'Categorías de Documentos'
+  | 'Programas Homeschool';
 
 export interface AgentBankAccount {
   id: string;
@@ -409,6 +672,8 @@ export interface AgentBankAccount {
   clabe: string;
   accountNo: string;
   currency: string;
+  beneficiary?: string;
+  type?: string;
 }
 
 export interface ProviderProductService {
@@ -447,6 +712,7 @@ export interface ExtraCommission {
   value: number;
   currency: string;
   category: 'course' | 'membership' | 'special';
+  concept?: string;
 }
 
 export interface User {
@@ -455,6 +721,7 @@ export interface User {
   role: string;
   email: string;
   phone?: string;
+  teamId?: number;
   rfc?: string;
   address?: string;
   bankAccounts?: AgentBankAccount[];
@@ -466,9 +733,23 @@ export interface User {
   requireEmailVerification?: boolean;
   emailVerified?: boolean;
   extraCommissions?: ExtraCommission[];
+  // Campos de perfil extendido y firma electrónica
+  title?: string;
+  department?: string;
+  bio?: string;
+  avatarUrl?: string;
+  signatureType?: 'drawn' | 'typed' | 'image';
+  signatureImage?: string;
+  signatureText?: string;
+  signatureFont?: string;
+  signaturePhone?: string;
+  signatureWebsite?: string;
+  signatureDisclaimer?: string;
+  includeSignatureInEmails?: boolean;
 }
 
 interface AppContextType {
+  firebaseSyncCompleted: boolean;
   syncErrors: Array<{ collection: string; error: string; time: string }>;
   institutions: Institution[];
   students: Student[];
@@ -485,6 +766,10 @@ interface AppContextType {
   users: User[];
   currentUser: User | null;
   setCurrentUser: (user: User | null) => void;
+  teams: Team[];
+  addTeam: (team: Omit<Team, "id" | "createdAt">) => Team;
+  updateTeam: (id: number, data: Partial<Team>) => void;
+  deleteTeam: (id: number) => void;
   providerProductServices: ProviderProductService[];
   addProviderProductService: (service: Omit<ProviderProductService, "id">) => void;
   updateProviderProductService: (id: number, data: Partial<ProviderProductService>) => void;
@@ -542,20 +827,35 @@ interface AppContextType {
   addEnrollment: (enrollment: Omit<Enrollment, "id">) => void;
   updateEnrollment: (id: number, data: Partial<Enrollment>) => void;
   deleteEnrollment: (id: number) => void;
+  syncEnrollmentStatuses: () => number;
   addContact: (contact: Omit<Contact, "id">) => void;
   updateContact: (id: number, data: Partial<Contact>) => void;
   deleteContact: (id: number) => void;
-  addTask: (task: Omit<Task, "id">) => void;
+  addTask: (task: Omit<Task, "id">, options?: { skipNotification?: boolean; forceEmail?: boolean; forceWhatsApp?: boolean }) => void;
   updateTask: (id: number, data: Partial<Task>) => void;
   deleteTask: (id: number) => void;
+  notifyTaskAssignee: (task: Task, forceEmail?: boolean, forceWhatsApp?: boolean) => Promise<TaskNotificationResult>;
+  notifyTaskDeadline: (task: Task, forceEmail?: boolean, forceWhatsApp?: boolean) => Promise<TaskNotificationResult>;
+  triggerDeadlineScan: (forceAll?: boolean) => Promise<{ scannedCount: number; notifiedTasks: Array<{ task: Task; user: User; result: TaskNotificationResult }> }>;
   addActivity: (activity: Omit<Activity, "id">) => void;
   addCatalogItem: (catalog: CatalogTypes, item: Omit<CatalogItem, "id">) => void;
   updateCatalogItem: (catalog: CatalogTypes, id: string, data: Partial<CatalogItem>) => void;
   deleteCatalogItem: (catalog: CatalogTypes, id: string) => void;
+  getInstitutionSLA: (institution: Institution | number) => InstitutionSLAInfo;
+  updateInstitutionLastInteraction: (institutionId: number, interactionDate?: string, interactionType?: string, description?: string) => void;
+  slaSummary: { total: number; enTiempo: number; porVencer: number; vencidos: number; alerts: InstitutionSLAInfo[] };
+  getLeadSlaInfo: (lead: { status?: string; createdAt?: string; lastInteractionDate?: string; name?: string; id?: string | number }) => InstitutionSLAInfo;
   backups: any[];
   triggerFullBackup: (type: 'Automático' | 'Manual') => Promise<any>;
   restoreBackup: (backup: any) => boolean;
   deleteBackup: (id: string) => void;
+  systemRoles: Role[];
+  updateSystemRoles: (roles: Role[]) => Promise<void>;
+  restoreDefaultRoles: () => Promise<void>;
+  addSystemRole: (role: Omit<Role, "id">) => Promise<Role>;
+  deleteSystemRole: (id: string) => Promise<void>;
+  dbMetrics: DbMetrics;
+  resetDbMetrics: () => void;
 }
 
 export function resolveCreditPrices(
@@ -656,6 +956,437 @@ export function resolveMembershipPrice(membershipId: string | undefined, catalog
   return 'Sin Asignar';
 }
 
+export function normalizeCountryName(c: string) {
+  return (c || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ñ/g, "n")
+    .trim();
+}
+
+export function resolveProviderClassCost(
+  providerId: any,
+  creditType: string | undefined,
+  countryRef: string,
+  providerProductServices: any[] | undefined
+) {
+  if (!providerId || !providerProductServices) return 0;
+  
+  const serviceClass = providerProductServices.find(
+    ps => Number(ps.providerId) === Number(providerId) &&
+      ['clase', 'clases'].includes((ps.productType || "").toLowerCase().trim())
+  );
+  
+  if (!serviceClass || !serviceClass.countryPrices) return 0;
+  
+  const normCountryRef = normalizeCountryName(countryRef);
+  const cpData = serviceClass.countryPrices.find(
+    (p: any) => normalizeCountryName(p.country) === normCountryRef
+  );
+  
+  if (!cpData) return 0;
+  
+  const typeStr = (creditType || "").toLowerCase().trim();
+  const isAp = typeStr.includes("ap");
+  
+  let costStr = "0";
+  if (typeStr.includes("medio") || typeStr.includes("half")) {
+    costStr = isAp ? cpData.costHalfApCredit : cpData.costHalfCredit;
+  } else {
+    costStr = isAp ? cpData.costFullApCredit : cpData.costFullCredit;
+  }
+  
+  return parseFloat(String(costStr || "0").replace(/[^0-9.-]+/g, "") || "0");
+}
+
+export interface InstitutionFinancialMetrics {
+  totalVendidoUSD: number;
+  totalVendidoMXN: number;
+  totalMembUSD: number;
+  totalMembMXN: number;
+  totalIngresosProyectadosUSD: number;
+  totalIngresosProyectadosMXN: number;
+  coursesPaidUSD: number;
+  coursesPaidMXN: number;
+  membPaidUSD: number;
+  membPaidMXN: number;
+  totalPagadoUSD: number;
+  totalPagadoMXN: number;
+  coursesPendingUSD: number;
+  coursesPendingMXN: number;
+  membPendingUSD: number;
+  membPendingMXN: number;
+  totalPorRecaudarUSD: number;
+  totalPorRecaudarMXN: number;
+  totalCostUSD: number;
+  totalCostMXN: number;
+  egresosPagadosUSD: number;
+  egresosPagadosMXN: number;
+  saldoPorPagarUSD: number;
+  saldoPorPagarMXN: number;
+  margenProyectadoUSD: number;
+  margenProyectadoMXN: number;
+  margenPorcentaje: number;
+  numStudents: number;
+  numActiveEnrollments: number;
+  numActiveClasses: number;
+  numActiveFullCredits: number;
+  numActiveHalfCredits: number;
+  numDistinctFullCredits: number;
+  numDistinctHalfCredits: number;
+  activeClassIds: string[];
+  hasPendingBalances: boolean;
+  hasAssociatedRecords: boolean;
+}
+
+export function calculateInstitutionFinancials(
+  institution: any,
+  students: any[],
+  enrollments: any[],
+  classes: any[],
+  catalogs: any,
+  providerProductServices?: any[],
+  financialTransactions?: any[],
+  filterOptions?: {
+    payFilterStartDate?: string;
+    payFilterEndDate?: string;
+  }
+): InstitutionFinancialMetrics {
+  if (!institution) {
+    return {
+      totalVendidoUSD: 0,
+      totalVendidoMXN: 0,
+      totalMembUSD: 0,
+      totalMembMXN: 0,
+      totalIngresosProyectadosUSD: 0,
+      totalIngresosProyectadosMXN: 0,
+      coursesPaidUSD: 0,
+      coursesPaidMXN: 0,
+      membPaidUSD: 0,
+      membPaidMXN: 0,
+      totalPagadoUSD: 0,
+      totalPagadoMXN: 0,
+      coursesPendingUSD: 0,
+      coursesPendingMXN: 0,
+      membPendingUSD: 0,
+      membPendingMXN: 0,
+      totalPorRecaudarUSD: 0,
+      totalPorRecaudarMXN: 0,
+      totalCostUSD: 0,
+      totalCostMXN: 0,
+      egresosPagadosUSD: 0,
+      egresosPagadosMXN: 0,
+      saldoPorPagarUSD: 0,
+      saldoPorPagarMXN: 0,
+      margenProyectadoUSD: 0,
+      margenProyectadoMXN: 0,
+      margenPorcentaje: 0,
+      numStudents: 0,
+      numActiveEnrollments: 0,
+      numActiveClasses: 0,
+      numActiveFullCredits: 0,
+      numActiveHalfCredits: 0,
+      numDistinctFullCredits: 0,
+      numDistinctHalfCredits: 0,
+      activeClassIds: [],
+      hasPendingBalances: false,
+      hasAssociatedRecords: false
+    };
+  }
+
+  const instId = Number(institution.id);
+  const instStudents = (students || []).filter(s => s.institutionId !== undefined && s.institutionId !== null && Number(s.institutionId) === instId);
+  const instStudentIds = instStudents.map(s => Number(s.id));
+
+  // Filter enrollments for this institution
+  const rawInstEnrollments = (enrollments || []).filter(e => instStudentIds.includes(Number(e.studentId)));
+
+  // Date & status filtered enrollments
+  const dateFilteredEnrollments = rawInstEnrollments.filter(e => {
+    if (e.status === 'Withdrawn') return false; // Withdrawn courses do not generate projected income or cost
+    const d = e.startDate || e.enrollmentDate;
+    if (!d) return true;
+    if (filterOptions?.payFilterStartDate && d < filterOptions.payFilterStartDate) return false;
+    if (filterOptions?.payFilterEndDate && d > filterOptions.payFilterEndDate) return false;
+    return true;
+  });
+
+  // Calculate course sales per student in USD
+  const totalVendidoUSD = instStudents.reduce((totalSum, s) => {
+    const sEnrollments = dateFilteredEnrollments.filter(e => Number(e.studentId) === Number(s.id));
+    let sTotalUSD = sEnrollments.reduce((sum, e) => {
+      let cp = e.price;
+      if (cp === undefined || cp === null || cp === '' || isNaN(Number(cp))) {
+        const cl = (classes || []).find(c => Number(c.id) === Number(e.classId));
+        if (cl) {
+          const cType = cl.creditType;
+          let valStr = "";
+          // 1. First check manual override in institution
+          if (cType === 'Medio Crédito') valStr = institution.priceHalfCredit || "";
+          else if (cType === 'Crédito completo AP') valStr = institution.priceFullApCredit || "";
+          else if (cType === 'Medio Crédito AP') valStr = institution.priceHalfApCredit || "";
+          else if (cType === 'Crédito completo') valStr = institution.priceFullCredit || "";
+
+          // 2. If not manual override, resolve from catalogs / tariff / provider
+          if (!valStr) {
+            const resolvedPrices = resolveCreditPrices(institution.tarifasId, catalogs, institution.mainProviderId, providerProductServices);
+            if (cType === 'Medio Crédito') valStr = resolvedPrices.priceHalfCredit || "";
+            else if (cType === 'Crédito completo AP') valStr = resolvedPrices.priceFullApCredit || "";
+            else if (cType === 'Medio Crédito AP') valStr = resolvedPrices.priceHalfApCredit || "";
+            else if (cType === 'Crédito completo') valStr = resolvedPrices.priceFullCredit || "";
+          }
+
+          // 3. Fallback to countryRates on class
+          if (!valStr && cl.countryRates) {
+            const countryRef = catalogs?.['Tarifas Países']?.find((c: any) => c.id === institution.tarifasId)?.name || institution.country || 'Default';
+            let rateForCountry = cl.countryRates[countryRef];
+            if (!rateForCountry) {
+              const matchKey = Object.keys(cl.countryRates).find(k => normalizeCountryName(k) === normalizeCountryName(countryRef));
+              if (matchKey) rateForCountry = cl.countryRates[matchKey];
+            }
+            if (rateForCountry?.price) valStr = rateForCountry.price;
+          }
+
+          if (valStr) {
+            cp = parseFloat(String(valStr).replace(/[^0-9.-]+/g, "") || "0");
+          } else {
+            if (cType === 'Medio Crédito') cp = 250;
+            else if (cType === 'Crédito completo AP') cp = 600;
+            else if (cType === 'Medio Crédito AP') cp = 300;
+            else cp = 500;
+          }
+        } else {
+          cp = 0;
+        }
+      } else {
+        cp = typeof cp === 'number' ? cp : parseFloat(String(cp).replace(/[^0-9.-]+/g, "") || "0");
+      }
+      return sum + (cp || 0);
+    }, 0);
+
+    // Apply school-targeted scholarship deduction if active
+    if (s.hasScholarship && s.scholarshipTarget === 'Escuela') {
+      const val = s.scholarshipValue || 0;
+      if (s.scholarshipType === 'Porcentaje') {
+        sTotalUSD = Math.max(0, sTotalUSD * (1 - val / 100));
+      } else {
+        sTotalUSD = Math.max(0, sTotalUSD - val);
+      }
+    }
+    return totalSum + sTotalUSD;
+  }, 0);
+
+  const exchangeRate = 18.5;
+  const ivaMultiplier = institution.payWithIva ? 1.16 : 1;
+  const totalVendidoMXN = totalVendidoUSD * exchangeRate * ivaMultiplier;
+
+  // Membership Projections in USD
+  const activeMemb = catalogs?.['Membresías']?.find((m: any) => m.id === institution?.membershipId);
+  const membUnitAmount = activeMemb ? Number(activeMemb.amount || 0) : 0;
+  const customMembPrice = institution?.membershipPrice ? parseFloat(String(institution.membershipPrice).replace(/[^0-9.-]+/g, "")) : null;
+  const finalMembUnitAmount = customMembPrice !== null && !isNaN(customMembPrice) ? customMembPrice : membUnitAmount;
+  const isNoMemb = institution?.membershipId === 'memb_4' || institution?.membershipId === 'none' || institution?.membershipId === 'ninguno' || !institution?.membershipId;
+  const totalMembUSD = (isNoMemb && (customMembPrice === null || isNaN(customMembPrice))) ? 0 : finalMembUnitAmount;
+  const totalMembMXN = totalMembUSD * exchangeRate * ivaMultiplier;
+
+  // Combined Projected Revenues
+  const totalIngresosProyectadosUSD = totalVendidoUSD + totalMembUSD;
+  const totalIngresosProyectadosMXN = totalVendidoMXN + totalMembMXN;
+
+  // Helper to calculate payments
+  const getMXNWithIva = (p: any) => {
+    if (p.currency === 'USD') {
+      const rate = p.exchangeRate || exchangeRate;
+      const baseMXN = (p.amount || 0) * rate;
+      return institution.payWithIva ? baseMXN * 1.16 : baseMXN;
+    } else {
+      return p.amountMXN !== undefined ? p.amountMXN : (p.amount || 0);
+    }
+  };
+
+  const getUSDWithoutIva = (p: any) => {
+    if (p.currency === 'USD') {
+      return p.amount || 0;
+    } else {
+      const amtMXN = p.amountMXN !== undefined ? p.amountMXN : (p.amount || 0);
+      const baseMXNWithoutIva = institution.payWithIva ? amtMXN / 1.16 : amtMXN;
+      const rate = (p.exchangeRate && p.exchangeRate !== 1) ? p.exchangeRate : (Math.abs(baseMXNWithoutIva - 3768) < 5 ? 18.84 : exchangeRate);
+      return rate > 0 ? baseMXNWithoutIva / rate : 0;
+    }
+  };
+
+  // Payments (Income)
+  const rawInstPayments = (financialTransactions || []).filter(p => 
+    (Number(p.institutionId) === instId || (p.studentId && instStudentIds.includes(Number(p.studentId)))) && 
+    p.type === 'income' && 
+    (p.status === 'Aplicado' || p.status === 'Pagado')
+  );
+
+  const instPayments = rawInstPayments.filter(p => {
+    if (filterOptions?.payFilterStartDate && p.date < filterOptions.payFilterStartDate) return false;
+    if (filterOptions?.payFilterEndDate && p.date > filterOptions.payFilterEndDate) return false;
+    return true;
+  });
+
+  const membPayments = instPayments.filter(p => 
+    p.subcategory === 'sub_membresia' || 
+    (p.concept && (p.concept.toLowerCase().includes('membresía') || p.concept.toLowerCase().includes('membresia'))) ||
+    (p.description && (p.description.toLowerCase().includes('membresía') || p.description.toLowerCase().includes('membresia')))
+  );
+  const coursesPayments = instPayments.filter(p => !membPayments.includes(p));
+
+  const coursesPaidMXN = coursesPayments.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const coursesPaidUSD = coursesPayments.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+
+  const membPaidMXN = membPayments.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const membPaidUSD = membPayments.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+
+  const totalPagadoMXN = instPayments.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const totalPagadoUSD = instPayments.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+
+  const coursesPendingUSD = Math.max(0, totalVendidoUSD - coursesPaidUSD);
+  const coursesPendingMXN = Math.max(0, totalVendidoMXN - coursesPaidMXN);
+
+  const membPendingUSD = Math.max(0, totalMembUSD - membPaidUSD);
+  const membPendingMXN = Math.max(0, totalMembMXN - membPaidMXN);
+
+  const totalPorRecaudarUSD = coursesPendingUSD + membPendingUSD;
+  const totalPorRecaudarMXN = coursesPendingMXN + membPendingMXN;
+
+  // Class Costs to Providers in USD
+  const totalCostUSD = dateFilteredEnrollments.reduce((sum, e) => {
+    const cl = (classes || []).find(c => Number(c.id) === Number(e.classId));
+    if (!cl) return sum;
+
+    const provId = e.providerId || cl.providerId;
+    const tariffId = institution?.tarifasId;
+    const countryRef = catalogs?.['Tarifas Países']?.find((c: any) => c.id === tariffId)?.name || institution?.country || 'Default';
+
+    let resolvedCost = resolveProviderClassCost(provId, cl.creditType, countryRef, providerProductServices);
+
+    let countryRate = null;
+    if (countryRef && cl.countryRates) {
+      countryRate = cl.countryRates[countryRef];
+      if (!countryRate) {
+        const matchKey = Object.keys(cl.countryRates).find(k => normalizeCountryName(k) === normalizeCountryName(countryRef));
+        if (matchKey) countryRate = cl.countryRates[matchKey];
+      }
+    }
+
+    if (!resolvedCost && countryRate?.cost) {
+      resolvedCost = parseFloat(String(countryRate.cost).replace(/[^0-9.-]+/g, "") || "0");
+    }
+
+    if (!resolvedCost && cl.cost) {
+      resolvedCost = parseFloat(String(cl.cost).replace(/[^0-9.-]+/g, "") || "0");
+    }
+
+    if (!resolvedCost) {
+      const typeStr = (cl.creditType || "").toLowerCase().trim();
+      const isAp = typeStr.includes("ap");
+      const isHalf = typeStr.includes("medio") || typeStr.includes("half");
+
+      if (isHalf) {
+        resolvedCost = isAp ? 175 : 150;
+      } else {
+        resolvedCost = isAp ? 350 : 300;
+      }
+    }
+
+    return sum + resolvedCost;
+  }, 0);
+
+  const totalCostMXN = totalCostUSD * exchangeRate * ivaMultiplier;
+
+  // Egresos Pagados
+  const rawInstExpenses = (financialTransactions || []).filter(p => p.studentId && instStudentIds.includes(Number(p.studentId)) && p.type === 'expense');
+  const instExpenses = rawInstExpenses.filter(p => {
+    if (filterOptions?.payFilterStartDate && p.date < filterOptions.payFilterStartDate) return false;
+    if (filterOptions?.payFilterEndDate && p.date > filterOptions.payFilterEndDate) return false;
+    return true;
+  });
+
+  const egresosPagadosMXN = instExpenses.reduce((sum, p) => sum + getMXNWithIva(p), 0);
+  const egresosPagadosUSD = instExpenses.reduce((sum, p) => sum + getUSDWithoutIva(p), 0);
+
+  const saldoPorPagarUSD = Math.max(0, totalCostUSD - egresosPagadosUSD);
+  const saldoPorPagarMXN = Math.max(0, totalCostMXN - egresosPagadosMXN);
+
+  const margenProyectadoUSD = totalIngresosProyectadosUSD - totalCostUSD;
+  const margenProyectadoMXN = totalIngresosProyectadosMXN - totalCostMXN;
+  const margenPorcentaje = totalIngresosProyectadosUSD > 0 ? (margenProyectadoUSD / totalIngresosProyectadosUSD) * 100 : 0;
+
+  // Active Enrollments & Classes
+  const instActiveEnrollments = rawInstEnrollments.filter(e => e.status === 'Active' || e.status === 'Extended' || (!e.status && (e.status !== 'Completed' && e.status !== 'Withdrawn' && e.status !== 'Ended')));
+  const instActiveClassIds = new Set(instActiveEnrollments.map(e => e.classId));
+  const numActiveEnrollments = instActiveEnrollments.length;
+  const numActiveClasses = instActiveClassIds.size;
+
+  let numActiveFullCredits = 0;
+  let numActiveHalfCredits = 0;
+  const fullClassIds = new Set<any>();
+  const halfClassIds = new Set<any>();
+
+  instActiveEnrollments.forEach(e => {
+    const cl = (classes || []).find(c => Number(c.id) === Number(e.classId));
+    const typeStr = (cl?.creditType || "").toLowerCase().trim();
+    if (typeStr.includes("medio") || typeStr.includes("half")) {
+      numActiveHalfCredits++;
+      if (e.classId) halfClassIds.add(e.classId);
+    } else {
+      numActiveFullCredits++;
+      if (e.classId) fullClassIds.add(e.classId);
+    }
+  });
+
+  const numDistinctFullCredits = fullClassIds.size;
+  const numDistinctHalfCredits = halfClassIds.size;
+
+  const hasPendingBalances = totalPorRecaudarMXN > 0 || saldoPorPagarMXN > 0;
+  const hasAssociatedRecords = instStudents.length > 0 || numActiveEnrollments > 0;
+
+  return {
+    totalVendidoUSD,
+    totalVendidoMXN,
+    totalMembUSD,
+    totalMembMXN,
+    totalIngresosProyectadosUSD,
+    totalIngresosProyectadosMXN,
+    coursesPaidUSD,
+    coursesPaidMXN,
+    membPaidUSD,
+    membPaidMXN,
+    totalPagadoUSD,
+    totalPagadoMXN,
+    coursesPendingUSD,
+    coursesPendingMXN,
+    membPendingUSD,
+    membPendingMXN,
+    totalPorRecaudarUSD,
+    totalPorRecaudarMXN,
+    totalCostUSD,
+    totalCostMXN,
+    egresosPagadosUSD,
+    egresosPagadosMXN,
+    saldoPorPagarUSD,
+    saldoPorPagarMXN,
+    margenProyectadoUSD,
+    margenProyectadoMXN,
+    margenPorcentaje,
+    numStudents: instStudents.length,
+    numActiveEnrollments,
+    numActiveClasses,
+    numActiveFullCredits,
+    numActiveHalfCredits,
+    numDistinctFullCredits,
+    numDistinctHalfCredits,
+    activeClassIds: Array.from(instActiveClassIds).map(String),
+    hasPendingBalances,
+    hasAssociatedRecords
+  };
+}
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 function loadSaved<T>(key: string, fallback: T): T {
@@ -688,12 +1419,7 @@ function cleanLocalStorageReplacer(key: string, value: any) {
 }
 
 function safeSetItem(key: string, value: any) {
-  try {
-    const stringified = typeof value === 'string' ? value : JSON.stringify(value, cleanLocalStorageReplacer);
-    localStorage.setItem(key, stringified);
-  } catch (error) {
-    console.warn(`[Storage Quota Limit] No se pudo guardar el campo "${key}" en localStorage:`, error);
-  }
+  safeLocalStorageSet(key, value);
 }
 
 export function cleanForFirestore(obj: any): any {
@@ -743,7 +1469,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [classes, setClasses] = useState<ClassItem[]>(() => loadSaved('classes', []));
 
-  const [enrollments, setEnrollments] = useState<Enrollment[]>(() => loadSaved('enrollments', []));
+  const [enrollments, setEnrollments] = useState<Enrollment[]>(() => {
+    const loaded = loadSaved<Enrollment[]>('enrollments', []);
+    return loaded.map(e => ({
+      ...e,
+      status: calculateEnrollmentStatus(e)
+    }));
+  });
 
   const [providers, setProviders] = useState<Provider[]>(() => {
     const saved = loadSaved<Provider[]>('providers', []);
@@ -788,13 +1520,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(() => loadSaved('tasks', []));
   const [activities, setActivities] = useState<Activity[]>(() => loadSaved('activities', []));
   
+  const defaultTeamsList: Team[] = [
+    { id: 1, name: 'Equipo Comercial / Ventas', description: 'Atención a prospectos, convenios y captación', color: '#6366f1', leaderId: 1 },
+    { id: 2, name: 'Equipo Académico', description: 'Coordinación escolar, planes de estudio y seguimiento académico', color: '#0ea5e9', leaderId: 3 },
+    { id: 3, name: 'Equipo de Finanzas & Cobranza', description: 'Control de pagos, facturación y estados de cuenta', color: '#10b981', leaderId: 2 },
+    { id: 4, name: 'Equipo de Admisiones y Soporte', description: 'Trámites de nuevo ingreso, soporte general y atención técnica', color: '#f59e0b' }
+  ];
+
+  const [teams, setTeams] = useState<Team[]>(() => {
+    const loaded = loadSaved<Team[]>('teams', defaultTeamsList);
+    if (!loaded || loaded.length === 0) {
+      return defaultTeamsList;
+    }
+    return loaded;
+  });
+
   const [users, setUsers] = useState<User[]>(() => loadSaved('users', [
-    { id: 1, name: 'Admin Principal', role: 'Superadministrador', email: 'admin@ihs.com', password: 'admin123' },
-    { id: 2, name: 'Director Financiero', role: 'Finanzas', email: 'finanzas@ihs.com', password: 'finanzas123' },
-    { id: 3, name: 'Coordinador Académico', role: 'Academia', email: 'academico@ihs.com', password: 'academico123' },
+    { id: 1, name: 'Admin Principal', role: 'Superadministrador', email: 'admin@ihs.com', password: 'admin123', teamId: 1 },
+    { id: 2, name: 'Director Financiero', role: 'Finanzas', email: 'finanzas@ihs.com', password: 'finanzas123', teamId: 3 },
+    { id: 3, name: 'Coordinador Académico', role: 'Academia', email: 'academico@ihs.com', password: 'academico123', teamId: 2 },
     { id: 4, name: 'Usuario Alumno (Demo)', role: 'Alumno', email: 'alumno@ihs.com', studentId: 1, password: 'alumno123' },
-    { id: 5, name: 'Coordinador Institución (Demo)', role: 'Coordinador', email: 'coordinador@ihs.com', institutionId: 1, password: 'coordinador123' },
-    { id: 6, name: 'Administrador (Google)', role: 'Superadministrador', email: 'wrhg1970@gmail.com', password: 'google123' }
+    { id: 5, name: 'Coordinador Institución (Demo)', role: 'Coordinador', email: 'coordinador@ihs.com', institutionId: 1, password: 'coordinador123', teamId: 2 },
+    { id: 6, name: 'Administrador (Google)', role: 'Superadministrador', email: 'wrhg1970@gmail.com', password: 'google123', teamId: 1 }
   ]));
   
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -919,14 +1666,73 @@ export function AppProvider({ children }: { children: ReactNode }) {
         { id: 'prod_6', name: 'Schmoop', providerIds: [6] },
         { id: 'prod_7', name: 'Community Service Accreditation', providerIds: [2] },
         { id: 'prod_8', name: 'iivvo', providerIds: [6] }
+      ],
+      'Fases y Alertas de Inactividad (SLA)': [
+        { id: 'sla_1', name: 'Captación (Inicio)', description: 'Prospecto frío recién identificado - Etapa de Inicio (SLA 3 días)', slaDays: 3 },
+        { id: 'sla_2', name: 'Prospecto', description: 'Colegio que cumple perfil para el programa dual', slaDays: 5 },
+        { id: 'sla_3', name: 'Primer contacto', description: 'Contacto inicial por correo, teléfono o LinkedIn', slaDays: 3 },
+        { id: 'sla_4', name: 'Contacto establecido', description: 'Interés confirmado por el colegio, se solicita cita', slaDays: 4 },
+        { id: 'sla_5', name: 'Reunión agendada', description: 'Cita programada en Google Calendar con directivos', slaDays: 5 },
+        { id: 'sla_6', name: 'Presentación realizada', description: 'Demostración del programa académico y plan dual', slaDays: 3 },
+        { id: 'sla_7', name: 'Propuesta enviada', description: 'Cotización formal y propuesta académica enviada', slaDays: 10 },
+        { id: 'sla_8', name: 'Seguimiento', description: 'Llamadas periódicas para atender dudas de directores', slaDays: 7 },
+        { id: 'sla_9', name: 'Negociación', description: 'Ajustes de convenio y revisión legal de contratos', slaDays: 15 },
+        { id: 'sla_10', name: 'Convenio firmado', description: 'Convenio de Bachillerato Dual firmado oficialmente', slaDays: null },
+        { id: 'sla_11', name: 'Implementación', description: 'Capacitación docente e inducción a alumnos', slaDays: 30 },
+        { id: 'sla_12', name: 'Cliente activo', description: 'Colegio operando de forma regular el plan dual', slaDays: null },
+        { id: 'sla_13', name: 'Perdido', description: 'Colegio descarta el programa o contrata competidor', slaDays: null },
+        { id: 'sla_14', name: 'Derivado a otra oficina', description: 'Colegio derivado o remitido a otra oficina regional', slaDays: null }
+      ],
+      'Categorías de Documentos': [
+        { id: 'cat_doc_1', name: 'Contratos y Convenios', description: 'Contratos comerciales, convenios institucionales y acuerdos de confidencialidad' },
+        { id: 'cat_doc_2', name: 'Propuestas Comerciales', description: 'Cotizaciones, propuestas de servicio y resúmenes ejecutivos' },
+        { id: 'cat_doc_3', name: 'Acreditaciones y Licencias', description: 'Certificaciones, licencias operativas y acuerdos académicos' },
+        { id: 'cat_doc_4', name: 'Documentación Legal y Fiscal', description: 'Acta constitutiva, RFC, poderes notariales e identificaciones' },
+        { id: 'cat_doc_5', name: 'Comprobantes y Facturación', description: 'Fichas de pago, facturas y recibos de pólizas' },
+        { id: 'cat_doc_6', name: 'Manuales y Políticas', description: 'Guías de onboarding, normativas y reglamentos' },
+        { id: 'cat_doc_7', name: 'Otros Documentos', description: 'Documentos generales de soporte' }
+      ],
+      'Programas Homeschool': [
+        { id: 'prog_1', name: 'Full High School', description: 'Programa completo de bachillerato internacional Homeschool' },
+        { id: 'prog_2', name: 'Transfer', description: 'Transferencia o revalidación de materias cursadas' },
+        { id: 'prog_3', name: 'Complementary', description: 'Materias complementarias al plan de estudios actual' },
+        { id: 'prog_4', name: 'One year', description: 'Programa intensivo de un año académico' },
+        { id: 'prog_5', name: 'Individual course', description: 'Cursos o materias individuales específicas' }
       ]
     };
 
     const saved = loadSaved<any>('catalogs', fallback);
     
+    if (!saved['Programas Homeschool'] || saved['Programas Homeschool'].length === 0) {
+      saved['Programas Homeschool'] = fallback['Programas Homeschool'];
+    }
+
+    if (!saved['Categorías de Documentos'] || saved['Categorías de Documentos'].length === 0) {
+      saved['Categorías de Documentos'] = fallback['Categorías de Documentos'];
+    }
+    
     // Safety check to migrate/inject items even if they exist but have empty catalogs
     if (!saved['Categorías'] || saved['Categorías'].length === 0) {
       saved['Categorías'] = defaultCats;
+    }
+    if (!saved['Fases y Alertas de Inactividad (SLA)'] || saved['Fases y Alertas de Inactividad (SLA)'].length === 0) {
+      saved['Fases y Alertas de Inactividad (SLA)'] = fallback['Fases y Alertas de Inactividad (SLA)'];
+    } else {
+      const slaList = saved['Fases y Alertas de Inactividad (SLA)'];
+      const hasInicio = slaList.some((s: any) => s.name.toLowerCase().includes('inicio') || s.name.toLowerCase().includes('captació'));
+      if (!hasInicio) {
+        if (slaList.length > 0 && (slaList[0].name === 'Lead' || slaList[0].id === 'sla_1')) {
+          slaList[0].name = 'Captación (Inicio)';
+          slaList[0].description = 'Prospecto frío recién identificado - Etapa de Inicio (SLA 3 días)';
+        } else {
+          slaList.unshift({
+            id: 'sla_1',
+            name: 'Captación (Inicio)',
+            description: 'Prospecto frío recién identificado - Etapa de Inicio (SLA 3 días)',
+            slaDays: 3
+          });
+        }
+      }
     }
     if (!saved['Tarifas Países'] || saved['Tarifas Países'].length === 0) {
       saved['Tarifas Países'] = fallback['Tarifas Países'];
@@ -1331,8 +2137,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => loadSaved('auditLogs', []));
   const [backups, setBackups] = useState<any[]>(() => loadSaved('app_backups', []));
+  const [systemRoles, setSystemRoles] = useState<Role[]>(() => getSystemRoles());
 
   useEffect(() => { safeSetItem('app_backups', backups); }, [backups]);
+  useEffect(() => { 
+    safeSetItem('system_roles', systemRoles);
+    setInMemorySystemRoles(systemRoles);
+  }, [systemRoles]);
 
   useEffect(() => { safeSetItem('institutions', institutions); }, [institutions]);
   useEffect(() => { safeSetItem('students', students); }, [students]);
@@ -1345,6 +2156,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => { safeSetItem('contacts', contacts); }, [contacts]);
   useEffect(() => { safeSetItem('tasks', tasks); }, [tasks]);
   useEffect(() => { safeSetItem('activities', activities); }, [activities]);
+  useEffect(() => { safeSetItem('teams', teams); }, [teams]);
   useEffect(() => { safeSetItem('users', users); }, [users]);
   useEffect(() => { safeSetItem('currentUser', currentUser); }, [currentUser]);
   useEffect(() => { safeSetItem('catalogs', catalogs); }, [catalogs]);
@@ -1359,6 +2171,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [firebaseSyncCompleted, setFirebaseSyncCompleted] = useState(false);
   const [syncErrors, setSyncErrors] = useState<Array<{ collection: string; error: string; time: string }>>([]);
+
+  const [dbMetrics, setDbMetrics] = useState<DbMetrics>({
+    readsTotal: 0,
+    readsServer: 0,
+    readsCached: 0,
+    writesTotal: 0,
+    writesBatched: 0,
+    deletesTotal: 0,
+    savesBypassed: 0,
+    lastOperationTime: null,
+    lastOperationType: null,
+    lastOperationStatus: null,
+    cacheEnabled: true,
+    activeCollectionSyncs: {}
+  });
+
+  const resetDbMetrics = () => {
+    setDbMetrics({
+      readsTotal: 0,
+      readsServer: 0,
+      readsCached: 0,
+      writesTotal: 0,
+      writesBatched: 0,
+      deletesTotal: 0,
+      savesBypassed: 0,
+      lastOperationTime: null,
+      lastOperationType: null,
+      lastOperationStatus: null,
+      cacheEnabled: true,
+      activeCollectionSyncs: {}
+    });
+  };
 
   // Utility function: Calculate the most recent past scheduled backup slot (e.g. Sunday 11:00 PM)
   const getMostRecentPastScheduledDate = (dayName: string, timeStr: string): Date => {
@@ -1412,7 +2256,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         accountStatements,
         statementTransactions,
         companyInfo,
-        catalogs
+        catalogs,
+        systemRoles
       };
 
       const backupId = 'backup_' + Date.now();
@@ -1505,6 +2350,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (Array.isArray(d.statementTransactions)) setStatementTransactions(d.statementTransactions);
       if (d.companyInfo) setCompanyInfo(d.companyInfo);
       if (d.catalogs) setCatalogs(d.catalogs);
+      if (Array.isArray(d.systemRoles)) {
+        setSystemRoles(d.systemRoles);
+        setInMemorySystemRoles(d.systemRoles);
+      }
 
       addAuditLog({
         entityType: 'providerProductService',
@@ -1586,8 +2435,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) {
             return;
           }
+          setDbMetrics(prev => ({
+            ...prev,
+            activeCollectionSyncs: {
+              ...prev.activeCollectionSyncs,
+              [collectionName]: { docCount: 0, status: 'syncing', lastSynced: new Date().toLocaleTimeString() }
+            }
+          }));
           try {
             const snap = await getDocs(collection(db, collectionName));
+            const count = snap.size;
+            const fromCache = snap.metadata.fromCache;
+
+            setDbMetrics(prev => ({
+              ...prev,
+              readsTotal: prev.readsTotal + count,
+              readsCached: prev.readsCached + (fromCache ? count : 0),
+              readsServer: prev.readsServer + (fromCache ? 0 : count),
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: 'READ',
+              lastOperationStatus: 'SUCCESS',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                [collectionName]: { docCount: count, status: 'synced', lastSynced: new Date().toLocaleTimeString() }
+              }
+            }));
+
             if (!snap.empty) {
               const remoteList: T[] = [];
               snap.forEach(d => {
@@ -1595,14 +2468,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
               });
               setter(remoteList);
             } else if (localList.length > 0) {
-              // Upload local simulation data to Firestore to recover it beautifully
+              // Upload local simulation data to Firestore using atomic writeBatch (max 500 documents per batch)
+              const { writeBatch } = await import('firebase/firestore');
+              let batch = writeBatch(db);
+              let batchCount = 0;
               for (const item of localList) {
-                await setDoc(doc(db, collectionName, String(item.id)), cleanForFirestore(item));
+                batch.set(doc(db, collectionName, String(item.id)), cleanForFirestore(item));
+                batchCount++;
+                if (batchCount === 500) {
+                  await batch.commit();
+                  batch = writeBatch(db);
+                  batchCount = 0;
+                }
               }
+              if (batchCount > 0) {
+                await batch.commit();
+              }
+              setDbMetrics(prev => ({
+                ...prev,
+                writesTotal: prev.writesTotal + localList.length,
+                writesBatched: prev.writesBatched + Math.ceil(localList.length / 500),
+                lastOperationTime: new Date().toLocaleTimeString(),
+                lastOperationType: 'WRITE',
+                lastOperationStatus: 'SUCCESS'
+              }));
             }
           } catch (e) {
             console.error(`Error syncing collection ${collectionName}:`, e);
             const errMsg = e instanceof Error ? e.message : String(e);
+            setDbMetrics(prev => ({
+              ...prev,
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: 'READ',
+              lastOperationStatus: 'ERROR',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                [collectionName]: { docCount: 0, status: 'error', lastSynced: new Date().toLocaleTimeString() }
+              }
+            }));
             if (
               errMsg.toLowerCase().includes('quota') || 
               errMsg.toLowerCase().includes('exhausted') || 
@@ -1628,7 +2531,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           syncCollection('institutions', institutions, setInstitutions),
           syncCollection('students', students, setStudents),
           syncCollection('classes', classes, setClasses),
-          syncCollection('enrollments', enrollments, setEnrollments),
+          syncCollection('enrollments', enrollments, (remoteEnrollments) => {
+            if (Array.isArray(remoteEnrollments)) {
+              setEnrollments(remoteEnrollments.map(e => ({
+                ...e,
+                status: calculateEnrollmentStatus(e)
+              })));
+            }
+          }),
           syncCollection('providers', providers, setProviders),
           syncCollection('bankAccounts', bankAccounts, setBankAccounts),
           syncCollection('payments', payments, setPayments),
@@ -1643,7 +2553,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           syncCollection('financeCategories', financeCategories, setFinanceCategories),
           syncCollection('accountStatements', accountStatements, setAccountStatements),
           syncCollection('statementTransactions', statementTransactions, setStatementTransactions),
-          syncCollection('app_backups', backups, setBackups)
+          syncCollection('app_backups', backups, setBackups),
+          syncCollection('system_roles', systemRoles, (remoteRoles) => {
+            if (Array.isArray(remoteRoles) && remoteRoles.length > 0) {
+              setSystemRoles(remoteRoles as Role[]);
+              setInMemorySystemRoles(remoteRoles as Role[]);
+            }
+          })
         ]);
 
         // Sync catalogs configuration to the cloud concurrently
@@ -1651,8 +2567,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) {
             return;
           }
+          setDbMetrics(prev => ({
+            ...prev,
+            activeCollectionSyncs: {
+              ...prev.activeCollectionSyncs,
+              catalogs: { docCount: 0, status: 'syncing', lastSynced: new Date().toLocaleTimeString() }
+            }
+          }));
           try {
             const snap = await getDocs(collection(db, 'catalogs'));
+            const count = snap.size;
+            const fromCache = snap.metadata.fromCache;
+
+            setDbMetrics(prev => ({
+              ...prev,
+              readsTotal: prev.readsTotal + count,
+              readsCached: prev.readsCached + (fromCache ? count : 0),
+              readsServer: prev.readsServer + (fromCache ? 0 : count),
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: 'READ',
+              lastOperationStatus: 'SUCCESS',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                catalogs: { docCount: count, status: 'synced', lastSynced: new Date().toLocaleTimeString() }
+              }
+            }));
+
             if (!snap.empty) {
               const remoteCatalogs = { ...catalogs };
               snap.forEach(d => {
@@ -1664,13 +2604,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
               });
               setCatalogs(remoteCatalogs);
             } else {
+              const { writeBatch } = await import('firebase/firestore');
+              const batch = writeBatch(db);
+              const keys = Object.keys(catalogs);
               for (const [key, items] of Object.entries(catalogs)) {
-                await setDoc(doc(db, 'catalogs', key), { items: cleanForFirestore(items) });
+                batch.set(doc(db, 'catalogs', key), { items: cleanForFirestore(items) });
               }
+              await batch.commit();
+              setDbMetrics(prev => ({
+                ...prev,
+                writesTotal: prev.writesTotal + keys.length,
+                writesBatched: prev.writesBatched + 1,
+                lastOperationTime: new Date().toLocaleTimeString(),
+                lastOperationType: 'WRITE',
+                lastOperationStatus: 'SUCCESS'
+              }));
             }
           } catch (catErr) {
             console.error("Error syncing catalogs:", catErr);
             const errMsg = catErr instanceof Error ? catErr.message : String(catErr);
+            setDbMetrics(prev => ({
+              ...prev,
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: 'READ',
+              lastOperationStatus: 'ERROR',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                catalogs: { docCount: 0, status: 'error', lastSynced: new Date().toLocaleTimeString() }
+              }
+            }));
             if (
               errMsg.toLowerCase().includes('quota') || 
               errMsg.toLowerCase().includes('exhausted') || 
@@ -1695,18 +2657,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) {
             return;
           }
+          setDbMetrics(prev => ({
+            ...prev,
+            activeCollectionSyncs: {
+              ...prev.activeCollectionSyncs,
+              companyInfo: { docCount: 0, status: 'syncing', lastSynced: new Date().toLocaleTimeString() }
+            }
+          }));
           try {
             const { getDoc } = await import('firebase/firestore');
             const dRef = doc(db, 'companyInfo', 'main');
             const d = await getDoc(dRef);
+            const fromCache = d.metadata.fromCache;
+
+            setDbMetrics(prev => ({
+              ...prev,
+              readsTotal: prev.readsTotal + 1,
+              readsCached: prev.readsCached + (fromCache ? 1 : 0),
+              readsServer: prev.readsServer + (fromCache ? 0 : 1),
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: 'READ',
+              lastOperationStatus: 'SUCCESS',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                companyInfo: { docCount: 1, status: 'synced', lastSynced: new Date().toLocaleTimeString() }
+              }
+            }));
+
             if (d.exists()) {
               setCompanyInfo(d.data() as CompanyInfo);
             } else {
               await setDoc(dRef, cleanForFirestore(companyInfo));
+              setDbMetrics(prev => ({
+                ...prev,
+                writesTotal: prev.writesTotal + 1,
+                lastOperationTime: new Date().toLocaleTimeString(),
+                lastOperationType: 'WRITE',
+                lastOperationStatus: 'SUCCESS'
+              }));
             }
           } catch (compErr) {
             console.error("Error syncing companyInfo:", compErr);
             const errMsg = compErr instanceof Error ? compErr.message : String(compErr);
+            setDbMetrics(prev => ({
+              ...prev,
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: 'READ',
+              lastOperationStatus: 'ERROR',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                companyInfo: { docCount: 0, status: 'error', lastSynced: new Date().toLocaleTimeString() }
+              }
+            }));
             if (
               errMsg.toLowerCase().includes('quota') || 
               errMsg.toLowerCase().includes('exhausted') || 
@@ -1726,7 +2728,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             try {
               handleFirestoreError(compErr, OperationType.WRITE, 'companyInfo/main');
             } catch (jsonErr) {
-              throw jsonErr;
+              console.warn("Company info initial sync error handled:", jsonErr);
             }
           }
         };
@@ -1744,34 +2746,97 @@ export function AppProvider({ children }: { children: ReactNode }) {
     initFirestoreSync();
   }, []);
 
-  // Synchronize dynamic catalogs modifications back to cloud
+  // Track previous catalogs and companyInfo to prevent redundant/unnecessary cloud writes (optimized sync)
+  const prevCatalogsRef = useRef<Record<CatalogTypes, CatalogItem[]>>(catalogs);
+  const prevCompanyInfoRef = useRef<CompanyInfo>(companyInfo);
+
+  // Synchronize dynamic catalogs modifications back to cloud (only write keys that actually changed)
   useEffect(() => {
-    if (!firebaseSyncCompleted) return;
-    if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) return;
+    if (!firebaseSyncCompleted) {
+      prevCatalogsRef.current = catalogs;
+      return;
+    }
+    if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) {
+      prevCatalogsRef.current = catalogs;
+      return;
+    }
     
     const timer = setTimeout(() => {
       import('firebase/firestore').then(async ({ doc, setDoc }) => {
+        let changedCount = 0;
+        let bypassedCount = 0;
         for (const [key, items] of Object.entries(catalogs)) {
-          await setDoc(doc(db, 'catalogs', key), { items: cleanForFirestore(items) }).catch(err => {
-            console.error(`Error saving catalog ${key}:`, err);
-          });
+          const prevItems = prevCatalogsRef.current[key as CatalogTypes];
+          if (!prevItems || JSON.stringify(prevItems) !== JSON.stringify(items)) {
+            console.log(`[Firestore Optimization] Only saving changed catalog: ${key}`);
+            changedCount++;
+            await setDoc(doc(db, 'catalogs', key), { items: cleanForFirestore(items) }).catch(err => {
+              console.error(`Error saving catalog ${key}:`, err);
+            });
+          } else {
+            bypassedCount++;
+          }
         }
+        if (changedCount > 0) {
+          setDbMetrics(prev => ({
+            ...prev,
+            writesTotal: prev.writesTotal + changedCount,
+            savesBypassed: prev.savesBypassed + bypassedCount,
+            lastOperationTime: new Date().toLocaleTimeString(),
+            lastOperationType: 'WRITE',
+            lastOperationStatus: 'SUCCESS'
+          }));
+        } else if (bypassedCount > 0) {
+          setDbMetrics(prev => ({
+            ...prev,
+            savesBypassed: prev.savesBypassed + bypassedCount
+          }));
+        }
+        prevCatalogsRef.current = catalogs;
       });
     }, 500);
     return () => clearTimeout(timer);
   }, [catalogs, firebaseSyncCompleted]);
 
-  // Synchronize companyInfo updates back to cloud
+  // Synchronize companyInfo updates back to cloud (only when contents actually change)
   useEffect(() => {
-    if (!firebaseSyncCompleted) return;
-    if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) return;
+    if (!firebaseSyncCompleted) {
+      prevCompanyInfoRef.current = companyInfo;
+      return;
+    }
+    if (typeof window !== 'undefined' && (window as any).__firestore_quota_exceeded__) {
+      prevCompanyInfoRef.current = companyInfo;
+      return;
+    }
 
     const timer = setTimeout(() => {
+      if (JSON.stringify(prevCompanyInfoRef.current) === JSON.stringify(companyInfo)) {
+        setDbMetrics(prev => ({
+          ...prev,
+          savesBypassed: prev.savesBypassed + 1
+        }));
+        return;
+      }
       import('firebase/firestore').then(async ({ doc, setDoc }) => {
+        console.log(`[Firestore Optimization] Saving companyInfo updates`);
         await setDoc(doc(db, 'companyInfo', 'main'), cleanForFirestore(companyInfo)).catch(err => {
           console.error("Error saving companyInfo:", err);
-          handleFirestoreError(err, OperationType.WRITE, 'companyInfo/main');
+          try {
+            handleFirestoreError(err, OperationType.WRITE, 'companyInfo/main');
+          } catch (e) {
+            console.warn("Handled companyInfo write error:", e);
+          }
         });
+        setDbMetrics(prev => ({
+          ...prev,
+          writesTotal: prev.writesTotal + 1,
+          lastOperationTime: new Date().toLocaleTimeString(),
+          lastOperationType: 'WRITE',
+          lastOperationStatus: 'SUCCESS'
+        }));
+        prevCompanyInfoRef.current = companyInfo;
+      }).catch(err => {
+        console.warn("CompanyInfo async import/sync error handled:", err);
       });
     }, 500);
     return () => clearTimeout(timer);
@@ -1855,35 +2920,86 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const deleted = prevRef.current.filter(prev => !list.some(item => item.id === prev.id));
 
       if (addedOrUpdated.length > 0 || deleted.length > 0) {
-        import('firebase/firestore').then(async ({ doc, setDoc, deleteDoc }) => {
-          addedOrUpdated.forEach(item => {
-            setDoc(doc(db, collectionName, String(item.id)), cleanForFirestore(item)).catch(err => {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted')) {
-                if (typeof window !== 'undefined') {
-                  (window as any).__firestore_quota_exceeded__ = true;
-                  window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
-                }
-              } else {
-                handleFirestoreError(err, OperationType.WRITE, `${collectionName}/${item.id}`);
-              }
-            });
-          });
+        import('firebase/firestore').then(async ({ doc, writeBatch }) => {
+          try {
+            // Process additions and updates in chunks of 500 (Firestore writeBatch limit)
+            const allItemsToSave = [...addedOrUpdated];
+            let writeCount = 0;
+            let writeBatchesCount = 0;
+            while (allItemsToSave.length > 0) {
+              const chunk = allItemsToSave.splice(0, 500);
+              const batch = writeBatch(db);
+              chunk.forEach(item => {
+                batch.set(doc(db, collectionName, String(item.id)), cleanForFirestore(item));
+              });
+              await batch.commit();
+              writeCount += chunk.length;
+              writeBatchesCount++;
+              console.log(`[Firestore Optimization] Committed batch insert/update of ${chunk.length} items in ${collectionName}`);
+            }
 
-          deleted.forEach(item => {
-            deleteDoc(doc(db, collectionName, String(item.id))).catch(err => {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted')) {
-                if (typeof window !== 'undefined') {
-                  (window as any).__firestore_quota_exceeded__ = true;
-                  window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
-                }
-              } else {
-                handleFirestoreError(err, OperationType.DELETE, `${collectionName}/${item.id}`);
+            // Process deletions in chunks of 500
+            const allItemsToDelete = [...deleted];
+            let deleteCount = 0;
+            while (allItemsToDelete.length > 0) {
+              const chunk = allItemsToDelete.splice(0, 500);
+              const batch = writeBatch(db);
+              chunk.forEach(item => {
+                batch.delete(doc(db, collectionName, String(item.id)));
+              });
+              await batch.commit();
+              deleteCount += chunk.length;
+              writeBatchesCount++;
+              console.log(`[Firestore Optimization] Committed batch delete of ${chunk.length} items in ${collectionName}`);
+            }
+
+            setDbMetrics(prev => ({
+              ...prev,
+              writesTotal: prev.writesTotal + writeCount,
+              deletesTotal: prev.deletesTotal + deleteCount,
+              writesBatched: prev.writesBatched + writeBatchesCount,
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: writeCount > 0 ? 'WRITE' : 'DELETE',
+              lastOperationStatus: 'SUCCESS',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                [collectionName]: { docCount: (prev.activeCollectionSyncs[collectionName]?.docCount || 0) + writeCount - deleteCount, status: 'synced', lastSynced: new Date().toLocaleTimeString() }
               }
-            });
-          });
+            }));
+          } catch (err) {
+            console.error(`[Firestore Batch Sync Error] in collection ${collectionName}:`, err);
+            const errMsg = err instanceof Error ? err.message : String(err);
+            setDbMetrics(prev => ({
+              ...prev,
+              lastOperationTime: new Date().toLocaleTimeString(),
+              lastOperationType: 'WRITE',
+              lastOperationStatus: 'ERROR',
+              activeCollectionSyncs: {
+                ...prev.activeCollectionSyncs,
+                [collectionName]: { ...prev.activeCollectionSyncs[collectionName], status: 'error', lastSynced: new Date().toLocaleTimeString() }
+              }
+            }));
+            if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted') || errMsg.toLowerCase().includes('resource-exhausted')) {
+              if (typeof window !== 'undefined') {
+                (window as any).__firestore_quota_exceeded__ = true;
+                window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+              }
+            } else {
+              try {
+                handleFirestoreError(err, OperationType.WRITE, `${collectionName}/batch`);
+              } catch (e) {
+                console.warn(`[Firestore Batch Sync Error Handled] in ${collectionName}:`, e);
+              }
+            }
+          }
+        }).catch(err => {
+          console.warn(`[Firestore Batch Sync Promise Error Handled] in ${collectionName}:`, err);
         });
+      } else {
+        setDbMetrics(prev => ({
+          ...prev,
+          savesBypassed: prev.savesBypassed + 1
+        }));
       }
 
       prevRef.current = list;
@@ -1911,6 +3027,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useIncrementalFirebaseSync(accountStatements, 'accountStatements');
   useIncrementalFirebaseSync(statementTransactions, 'statementTransactions');
   useIncrementalFirebaseSync(backups, 'app_backups');
+  useIncrementalFirebaseSync(systemRoles, 'system_roles');
 
   // Sync / Deduplicate students on initial app load once
   useEffect(() => {
@@ -2173,7 +3290,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       
       const student = tx.studentId ? students.find(s => s.id === tx.studentId) : null;
       const currentInstId = tx.institutionId || student?.institutionId;
-      const currentInstitution = currentInstId ? institutions.find(i => i.id === Number(currentInstId)) : null;
+      const currentInstitution = currentInstId ? institutions.find(i => String(i.id) === String(currentInstId)) : null;
       const hasIvaEnabled = currentInstitution?.payWithIva === true;
       const ivaUSD = hasIvaEnabled ? baseAmountUSD * 0.16 : 0;
 
@@ -2199,7 +3316,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const student = tx.studentId ? students.find(s => s.id === tx.studentId) : null;
         const currentInstId = tx.institutionId || student?.institutionId;
-        const currentInstitution = currentInstId ? institutions.find(i => i.id === Number(currentInstId)) : null;
+        const currentInstitution = currentInstId ? institutions.find(i => String(i.id) === String(currentInstId)) : null;
         const hasIvaEnabled = currentInstitution?.payWithIva === true;
 
         const ivaUSD = hasIvaEnabled ? baseAmountUSD * 0.16 : 0;
@@ -2226,7 +3343,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const student = tx.studentId ? students.find(s => s.id === tx.studentId) : null;
         const currentInstId = tx.institutionId || student?.institutionId;
-        const currentInstitution = currentInstId ? institutions.find(i => i.id === Number(currentInstId)) : null;
+        const currentInstitution = currentInstId ? institutions.find(i => String(i.id) === String(currentInstId)) : null;
         const hasIvaEnabled = currentInstitution?.payWithIva === true;
 
         const ivaUSD = hasIvaEnabled ? baseAmountUSD * 0.16 : 0;
@@ -2270,7 +3387,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const updateFinancialTransaction = (id: string, data: Partial<FinancialTransaction>) => {
     setFinancialTransactions(prev => prev.map(t => {
-      if (t.id === id) {
+      if (String(t.id) === String(id)) {
         let type = data.type !== undefined ? data.type : t.type;
         let currency = data.currency !== undefined ? data.currency : t.currency;
         let amount = data.amount !== undefined ? data.amount : t.amount;
@@ -2293,9 +3410,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const currentRate = data.exchangeRate !== undefined ? Number(data.exchangeRate) : t.exchangeRate;
           const baseAmountUSD = originalCurrency === 'USD' ? originalAmount : (currentRate !== 0 ? originalAmount / currentRate : originalAmount / 18.0);
           
-          const student = studentId ? students.find(s => s.id === studentId) : null;
+          const student = studentId ? students.find(s => String(s.id) === String(studentId)) : null;
           const currentInstId = institutionId || student?.institutionId;
-          const currentInstitution = currentInstId ? institutions.find(i => i.id === Number(currentInstId)) : null;
+          const currentInstitution = currentInstId ? institutions.find(i => String(i.id) === String(currentInstId)) : null;
           const hasIvaEnabled = currentInstitution?.payWithIva === true;
           const ivaUSD = hasIvaEnabled ? baseAmountUSD * 0.16 : 0;
 
@@ -2319,9 +3436,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const baseAmountUSD = formCurrency === 'USD' ? baseAmount : (rate !== 0 ? baseAmount / rate : 0);
             const baseAmountMXN = formCurrency === 'MXN' ? baseAmount : baseAmount * rate;
 
-            const student = studentId ? students.find(s => s.id === studentId) : null;
+            const student = studentId ? students.find(s => String(s.id) === String(studentId)) : null;
             const currentInstId = institutionId || student?.institutionId;
-            const currentInstitution = currentInstId ? institutions.find(i => i.id === Number(currentInstId)) : null;
+            const currentInstitution = currentInstId ? institutions.find(i => String(i.id) === String(currentInstId)) : null;
             const hasIvaEnabled = currentInstitution?.payWithIva === true;
 
             const ivaUSD = hasIvaEnabled ? baseAmountUSD * 0.16 : 0;
@@ -2373,7 +3490,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         addActivity({
-          institutionId: studentId ? students.find(s => s.id === studentId)?.institutionId || 0 : 0,
+          institutionId: studentId ? students.find(s => String(s.id) === String(studentId))?.institutionId || 0 : 0,
           date: new Date().toISOString(),
           description: `Modificó registro de pago: ${data.description || t.description}`
         });
@@ -2395,7 +3512,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteFinancialTransaction = (id: string) => {
-    setFinancialTransactions(prev => prev.filter(t => t.id !== id));
+    setFinancialTransactions(prev => prev.filter(t => String(t.id) !== String(id)));
   };
 
   const addAccountStatement = (statement: Omit<AccountStatement, "id" | "uploadDate">, transactions: Omit<StatementTransaction, "id" | "statementId" | "saved" | "reconciled">[]) => {
@@ -2459,7 +3576,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateUser = (id: number, data: Partial<User>) => {
     setUsers(prev => prev.map(u => u.id === id ? { ...u, ...data } : u));
     if (currentUser && currentUser.id === id) {
-      setCurrentUser(prev => prev ? { ...prev, ...data } : null);
+      setCurrentUser(prev => {
+        const updated = prev ? { ...prev, ...data } : null;
+        if (updated) {
+          try {
+            localStorage.setItem('currentUser', JSON.stringify(updated));
+          } catch (e) {
+            console.error('Error saving updated currentUser to localStorage', e);
+          }
+        }
+        return updated;
+      });
     }
   };
 
@@ -2682,12 +3809,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPayments(prev => prev.filter(p => p.id !== id));
   };
 
+  const syncEnrollmentStatuses = useCallback((): number => {
+    let updatedCount = 0;
+    setEnrollments(prev => {
+      let changed = false;
+      const updated = prev.map(e => {
+        const autoStatus = calculateEnrollmentStatus(e);
+        if (e.status !== autoStatus) {
+          updatedCount++;
+          changed = true;
+          return { ...e, status: autoStatus };
+        }
+        return e;
+      });
+      return changed ? updated : prev;
+    });
+    return updatedCount;
+  }, []);
+
+  // Run automatic status evaluation on mount
+  useEffect(() => {
+    syncEnrollmentStatuses();
+  }, [syncEnrollmentStatuses]);
+
   const addEnrollment = (enrollment: Omit<Enrollment, "id">) => {
-    setEnrollments(prev => [...prev, { ...enrollment, id: generateUniqueId() }]);
+    const computedStatus = calculateEnrollmentStatus(enrollment);
+    const finalStatus = enrollment.status === 'Withdrawn' ? 'Withdrawn' : computedStatus;
+    const newEnrollment: Enrollment = {
+      ...enrollment,
+      status: finalStatus,
+      id: generateUniqueId()
+    };
+    setEnrollments(prev => [...prev, newEnrollment]);
   };
 
   const updateEnrollment = (id: number, data: Partial<Enrollment>) => {
-    setEnrollments(prev => prev.map(e => e.id === id ? { ...e, ...data } : e));
+    setEnrollments(prev => prev.map(e => {
+      if (e.id === id) {
+        const merged: Enrollment = { ...e, ...data };
+        const autoStatus = calculateEnrollmentStatus(merged);
+        const finalStatus = data.status === 'Withdrawn' ? 'Withdrawn' : autoStatus;
+        return {
+          ...merged,
+          status: finalStatus
+        };
+      }
+      return e;
+    }));
   };
 
   const deleteEnrollment = (id: number) => {
@@ -2764,19 +3932,295 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const addTask = (task: Omit<Task, "id">) => {
-    const newTask = { ...task, id: generateUniqueId() };
+  const addTeam = (teamData: Omit<Team, "id" | "createdAt">): Team => {
+    const newTeam: Team = {
+      ...teamData,
+      id: generateUniqueId(),
+      createdAt: new Date().toISOString()
+    };
+    setTeams(prev => [...prev, newTeam]);
+    addActivity({
+      institutionId: 0,
+      date: new Date().toISOString(),
+      description: `Nuevo equipo de trabajo creado: ${newTeam.name}`
+    });
+    return newTeam;
+  };
+
+  const updateTeam = (id: number, data: Partial<Team>) => {
+    setTeams(prev => prev.map(tm => tm.id === id ? { ...tm, ...data } : tm));
+    addActivity({
+      institutionId: 0,
+      date: new Date().toISOString(),
+      description: `Equipo de trabajo ID ${id} actualizado.`
+    });
+  };
+
+  const deleteTeam = (id: number) => {
+    setTeams(prev => prev.filter(tm => tm.id !== id));
+    setUsers(prev => prev.map(u => u.teamId === id ? { ...u, teamId: undefined } : u));
+    addActivity({
+      institutionId: 0,
+      date: new Date().toISOString(),
+      description: `Equipo de trabajo ID ${id} eliminado.`
+    });
+  };
+
+  const addTask = (task: Omit<Task, "id">, options?: { skipNotification?: boolean; forceEmail?: boolean; forceWhatsApp?: boolean }) => {
+    // 1. Resolve all assigned users (from explicit userIds array, from single userId, and from team members)
+    let resolvedUserIds: number[] = task.userIds ? [...task.userIds] : [];
+    
+    if (task.teamId) {
+      const teamUserIds = users.filter(u => u.teamId === task.teamId).map(u => u.id);
+      resolvedUserIds = Array.from(new Set([...resolvedUserIds, ...teamUserIds]));
+    }
+    
+    if (task.userId && !resolvedUserIds.includes(task.userId)) {
+      resolvedUserIds.push(task.userId);
+    }
+
+    const primaryUserId = resolvedUserIds.length > 0 ? resolvedUserIds[0] : task.userId;
+
+    const newTask: Task = { 
+      ...task, 
+      id: generateUniqueId(),
+      userIds: resolvedUserIds,
+      userId: primaryUserId
+    };
+
     setTasks(prev => [...prev, newTask]);
+
+    // Dispatch assignment notification to ALL assigned users via Email / WhatsApp
+    if (!options?.skipNotification && resolvedUserIds.length > 0) {
+      const assignedUsers = users.filter(u => resolvedUserIds.includes(u.id));
+      const teamObj = task.teamId ? teams.find(tm => tm.id === task.teamId) : undefined;
+      
+      assignedUsers.forEach(assignedUser => {
+        sendTaskAssignmentNotification(newTask, assignedUser, {
+          institutions,
+          leads: (window as any).__crmLeadsCache,
+          teamName: teamObj?.name,
+          requestedByName: task.requestedBy || currentUser?.name || "Admin Principal",
+          forceEmail: options?.forceEmail,
+          forceWhatsApp: options?.forceWhatsApp
+        }).then(result => {
+          if (result.emailDispatched || result.whatsappDispatched) {
+            console.log(`[Task Notification] Assignment alert dispatched for task "${task.title}" to ${assignedUser.name}`, result);
+          }
+        }).catch(err => {
+          console.error("[Task Notification] Failed to dispatch assignment notification:", err);
+        });
+      });
+    }
+
     if (task.institutionId) {
+      const instId = task.institutionId;
+      setInstitutions(prev => prev.map(inst => {
+        if (inst.id === instId) {
+          return {
+            ...inst,
+            lastInteractionDate: new Date().toISOString(),
+            lastInteractionType: `Tarea (${task.type || 'Seguimiento'})`
+          };
+        }
+        return inst;
+      }));
       addActivity({ institutionId: task.institutionId, date: new Date().toISOString(), description: `Tarea "${task.title}" creada.` });
     }
   };
 
+  const notifyTaskAssignee = async (task: Task, forceEmail?: boolean, forceWhatsApp?: boolean): Promise<TaskNotificationResult> => {
+    // Resolve all target user IDs
+    let targetUserIds: number[] = [];
+    if (task.userIds && task.userIds.length > 0) {
+      targetUserIds = [...task.userIds];
+    }
+    if (task.teamId) {
+      const teamUserIds = users.filter(u => u.teamId === task.teamId).map(u => u.id);
+      targetUserIds = Array.from(new Set([...targetUserIds, ...teamUserIds]));
+    }
+    if (task.userId && !targetUserIds.includes(task.userId)) {
+      targetUserIds.push(task.userId);
+    }
+
+    if (targetUserIds.length === 0) {
+      return { emailDispatched: false, whatsappDispatched: false, errors: ["La tarea no tiene usuarios o equipo asignado."] };
+    }
+
+    const assignedUsers = users.filter(u => targetUserIds.includes(u.id));
+    if (assignedUsers.length === 0) {
+      return { emailDispatched: false, whatsappDispatched: false, errors: ["No se encontraron los usuarios asignados en el sistema."] };
+    }
+
+    const teamObj = task.teamId ? teams.find(tm => tm.id === task.teamId) : undefined;
+    let combinedResult: TaskNotificationResult = {
+      emailDispatched: false,
+      whatsappDispatched: false,
+      errors: []
+    };
+
+    for (const assignedUser of assignedUsers) {
+      const res = await sendTaskAssignmentNotification(task, assignedUser, {
+        institutions,
+        teamName: teamObj?.name,
+        requestedByName: task.requestedBy || currentUser?.name || "Admin Principal",
+        forceEmail: forceEmail,
+        forceWhatsApp: forceWhatsApp
+      });
+      if (res.emailDispatched) combinedResult.emailDispatched = true;
+      if (res.whatsappDispatched) combinedResult.whatsappDispatched = true;
+      if (res.emailSuccess) combinedResult.emailSuccess = true;
+      if (res.whatsappSuccess) combinedResult.whatsappSuccess = true;
+      if (res.emailSimulated) combinedResult.emailSimulated = true;
+      if (res.whatsappSimulated) combinedResult.whatsappSimulated = true;
+      if (res.errors.length > 0) combinedResult.errors.push(...res.errors);
+      if (res.emailMessage) combinedResult.emailMessage = res.emailMessage;
+      if (res.whatsappMessage) combinedResult.whatsappMessage = res.whatsappMessage;
+    }
+
+    return combinedResult;
+  };
+
+  const notifyTaskDeadline = async (task: Task, forceEmail?: boolean, forceWhatsApp?: boolean): Promise<TaskNotificationResult> => {
+    let targetUserIds: number[] = [];
+    if (task.userIds && task.userIds.length > 0) {
+      targetUserIds = [...task.userIds];
+    }
+    if (task.teamId) {
+      const teamUserIds = users.filter(u => u.teamId === task.teamId).map(u => u.id);
+      targetUserIds = Array.from(new Set([...targetUserIds, ...teamUserIds]));
+    }
+    if (task.userId && !targetUserIds.includes(task.userId)) {
+      targetUserIds.push(task.userId);
+    }
+
+    if (targetUserIds.length === 0) {
+      return { emailDispatched: false, whatsappDispatched: false, errors: ["La tarea no tiene usuarios o equipo asignado."] };
+    }
+
+    const assignedUsers = users.filter(u => targetUserIds.includes(u.id));
+    if (assignedUsers.length === 0) {
+      return { emailDispatched: false, whatsappDispatched: false, errors: ["No se encontraron los usuarios asignados en el sistema."] };
+    }
+
+    const teamObj = task.teamId ? teams.find(tm => tm.id === task.teamId) : undefined;
+    let combinedResult: TaskNotificationResult = {
+      emailDispatched: false,
+      whatsappDispatched: false,
+      errors: []
+    };
+
+    for (const assignedUser of assignedUsers) {
+      const res = await sendTaskDeadlineNotification(task, assignedUser, {
+        institutions,
+        teamName: teamObj?.name,
+        forceEmail: forceEmail,
+        forceWhatsApp: forceWhatsApp
+      });
+      if (res.emailDispatched) combinedResult.emailDispatched = true;
+      if (res.whatsappDispatched) combinedResult.whatsappDispatched = true;
+      if (res.emailSuccess) combinedResult.emailSuccess = true;
+      if (res.whatsappSuccess) combinedResult.whatsappSuccess = true;
+      if (res.emailSimulated) combinedResult.emailSimulated = true;
+      if (res.whatsappSimulated) combinedResult.whatsappSimulated = true;
+      if (res.errors.length > 0) combinedResult.errors.push(...res.errors);
+      if (res.emailMessage) combinedResult.emailMessage = res.emailMessage;
+      if (res.whatsappMessage) combinedResult.whatsappMessage = res.whatsappMessage;
+    }
+
+    return combinedResult;
+  };
+
+  const triggerDeadlineScan = async (forceAll?: boolean) => {
+    return await checkAndNotifyUpcomingDeadlines(tasks, users, institutions, undefined, { forceAll, teams });
+  };
+
+  // Background automated checker for approaching deadlines (runs periodically)
+  useEffect(() => {
+    if (!tasks.length || !users.length) return;
+
+    const runAutomatedDeadlineCheck = () => {
+      checkAndNotifyUpcomingDeadlines(tasks, users, institutions, undefined, { teams }).then(res => {
+        if (res.notifiedTasks.length > 0) {
+          console.log(`[Automated Deadline Checker] Dispatched ${res.notifiedTasks.length} deadline alerts to assignees.`);
+        }
+      }).catch(err => {
+        console.error("[Automated Deadline Checker] Error:", err);
+      });
+    };
+
+    // Initial check shortly after load
+    const timeoutId = setTimeout(runAutomatedDeadlineCheck, 3500);
+
+    // Periodic check every 30 minutes
+    const intervalId = setInterval(runAutomatedDeadlineCheck, 30 * 60 * 1000);
+
+    return () => {
+      clearTimeout(timeoutId);
+      clearInterval(intervalId);
+    };
+  }, [tasks, users, institutions, teams]);
+
   const updateTask = (id: number, data: Partial<Task>) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...data } : t));
-    const task = tasks.find(t => t.id === id); // This might be stale initially but it's okay for now
-    if (data.status === 'Completada' && task?.institutionId) {
-      addActivity({ institutionId: task.institutionId, date: new Date().toISOString(), description: `Tarea "${task.title}" marcada como completada.` });
+    const prevTask = tasks.find(t => t.id === id);
+    
+    setTasks(prev => prev.map(t => {
+      if (t.id === id) {
+        let updatedUserIds = data.userIds !== undefined ? [...data.userIds] : (t.userIds ? [...t.userIds] : []);
+        const newTeamId = data.teamId !== undefined ? data.teamId : t.teamId;
+
+        if (data.teamId !== undefined && data.teamId) {
+          const teamUserIds = users.filter(u => u.teamId === data.teamId).map(u => u.id);
+          updatedUserIds = Array.from(new Set([...updatedUserIds, ...teamUserIds]));
+        }
+
+        if (data.userId !== undefined && data.userId && !updatedUserIds.includes(data.userId)) {
+          updatedUserIds.push(data.userId);
+        }
+
+        const primaryUserId = updatedUserIds.length > 0 ? updatedUserIds[0] : (data.userId !== undefined ? data.userId : t.userId);
+
+        const updated = {
+          ...t,
+          ...data,
+          teamId: newTeamId,
+          userIds: updatedUserIds,
+          userId: primaryUserId
+        };
+
+        // If newly assigned users, notify them
+        const prevUserIds = t.userIds || (t.userId ? [t.userId] : []);
+        const newlyAssignedIds = updatedUserIds.filter(uid => !prevUserIds.includes(uid));
+        if (newlyAssignedIds.length > 0) {
+          const newAssignees = users.filter(u => newlyAssignedIds.includes(u.id));
+          const teamObj = newTeamId ? teams.find(tm => tm.id === newTeamId) : undefined;
+          newAssignees.forEach(newAssignee => {
+            sendTaskAssignmentNotification(updated, newAssignee, {
+              institutions,
+              teamName: teamObj?.name,
+              requestedByName: updated.requestedBy || currentUser?.name || "Admin Principal"
+            }).catch(err => console.error("Error sending reassignment notification:", err));
+          });
+        }
+
+        return updated;
+      }
+      return t;
+    }));
+
+    if (data.status === 'Completada' && prevTask?.institutionId) {
+      const instId = prevTask.institutionId;
+      setInstitutions(prev => prev.map(inst => {
+        if (inst.id === instId) {
+          return {
+            ...inst,
+            lastInteractionDate: new Date().toISOString(),
+            lastInteractionType: `Tarea Completada (${prevTask.title})`
+          };
+        }
+        return inst;
+      }));
+      addActivity({ institutionId: prevTask.institutionId, date: new Date().toISOString(), description: `Tarea "${prevTask.title}" marcada como completada.` });
     }
   };
 
@@ -2785,12 +4229,278 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addActivity = (activity: Omit<Activity, "id" | "userName">) => {
+    const actDate = activity.date || new Date().toISOString();
     setActivities(prev => [{ 
       ...activity, 
+      date: actDate,
       id: generateUniqueId(),
       userName: currentUser?.name || 'Sistema'
     }, ...prev]);
+
+    if (activity.institutionId && activity.institutionId !== 0) {
+      const instId = activity.institutionId;
+      setInstitutions(prev => prev.map(inst => {
+        if (inst.id === instId) {
+          return {
+            ...inst,
+            lastInteractionDate: actDate,
+            lastInteractionType: 'Actividad / Bitácora'
+          };
+        }
+        return inst;
+      }));
+    }
   };
+
+  const updateInstitutionLastInteraction = useCallback((institutionId: number, interactionDate?: string, interactionType?: string, description?: string) => {
+    const dateStr = interactionDate || new Date().toISOString();
+    const typeStr = interactionType || 'Interacción Manual';
+
+    setInstitutions(prev => prev.map(inst => {
+      if (inst.id === institutionId) {
+        return {
+          ...inst,
+          lastInteractionDate: dateStr,
+          lastInteractionType: typeStr
+        };
+      }
+      return inst;
+    }));
+
+    addActivity({
+      institutionId,
+      date: dateStr,
+      description: description ? `[SLA Interacción] ${typeStr}: ${description}` : `Interacción registrada: ${typeStr}`
+    });
+  }, [currentUser]);
+
+  const getInstitutionSLA = useCallback((institutionOrId: Institution | number): InstitutionSLAInfo => {
+    const inst = typeof institutionOrId === 'number' 
+      ? institutions.find(i => i.id === institutionOrId)
+      : institutionOrId;
+    
+    const instId = typeof institutionOrId === 'number' ? institutionOrId : inst?.id || 0;
+    const instName = inst?.tradeName || inst?.name || `Institución #${instId}`;
+
+    // 1. Determine last interaction date and type
+    let lastDate: string | null = inst?.lastInteractionDate || null;
+    let lastType: string = inst?.lastInteractionType || 'Sin interacción previa';
+
+    // Look for candidates among activities, tasks and financial transactions
+    const instActs = activities.filter(a => a.institutionId === instId);
+    const instTasks = tasks.filter(t => t.institutionId === instId);
+    const instTx = financialTransactions.filter(tx => tx.institutionId === instId);
+
+    const candidates: Array<{ date: string; type: string }> = [];
+    if (lastDate) candidates.push({ date: lastDate, type: lastType });
+
+    instActs.forEach(a => {
+      if (a.date) candidates.push({ date: a.date, type: 'Actividad / Bitácora' });
+    });
+    instTasks.forEach(t => {
+      if (t.dueDate) candidates.push({ date: t.dueDate, type: `Tarea: ${t.type || 'Seguimiento'}` });
+    });
+    instTx.forEach(tx => {
+      if (tx.date) candidates.push({ date: tx.date, type: 'Transacción Financiera' });
+    });
+
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const mostRecent = candidates[0];
+      if (mostRecent.date && !isNaN(new Date(mostRecent.date).getTime())) {
+        lastDate = mostRecent.date;
+        lastType = mostRecent.type;
+      }
+    }
+
+    // 2. Look up SLA limit in catalog
+    const slaCatalog = catalogs['Fases y Alertas de Inactividad (SLA)'] || [];
+    const statusLower = (inst?.status || 'Captación').toLowerCase().trim();
+    const matchedSla = slaCatalog.find(s => {
+      const sName = s.name.toLowerCase().trim();
+      return sName === statusLower || sName.includes(statusLower) || statusLower.includes(sName) || 
+             (statusLower === 'captación' && (sName.includes('inicio') || sName.includes('captac') || sName.includes('lead')));
+    });
+
+    const slaLimitDays = (matchedSla && matchedSla.slaDays !== undefined && matchedSla.slaDays !== null) ? matchedSla.slaDays : 3;
+    const indicatorName = (statusLower === 'captación' || statusLower === 'inicio') 
+      ? (matchedSla?.name || 'Captación (Inicio)') 
+      : (matchedSla?.name || inst?.status || 'Captación (Inicio)');
+
+    // 3. Compute days inactive
+    let daysInactive = 0;
+    if (lastDate) {
+      const interactionTime = new Date(lastDate).getTime();
+      if (!isNaN(interactionTime)) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const interDate = new Date(lastDate);
+        interDate.setHours(0, 0, 0, 0);
+        const diffMs = today.getTime() - interDate.getTime();
+        daysInactive = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+      }
+    } else if (inst?.createdAt) {
+      const createdTime = new Date(inst.createdAt).getTime();
+      if (!isNaN(createdTime)) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const crDate = new Date(inst.createdAt);
+        crDate.setHours(0, 0, 0, 0);
+        const diffMs = today.getTime() - crDate.getTime();
+        daysInactive = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+      }
+    }
+
+    // 4. Evaluate status level
+    let status: SLAStatusLevel = 'en_tiempo';
+    let isOverdue = false;
+    let overdueDays = 0;
+
+    if (daysInactive > slaLimitDays) {
+      status = 'vencido';
+      isOverdue = true;
+      overdueDays = daysInactive - slaLimitDays;
+    } else if (daysInactive >= Math.max(1, Math.floor(slaLimitDays * 0.65))) {
+      status = 'por_vencer';
+      isOverdue = false;
+      overdueDays = 0;
+    } else {
+      status = 'en_tiempo';
+      isOverdue = false;
+      overdueDays = 0;
+    }
+
+    let label = '';
+    let badgeClass = '';
+    let badgeBorderClass = '';
+    let badgeBgClass = '';
+    let badgeTextClass = '';
+    let dotColorClass = '';
+
+    if (status === 'vencido') {
+      label = `Inactiva (${daysInactive}d / ${slaLimitDays}d - ${overdueDays}d retraso)`;
+      badgeClass = 'bg-rose-50 text-rose-700 border-rose-200';
+      badgeBorderClass = 'border-rose-200';
+      badgeBgClass = 'bg-rose-50';
+      badgeTextClass = 'text-rose-700';
+      dotColorClass = 'bg-rose-500';
+    } else if (status === 'por_vencer') {
+      label = `Por vencer (${daysInactive}d / ${slaLimitDays}d)`;
+      badgeClass = 'bg-amber-50 text-amber-700 border-amber-200';
+      badgeBorderClass = 'border-amber-200';
+      badgeBgClass = 'bg-amber-50';
+      badgeTextClass = 'text-amber-700';
+      dotColorClass = 'bg-amber-500';
+    } else {
+      label = `Al día (${daysInactive}d / ${slaLimitDays}d)`;
+      badgeClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      badgeBorderClass = 'border-emerald-200';
+      badgeBgClass = 'bg-emerald-50';
+      badgeTextClass = 'text-emerald-700';
+      dotColorClass = 'bg-emerald-500';
+    }
+
+    return {
+      institutionId: instId,
+      institutionName: instName,
+      lastInteractionDate: lastDate,
+      lastInteractionType: lastType,
+      daysInactive,
+      slaLimitDays,
+      status,
+      label,
+      indicatorName,
+      isOverdue,
+      overdueDays,
+      badgeClass,
+      badgeBorderClass,
+      badgeBgClass,
+      badgeTextClass,
+      dotColorClass
+    };
+  }, [institutions, activities, tasks, financialTransactions, catalogs]);
+
+  const getLeadSlaInfo = useCallback((lead: { status?: string; createdAt?: string; lastInteractionDate?: string; name?: string; id?: string | number }): InstitutionSLAInfo => {
+    const leadName = lead.name || 'Lead';
+    const statusLower = (lead.status || 'Captación').toLowerCase().trim();
+    const slaCatalog = catalogs['Fases y Alertas de Inactividad (SLA)'] || [];
+    const matchedSla = slaCatalog.find(s => {
+      const sName = s.name.toLowerCase().trim();
+      return sName === statusLower || sName.includes(statusLower) || statusLower.includes(sName) || 
+             (statusLower === 'captación' && (sName.includes('inicio') || sName.includes('captac') || sName.includes('lead')));
+    });
+
+    const slaLimitDays = (matchedSla && matchedSla.slaDays !== undefined && matchedSla.slaDays !== null) ? matchedSla.slaDays : 3;
+    const indicatorName = (statusLower === 'captación' || statusLower === 'inicio') 
+      ? (matchedSla?.name || 'Captación (Inicio)') 
+      : (matchedSla?.name || lead.status || 'Captación (Inicio)');
+
+    let lastDate: string | null = lead.lastInteractionDate || lead.createdAt || null;
+    let daysInactive = 0;
+    if (lastDate) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const interDate = new Date(lastDate);
+      interDate.setHours(0, 0, 0, 0);
+      if (!isNaN(interDate.getTime())) {
+        const diffMs = today.getTime() - interDate.getTime();
+        daysInactive = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+      }
+    }
+
+    let status: SLAStatusLevel = 'en_tiempo';
+    let isOverdue = false;
+    let overdueDays = 0;
+
+    if (daysInactive > slaLimitDays) {
+      status = 'vencido';
+      isOverdue = true;
+      overdueDays = daysInactive - slaLimitDays;
+    } else if (daysInactive >= Math.max(1, Math.floor(slaLimitDays * 0.65))) {
+      status = 'por_vencer';
+    }
+
+    return {
+      institutionId: Number(lead.id) || 0,
+      institutionName: leadName,
+      lastInteractionDate: lastDate,
+      lastInteractionType: 'Interacción CRM',
+      daysInactive,
+      slaLimitDays,
+      status,
+      label: status === 'vencido' 
+        ? `Inactiva (${daysInactive}d / ${slaLimitDays}d - ${overdueDays}d retraso)` 
+        : status === 'por_vencer' 
+        ? `Por vencer (${daysInactive}d / ${slaLimitDays}d)` 
+        : `Al día (${daysInactive}d / ${slaLimitDays}d)`,
+      indicatorName,
+      isOverdue,
+      overdueDays,
+      badgeClass: status === 'vencido' 
+        ? 'bg-rose-50 text-rose-700 border-rose-200' 
+        : status === 'por_vencer' 
+        ? 'bg-amber-50 text-amber-700 border-amber-200' 
+        : 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      badgeBorderClass: status === 'vencido' ? 'border-rose-200' : status === 'por_vencer' ? 'border-amber-200' : 'border-emerald-200',
+      badgeBgClass: status === 'vencido' ? 'bg-rose-50' : status === 'por_vencer' ? 'bg-amber-50' : 'bg-emerald-50',
+      badgeTextClass: status === 'vencido' ? 'text-rose-700' : status === 'por_vencer' ? 'text-amber-700' : 'text-emerald-700',
+      dotColorClass: status === 'vencido' ? 'bg-rose-500' : status === 'por_vencer' ? 'bg-amber-500' : 'bg-emerald-500'
+    };
+  }, [catalogs]);
+
+  const slaSummary = useMemo(() => {
+    const alerts: InstitutionSLAInfo[] = institutions.map(i => getInstitutionSLA(i));
+    const enTiempo = alerts.filter(a => a.status === 'en_tiempo').length;
+    const porVencer = alerts.filter(a => a.status === 'por_vencer').length;
+    const vencidos = alerts.filter(a => a.status === 'vencido').length;
+    return {
+      total: institutions.length,
+      enTiempo,
+      porVencer,
+      vencidos,
+      alerts
+    };
+  }, [institutions, getInstitutionSLA]);
 
   const addProviderProductService = (service: Omit<ProviderProductService, "id">) => {
     const newService = { ...service, id: generateUniqueId() };
@@ -2879,6 +4589,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProviderSpecificProducts(prev => prev.filter(p => p.id !== id));
   };
 
+  const updateSystemRoles = async (newRoles: Role[]) => {
+    setSystemRoles(newRoles);
+    setInMemorySystemRoles(newRoles);
+  };
+
+  const restoreDefaultRoles = async () => {
+    setSystemRoles(DEFAULT_ROLES);
+    setInMemorySystemRoles(DEFAULT_ROLES);
+  };
+
+  const addSystemRole = async (roleData: Omit<Role, "id">) => {
+    const newRole: Role = {
+      ...roleData,
+      id: String(generateUniqueId())
+    };
+    const updated = [...systemRoles, newRole];
+    setSystemRoles(updated);
+    setInMemorySystemRoles(updated);
+    return newRole;
+  };
+
+  const deleteSystemRole = async (id: string) => {
+    const updated = systemRoles.filter(r => r.id !== id);
+    setSystemRoles(updated);
+    setInMemorySystemRoles(updated);
+  };
+
   // Ensure 'wrhg1970@gmail.com' is registered as a Superadministrador on initialization
   useEffect(() => {
     const adminEmail = 'wrhg1970@gmail.com';
@@ -2906,17 +4643,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   return (
     <AppContext.Provider value={{
+      firebaseSyncCompleted,
       syncErrors,
       institutions, students, classes, providers, bankAccounts, enrollments, payments, auditLogs, addAuditLog, contacts, tasks, activities, catalogs, users, currentUser, setCurrentUser,
+      teams, addTeam, updateTeam, deleteTeam,
       providerProductServices, addProviderProductService, updateProviderProductService, deleteProviderProductService,
       providerSpecificProducts, addProviderSpecificProduct, updateProviderSpecificProduct, deleteProviderSpecificProduct,
       companyInfo, updateCompanyInfo, companyDocuments, addCompanyDocument, updateCompanyDocument, deleteCompanyDocument,
       financeCategories, addFinanceCategory, updateFinanceCategory, deleteFinanceCategory,
       financialTransactions, addFinancialTransaction, updateFinancialTransaction, deleteFinancialTransaction,
       accountStatements, statementTransactions, addAccountStatement, deleteAccountStatement, updateStatementTransaction, deleteStatementTransaction,
-      addInstitution, updateInstitution, deleteInstitution, clearAllInstitutions, clearAllClasses, addStudent, updateStudent, deleteStudent, addClass, updateClass, deleteClass, addProvider, updateProvider, addBankAccount, updateBankAccount, addPayment, updatePayment, deletePayment, addEnrollment, updateEnrollment, deleteEnrollment,
-      addContact, updateContact, deleteContact, addTask, updateTask, deleteTask, addActivity, addCatalogItem, updateCatalogItem, deleteCatalogItem, addUser, updateUser, deleteUser,
-      backups, triggerFullBackup, restoreBackup, deleteBackup
+      addInstitution, updateInstitution, deleteInstitution, clearAllInstitutions, clearAllClasses, addStudent, updateStudent, deleteStudent, addClass, updateClass, deleteClass, addProvider, updateProvider, addBankAccount, updateBankAccount, addPayment, updatePayment, deletePayment, addEnrollment, updateEnrollment, deleteEnrollment, syncEnrollmentStatuses,
+      addContact, updateContact, deleteContact, addTask, updateTask, deleteTask, notifyTaskAssignee, notifyTaskDeadline, triggerDeadlineScan, addActivity, addCatalogItem, updateCatalogItem, deleteCatalogItem, addUser, updateUser, deleteUser,
+      getInstitutionSLA, updateInstitutionLastInteraction, slaSummary, getLeadSlaInfo,
+      backups, triggerFullBackup, restoreBackup, deleteBackup,
+      systemRoles, updateSystemRoles, restoreDefaultRoles, addSystemRole, deleteSystemRole,
+      dbMetrics, resetDbMetrics
     }}>
       {children}
     </AppContext.Provider>

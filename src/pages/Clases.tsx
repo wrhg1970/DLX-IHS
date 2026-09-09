@@ -1,14 +1,18 @@
-import { BookOpen, Users, Globe, DollarSign, Plus, Trash2, LayoutGrid, List, CheckSquare, Search, Filter, Calendar, X, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
-import React, { useState } from "react";
+import { BookOpen, Users, Globe, DollarSign, Plus, Trash2, LayoutGrid, List, CheckSquare, Search, Filter, Calendar, X, ArrowUpDown, ArrowUp, ArrowDown, Archive, ArchiveRestore, Check } from "lucide-react";
+import React, { useState, useMemo } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
 import { useNavigate } from "react-router-dom";
+import { hasPermission } from "../utils/permissionCheck";
 
 export function Clases() {
   const { classes, addClass, updateClass, deleteClass, clearAllClasses, providers, enrollments, providerProductServices, currentUser } = useAppContext();
   const navigate = useNavigate();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [classToDelete, setClassToDelete] = useState<{ id: number; name: string; numEnrolled: number } | null>(null);
+  const [classToArchive, setClassToArchive] = useState<{ id: number; name: string; isArchived: boolean; numEnrolled: number } | null>(null);
+  const [bulkArchiveConfirm, setBulkArchiveConfirm] = useState<'archive' | 'unarchive' | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showClearAllModal, setShowClearAllModal] = useState(false);
   const [confirmClearText, setConfirmClearText] = useState("");
   
@@ -19,13 +23,18 @@ export function Clases() {
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
 
   // Filters state
+  const [filterArchiveStatus, setFilterArchiveStatus] = useState<'active' | 'archived' | 'all'>('active');
   const [filterProviderId, setFilterProviderId] = useState<string>('all');
   const [filterCreditType, setFilterCreditType] = useState<string>('all');
   const [filterValidityStatus, setFilterValidityStatus] = useState<string>('all');
   const [filterValidityYear, setFilterValidityYear] = useState<string>('all');
 
+  // Counts
+  const activeClassesCount = useMemo(() => classes.filter(c => !c.isArchived).length, [classes]);
+  const archivedClassesCount = useMemo(() => classes.filter(c => !!c.isArchived).length, [classes]);
+
   // Extracts unique years from validity field
-  const uniqueValidityYears = React.useMemo(() => {
+  const uniqueValidityYears = useMemo(() => {
     const years = new Set<string>();
     classes.forEach(c => {
       if (c.validity) {
@@ -54,6 +63,8 @@ export function Clases() {
     providerId: '' as string | number,
     changeCreditType: false,
     creditType: 'Crédito completo' as 'Crédito completo' | 'Medio Crédito' | 'Crédito completo AP' | 'Medio Crédito AP',
+    changeArchiveStatus: false,
+    isArchived: false,
   });
 
   const [countryRates, setCountryRates] = useState<Array<{ country: string; price: string; cost: string }>>([]);
@@ -62,6 +73,7 @@ export function Clases() {
   const [newCountryCost, setNewCountryCost] = useState('');
 
   const isSuperAdmin = currentUser?.role === 'Superadministrador' || currentUser?.role === 'Admin Principal';
+  const isSuperAdminOnly = currentUser?.role?.trim().toLowerCase() === 'superadministrador';
 
   const handleOpenNewModal = () => {
     setFormData({
@@ -169,10 +181,16 @@ export function Clases() {
     if (bulkFormData.changeCreditType) {
       patch.creditType = bulkFormData.creditType;
     }
+    if (bulkFormData.changeArchiveStatus) {
+      patch.isArchived = bulkFormData.isArchived;
+    }
 
     selectedIds.forEach(id => {
       updateClass(id, patch);
     });
+
+    setToastMessage(`Se actualizaron ${selectedIds.length} clases con éxito.`);
+    setTimeout(() => setToastMessage(null), 4000);
 
     setIsBulkModalOpen(false);
     setSelectedIds([]);
@@ -182,11 +200,20 @@ export function Clases() {
       changeProvider: false,
       providerId: '',
       changeCreditType: false,
-      creditType: 'Crédito completo'
+      creditType: 'Crédito completo',
+      changeArchiveStatus: false,
+      isArchived: false,
     });
   };
 
   const filteredClasses = classes.filter(curso => {
+    // 0. Archive Status Filter
+    if (filterArchiveStatus === 'active') {
+      if (curso.isArchived) return false;
+    } else if (filterArchiveStatus === 'archived') {
+      if (!curso.isArchived) return false;
+    }
+
     // 1. Text Search Filter
     const term = searchQuery.toLowerCase().trim();
     if (term) {
@@ -277,6 +304,22 @@ export function Clases() {
 
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 flex-1 flex flex-col">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="bg-emerald-600 text-white px-4 py-2.5 rounded-xl shadow-lg flex items-center justify-between text-xs font-bold animate-in fade-in slide-in-from-top-2 shrink-0">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-200" />
+            <span>{toastMessage}</span>
+          </div>
+          <button 
+            onClick={() => setToastMessage(null)}
+            className="text-emerald-200 hover:text-white p-1 rounded transition"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Search and View Controls */}
       <div className="flex flex-col sm:flex-row gap-3 items-center justify-between shrink-0 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div className="relative w-full sm:w-80">
@@ -290,6 +333,29 @@ export function Clases() {
           />
         </div>
         <div className="flex items-center gap-2 self-end sm:self-auto">
+          {/* Quick archive tabs */}
+          <div className="hidden md:flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-bold">
+            <button
+              onClick={() => setFilterArchiveStatus('active')}
+              className={`px-3 py-1 rounded-md transition-all ${filterArchiveStatus === 'active' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              Activas ({activeClassesCount})
+            </button>
+            <button
+              onClick={() => setFilterArchiveStatus('archived')}
+              className={`px-3 py-1 rounded-md transition-all flex items-center gap-1 ${filterArchiveStatus === 'archived' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              <Archive className="w-3 h-3 text-amber-600" />
+              Archivadas ({archivedClassesCount})
+            </button>
+            <button
+              onClick={() => setFilterArchiveStatus('all')}
+              className={`px-3 py-1 rounded-md transition-all ${filterArchiveStatus === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              Todas ({classes.length})
+            </button>
+          </div>
+
           {/* View Toggle */}
           <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 shrink-0">
             <button
@@ -308,7 +374,7 @@ export function Clases() {
             </button>
           </div>
 
-          {isSuperAdmin && (
+          {isSuperAdminOnly && (
             <button 
               onClick={() => setShowClearAllModal(true)}
               className="bg-rose-50 text-rose-700 border border-rose-200 px-4 py-2 rounded-lg text-xs font-extrabold shadow-sm hover:bg-rose-100 transition flex items-center gap-1.5 cursor-pointer"
@@ -317,12 +383,14 @@ export function Clases() {
             </button>
           )}
 
-          <button 
-            onClick={handleOpenNewModal}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-sm hover:bg-indigo-700 transition flex items-center gap-1.5"
-          >
-            <Plus className="w-4 h-4" /> Nueva Clase
-          </button>
+          {hasPermission(currentUser?.role, "Clases", "create") && (
+            <button 
+              onClick={handleOpenNewModal}
+              className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-sm hover:bg-indigo-700 transition flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4" /> Nueva Clase
+            </button>
+          )}
         </div>
       </div>
 
@@ -331,9 +399,10 @@ export function Clases() {
         <div className="flex items-center space-x-2 text-slate-800 border-b border-slate-100 pb-2">
           <Filter className="w-4 h-4 text-indigo-600" />
           <h3 className="text-xs font-bold uppercase tracking-wider">Filtros de Clases</h3>
-          {(filterProviderId !== 'all' || filterCreditType !== 'all' || filterValidityStatus !== 'all' || filterValidityYear !== 'all' || searchQuery !== '' || sortField !== '') && (
+          {(filterArchiveStatus !== 'active' || filterProviderId !== 'all' || filterCreditType !== 'all' || filterValidityStatus !== 'all' || filterValidityYear !== 'all' || searchQuery !== '' || sortField !== '') && (
             <button
               onClick={() => {
+                setFilterArchiveStatus('active');
                 setFilterProviderId('all');
                 setFilterCreditType('all');
                 setFilterValidityStatus('all');
@@ -349,7 +418,21 @@ export function Clases() {
           )}
         </div>
         
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          {/* Filter 0: Archive Status */}
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Estatus Catálogo</label>
+            <select
+              value={filterArchiveStatus}
+              onChange={(e) => setFilterArchiveStatus(e.target.value as any)}
+              className="w-full text-xs font-semibold border border-slate-200 rounded-lg p-2 bg-slate-50/50 hover:bg-slate-50 transition focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 outline-none"
+            >
+              <option value="active">Activas ({activeClassesCount})</option>
+              <option value="archived">Archivadas ({archivedClassesCount})</option>
+              <option value="all">Todas ({classes.length})</option>
+            </select>
+          </div>
+
           {/* Filter 1: Provider */}
           <div>
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Proveedor Académico</label>
@@ -471,16 +554,28 @@ export function Clases() {
                 {selectedIds.length} Clases Seleccionadas
               </p>
               <p className="text-[10px] text-slate-500">
-                Puedes actualizar la vigencia, proveedor o tipo de crédito para todas en un solo paso.
+                Puedes archivar, reactivar, o actualizar la vigencia, proveedor o tipo de crédito en un solo paso.
               </p>
             </div>
           </div>
-          <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
             <button
               onClick={() => setSelectedIds([])}
               className="text-xs font-bold text-slate-500 hover:text-slate-700 px-3 py-1.5 rounded uppercase tracking-wider transition"
             >
               Desmarcar todo
+            </button>
+            <button
+              onClick={() => setBulkArchiveConfirm('archive')}
+              className="bg-amber-100 text-amber-800 border border-amber-300 text-xs font-bold px-3 py-2 rounded-lg hover:bg-amber-200 transition uppercase tracking-wider flex items-center gap-1"
+            >
+              <Archive className="w-3.5 h-3.5 text-amber-700" /> Archivar
+            </button>
+            <button
+              onClick={() => setBulkArchiveConfirm('unarchive')}
+              className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold px-3 py-2 rounded-lg hover:bg-emerald-200 transition uppercase tracking-wider flex items-center gap-1"
+            >
+              <ArchiveRestore className="w-3.5 h-3.5 text-emerald-700" /> Desarchivar
             </button>
             <button
               onClick={() => setIsBulkModalOpen(true)}
@@ -580,7 +675,7 @@ export function Clases() {
                       <tr 
                         key={curso.id}
                         onClick={() => navigate(`/clases/${curso.id}`)}
-                        className={`hover:bg-slate-50/80 group cursor-pointer transition-colors ${isSelected ? 'bg-indigo-50/30' : ''}`}
+                        className={`hover:bg-slate-50/80 group cursor-pointer transition-colors ${isSelected ? 'bg-indigo-50/30' : ''} ${curso.isArchived ? 'bg-amber-50/20 opacity-80 hover:opacity-100' : ''}`}
                       >
                         {isSuperAdmin && (
                           <td className="px-6 py-3 text-center" onClick={(e) => e.stopPropagation()}>
@@ -594,7 +689,14 @@ export function Clases() {
                         )}
                         <td className="px-6 py-3 font-semibold text-slate-900 border-l-[3px] border-transparent group-hover:border-indigo-500">
                           <div className="flex flex-col">
-                            <span>{curso.name}</span>
+                            <div className="flex items-center gap-2">
+                              <span>{curso.name}</span>
+                              {curso.isArchived && (
+                                <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded tracking-wide">
+                                  <Archive className="w-2.5 h-2.5 text-amber-700" /> Archivada
+                                </span>
+                              )}
+                            </div>
                             {curso.syllabus && (
                               <span className="text-[10px] text-slate-400 font-normal truncate max-w-xs" title={curso.syllabus}>
                                 Syllabus: {curso.syllabus}
@@ -628,20 +730,41 @@ export function Clases() {
                           </span>
                         </td>
                         <td className="px-6 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex justify-end items-center gap-2">
+                          <div className="flex justify-end items-center gap-1.5">
                             <button
                               onClick={() => navigate(`/clases/${curso.id}`)}
-                              className="text-indigo-600 hover:text-indigo-800 text-[10px] uppercase font-bold tracking-wider border border-indigo-100 hover:bg-indigo-50 px-2 py-1 rounded"
+                              className="text-indigo-600 hover:text-indigo-800 text-[10px] uppercase font-bold tracking-wider border border-indigo-100 hover:bg-indigo-50 px-2 py-1 rounded transition"
                             >
                               Detalles
                             </button>
-                            <button
-                              onClick={() => setClassToDelete({ id: curso.id, name: curso.name, numEnrolled })}
-                              className="text-rose-500 hover:text-rose-700 text-[10px] uppercase font-bold tracking-wider border border-rose-105 hover:bg-rose-50 p-1 rounded transition"
-                              title="Eliminar"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {hasPermission(currentUser?.role, "Clases", "edit") && (
+                              curso.isArchived ? (
+                                <button
+                                  onClick={() => setClassToArchive({ id: curso.id, name: curso.name, isArchived: true, numEnrolled })}
+                                  className="text-emerald-700 hover:text-emerald-900 text-[10px] uppercase font-bold tracking-wider border border-emerald-200 hover:bg-emerald-50 px-2 py-1 rounded transition flex items-center gap-1"
+                                  title="Reactivar / Desarchivar clase"
+                                >
+                                  <ArchiveRestore className="w-3.5 h-3.5 text-emerald-600" /> Desarchivar
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => setClassToArchive({ id: curso.id, name: curso.name, isArchived: false, numEnrolled })}
+                                  className="text-amber-700 hover:text-amber-900 text-[10px] uppercase font-bold tracking-wider border border-amber-200 hover:bg-amber-50 px-2 py-1 rounded transition flex items-center gap-1"
+                                  title="Archivar clase"
+                                >
+                                  <Archive className="w-3.5 h-3.5 text-amber-600" /> Archivar
+                                </button>
+                              )
+                            )}
+                            {isSuperAdminOnly && (
+                              <button
+                                onClick={() => setClassToDelete({ id: curso.id, name: curso.name, numEnrolled })}
+                                className="text-rose-500 hover:text-rose-700 text-[10px] uppercase font-bold tracking-wider border border-rose-100 hover:bg-rose-50 p-1 rounded transition"
+                                title="Eliminar clase"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -671,7 +794,7 @@ export function Clases() {
                   onClick={() => navigate(`/clases/${curso.id}`)}
                   className={`bg-white rounded-xl shadow-sm border overflow-hidden hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between relative ${
                     isSelected ? 'border-indigo-400 ring-2 ring-indigo-550/20 bg-indigo-50/10' : 'border-slate-200'
-                  }`}
+                  } ${curso.isArchived ? 'bg-amber-50/10 border-amber-200 opacity-90' : ''}`}
                 >
                   {isSuperAdmin && (
                     <div 
@@ -688,11 +811,18 @@ export function Clases() {
                   )}
 
                   <div className={`p-4 border-b border-slate-100 group-hover:bg-slate-50/80 transition-colors ${isSuperAdmin ? 'pl-11' : ''}`}>
-                    <div className="flex items-start justify-between">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1 pr-2">
-                        <h3 className="font-bold text-slate-900 text-sm group-hover:text-indigo-600 transition-colors truncate" title={curso.name}>
-                          {curso.name}
-                        </h3>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h3 className="font-bold text-slate-900 text-sm group-hover:text-indigo-600 transition-colors truncate" title={curso.name}>
+                            {curso.name}
+                          </h3>
+                          {curso.isArchived && (
+                            <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded shrink-0">
+                              <Archive className="w-2.5 h-2.5 text-amber-700" /> Archivada
+                            </span>
+                          )}
+                        </div>
                         {curso.code && <p className="text-[10px] text-slate-500 font-mono mt-0.5">{curso.code}</p>}
                         {linkedProvider && (
                           <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-100 truncate max-w-full" title={linkedProvider.commercialName || linkedProvider.legalName}>
@@ -717,23 +847,48 @@ export function Clases() {
                       </div>
                     )}
                   </div>
-                  <div className="px-4 py-2 border-t border-slate-100 bg-white flex justify-between items-center">
+                  <div className="px-4 py-2 border-t border-slate-100 bg-white flex justify-between items-center" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2">
+                      {hasPermission(currentUser?.role, "Clases", "edit") && (
+                        curso.isArchived ? (
+                          <button
+                            onClick={() => setClassToArchive({ id: curso.id, name: curso.name, isArchived: true, numEnrolled })}
+                            className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 uppercase tracking-wider flex items-center gap-1 py-1"
+                            title="Reactivar / Desarchivar clase"
+                          >
+                            <ArchiveRestore className="w-3.5 h-3.5 text-emerald-600" /> Desarchivar
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setClassToArchive({ id: curso.id, name: curso.name, isArchived: false, numEnrolled })}
+                            className="text-[10px] font-bold text-amber-700 hover:text-amber-900 uppercase tracking-wider flex items-center gap-1 py-1"
+                            title="Archivar clase"
+                          >
+                            <Archive className="w-3.5 h-3.5 text-amber-600" /> Archivar
+                          </button>
+                        )
+                      )}
+                      {isSuperAdminOnly && (
+                        <button 
+                          onClick={() => {
+                            setClassToDelete({
+                              id: curso.id,
+                              name: curso.name,
+                              numEnrolled
+                            });
+                          }}
+                          className="text-[10px] font-bold text-rose-500 hover:text-rose-700 uppercase tracking-wider flex items-center gap-1 py-1"
+                          title="Eliminar clase"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Eliminar
+                        </button>
+                      )}
+                    </div>
                     <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setClassToDelete({
-                          id: curso.id,
-                          name: curso.name,
-                          numEnrolled
-                        });
-                      }}
-                      className="text-[10px] font-bold text-rose-500 hover:text-rose-700 uppercase tracking-wider flex items-center gap-1 py-1"
-                      title="Eliminar clase"
+                      onClick={() => navigate(`/clases/${curso.id}`)}
+                      className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 uppercase tracking-wider py-1"
                     >
-                      <Trash2 className="w-3.5 h-3.5" /> Eliminar
-                    </button>
-                    <button className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 uppercase tracking-wider py-1">
-                      {curso.syllabus ? 'Ver Syllabus' : 'Sin Syllabus'}
+                      {curso.syllabus ? 'Ver Syllabus' : 'Ver Detalles'}
                     </button>
                   </div>
                 </div>
@@ -741,6 +896,146 @@ export function Clases() {
             })
           )}
         </div>
+      )}
+
+      {/* Archive Confirmation Modal */}
+      {classToArchive && (
+        <Modal
+          isOpen={true}
+          onClose={() => setClassToArchive(null)}
+          title={classToArchive.isArchived ? "Confirmar Reactivación de Clase" : "Confirmar Archivo de Clase"}
+        >
+          <div className="space-y-4">
+            <div className={`p-4 rounded-xl border ${classToArchive.isArchived ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-amber-50 border-amber-200 text-amber-900'} space-y-2 text-xs leading-relaxed`}>
+              <div className="flex items-center gap-2 font-bold text-sm">
+                {classToArchive.isArchived ? (
+                  <>
+                    <ArchiveRestore className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <span>¿Reactivar la clase en el catálogo?</span>
+                  </>
+                ) : (
+                  <>
+                    <Archive className="w-5 h-5 text-amber-600 shrink-0" />
+                    <span>¿Archivar la clase?</span>
+                  </>
+                )}
+              </div>
+              {classToArchive.isArchived ? (
+                <p>
+                  Al desarchivar la clase <strong className="font-bold text-slate-900">"{classToArchive.name}"</strong>, volverá a mostrarse como activa en el catálogo general y estará disponible para nuevas asignaciones e inscripciones.
+                </p>
+              ) : (
+                <div>
+                  <p>
+                    Al archivar la clase <strong className="font-bold text-slate-900">"{classToArchive.name}"</strong>, se ocultará de la lista activa y no estará disponible para nuevas inscripciones.
+                  </p>
+                  {classToArchive.numEnrolled > 0 && (
+                    <p className="mt-2 font-semibold text-amber-950 bg-amber-100/60 p-2 rounded border border-amber-300">
+                      ℹ️ Sus <strong className="font-bold">{classToArchive.numEnrolled} alumno(s) inscrito(s)</strong> y todo su historial académico y contable se mantendrán 100% seguros e intactos.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setClassToArchive(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors uppercase tracking-wider"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const nextStatus = !classToArchive.isArchived;
+                  updateClass(classToArchive.id, { isArchived: nextStatus });
+                  setToastMessage(
+                    nextStatus 
+                      ? `La clase "${classToArchive.name}" ha sido archivada correctamente.` 
+                      : `La clase "${classToArchive.name}" ha sido reactivada y desarchivada con éxito.`
+                  );
+                  setClassToArchive(null);
+                  setTimeout(() => setToastMessage(null), 4000);
+                }}
+                className={`px-4 py-2 text-xs font-bold text-white rounded-lg transition-colors uppercase tracking-wider shadow-sm ${
+                  classToArchive.isArchived 
+                    ? 'bg-emerald-600 hover:bg-emerald-700' 
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
+              >
+                {classToArchive.isArchived ? 'Reactivar Clase' : 'Archivar Clase'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk Archive/Unarchive Confirmation Modal */}
+      {bulkArchiveConfirm && (
+        <Modal
+          isOpen={true}
+          onClose={() => setBulkArchiveConfirm(null)}
+          title={bulkArchiveConfirm === 'archive' ? "Archivar Clases Seleccionadas" : "Desarchivar Clases Seleccionadas"}
+        >
+          <div className="space-y-4">
+            <div className={`p-4 rounded-xl border ${bulkArchiveConfirm === 'archive' ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'} space-y-2 text-xs leading-relaxed`}>
+              <div className="flex items-center gap-2 font-bold text-sm">
+                {bulkArchiveConfirm === 'archive' ? (
+                  <>
+                    <Archive className="w-5 h-5 text-amber-600 shrink-0" />
+                    <span>¿Archivar {selectedIds.length} clases seleccionadas?</span>
+                  </>
+                ) : (
+                  <>
+                    <ArchiveRestore className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <span>¿Desarchivar {selectedIds.length} clases seleccionadas?</span>
+                  </>
+                )}
+              </div>
+              <p>
+                {bulkArchiveConfirm === 'archive'
+                  ? `Las ${selectedIds.length} clases seleccionadas pasarán a estatus archivado. No estarán disponibles para nuevas inscripciones, pero conservarán todos sus alumnos e historial intactos.`
+                  : `Las ${selectedIds.length} clases seleccionadas volverán a estar activas en el catálogo general.`}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setBulkArchiveConfirm(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors uppercase tracking-wider"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const isArchiving = bulkArchiveConfirm === 'archive';
+                  selectedIds.forEach(id => {
+                    updateClass(id, { isArchived: isArchiving });
+                  });
+                  setToastMessage(
+                    isArchiving
+                      ? `Se han archivado ${selectedIds.length} clases con éxito.`
+                      : `Se han desarchivado ${selectedIds.length} clases con éxito.`
+                  );
+                  setSelectedIds([]);
+                  setBulkArchiveConfirm(null);
+                  setTimeout(() => setToastMessage(null), 4000);
+                }}
+                className={`px-4 py-2 text-xs font-bold text-white rounded-lg transition-colors uppercase tracking-wider shadow-sm ${
+                  bulkArchiveConfirm === 'archive'
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+              >
+                {bulkArchiveConfirm === 'archive' ? 'Sí, Archivar Seleccionadas' : 'Sí, Reactivar Seleccionadas'}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Delete Confirmation Modal */}
@@ -932,7 +1227,7 @@ export function Clases() {
               Selecciona cuáles propiedades deseas actualizar para las <strong className="font-extrabold text-slate-700">{selectedIds.length}</strong> clases seleccionadas. Las dejas desmarcadas si no quieres modificarlas.
             </p>
 
-            <div className="space-y-5">
+            <div className="space-y-4">
               {/* 1. Vigencia */}
               <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
                 <label className="flex items-center space-x-2 cursor-pointer select-none">
@@ -1009,6 +1304,31 @@ export function Clases() {
                   </div>
                 )}
               </div>
+
+              {/* 4. Estatus de Archivo */}
+              <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
+                <label className="flex items-center space-x-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={bulkFormData.changeArchiveStatus}
+                    onChange={(e) => setBulkFormData({...bulkFormData, changeArchiveStatus: e.target.checked})}
+                    className="rounded border-slate-350 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                  />
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wide">Actualizar Estatus de Catálogo</span>
+                </label>
+                {bulkFormData.changeArchiveStatus && (
+                  <div className="pt-1.5 pl-6">
+                    <select
+                      value={bulkFormData.isArchived ? "true" : "false"}
+                      onChange={(e) => setBulkFormData({...bulkFormData, isArchived: e.target.value === "true"})}
+                      className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-semibold text-slate-850"
+                    >
+                      <option value="false">Activa (Disponible en catálogo)</option>
+                      <option value="true">Archivada (Oculta del catálogo activo)</option>
+                    </select>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="pt-4 flex justify-end space-x-2 border-t border-slate-100">
@@ -1021,7 +1341,7 @@ export function Clases() {
               </button>
               <button 
                 type="submit" 
-                disabled={!bulkFormData.changeValidity && !bulkFormData.changeProvider && !bulkFormData.changeCreditType}
+                disabled={!bulkFormData.changeValidity && !bulkFormData.changeProvider && !bulkFormData.changeCreditType && !bulkFormData.changeArchiveStatus}
                 className="px-4 py-2 bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-xs font-bold hover:bg-indigo-700 transition uppercase tracking-wider shadow-sm"
               >
                 Aplicar a {selectedIds.length} Clases

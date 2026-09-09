@@ -16,13 +16,15 @@ import {
   Save,
   MessageSquare,
   AlertCircle,
-  Trash2
+  Trash2,
+  Users
 } from "lucide-react";
 import { useAppContext, TaskType, Task } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
+import { safeLocalStorageSet } from "../utils/storage";
 
 export function Agenda() {
-  const { tasks, updateTask, addTask, deleteTask, institutions, users, currentUser } = useAppContext();
+  const { tasks, updateTask, addTask, deleteTask, institutions, users, currentUser, teams } = useAppContext();
   const [view, setView] = useState<"dia" | "semanal" | "calendario">("semanal");
   const [selectedDayCode, setSelectedDayCode] = useState<string>(() => {
     return new Date().toISOString().split("T")[0];
@@ -39,6 +41,7 @@ export function Agenda() {
 
   // Global filters
   const [filterUser, setFilterUser] = useState<string>("Todos");
+  const [filterTeam, setFilterTeam] = useState<string>("Todos");
   const [filterRequestor, setFilterRequestor] = useState<string>("Todos");
   const [filterType, setFilterType] = useState<string>("Todos");
   const [filterPriority, setFilterPriority] = useState<string>("Todos");
@@ -49,6 +52,8 @@ export function Agenda() {
     dueDate: '',
     institutionId: '',
     userId: '',
+    userIds: [] as number[],
+    teamId: '',
     type: 'Llamada' as TaskType,
     priority: 'Media' as 'Alta' | 'Media' | 'Baja',
     requestedBy: ''
@@ -73,27 +78,47 @@ export function Agenda() {
 
   // Unified global filtering engine
   const filteredTasks = tasks.filter(t => {
-    // 1. Filter by Assigned User (userId)
+    // 1. Filter by Assigned User (userId / userIds)
     if (filterUser !== "Todos") {
       if (filterUser === "Ninguno") {
-        if (t.userId !== undefined && t.userId !== null) return false;
-      } else if (String(t.userId) !== filterUser) {
-        return false;
+        const hasAssigned = (t.userId !== undefined && t.userId !== null) || (t.userIds && t.userIds.length > 0);
+        if (hasAssigned) return false;
+      } else {
+        const uid = Number(filterUser);
+        const isPrimary = Number(t.userId) === uid;
+        const isInList = t.userIds && t.userIds.includes(uid);
+        if (!isPrimary && !isInList) return false;
       }
     }
 
-    // 2. Filter by Requestor/Who requested (requestedBy)
+    // 2. Filter by Team (teamId or user's team)
+    if (filterTeam !== "Todos") {
+      if (filterTeam === "SinEquipo") {
+        if (t.teamId) return false;
+      } else {
+        const targetTeamId = Number(filterTeam);
+        const matchesDirectTeam = t.teamId === targetTeamId;
+        const assignedIds = t.userIds && t.userIds.length > 0 ? t.userIds : (t.userId ? [t.userId] : []);
+        const matchesUserTeam = assignedIds.some(uid => {
+          const u = users.find(user => user.id === uid);
+          return u && u.teamId === targetTeamId;
+        });
+        if (!matchesDirectTeam && !matchesUserTeam) return false;
+      }
+    }
+
+    // 3. Filter by Requestor/Who requested (requestedBy)
     if (filterRequestor !== "Todos") {
       const req = t.requestedBy || "Sin registrar";
       if (req !== filterRequestor) return false;
     }
 
-    // 3. Filter by Action Type
+    // 4. Filter by Action Type
     if (filterType !== "Todos" && (t.type || "Otro") !== filterType) {
       return false;
     }
 
-    // 4. Filter by Priority
+    // 5. Filter by Priority
     if (filterPriority !== "Todos") {
       const prio = t.priority || "Media";
       if (prio !== filterPriority) return false;
@@ -104,22 +129,83 @@ export function Agenda() {
 
   const handleTaskSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const primaryUserId = taskForm.userIds.length > 0 
+      ? taskForm.userIds[0] 
+      : (taskForm.userId ? Number(taskForm.userId) : undefined);
+
     addTask({
       title: taskForm.title,
       dueDate: taskForm.dueDate,
       status: 'Pendiente',
       institutionId: taskForm.institutionId ? Number(taskForm.institutionId) : undefined,
-      userId: taskForm.userId ? Number(taskForm.userId) : undefined,
+      userId: primaryUserId,
+      userIds: taskForm.userIds.length > 0 ? taskForm.userIds : (primaryUserId ? [primaryUserId] : undefined),
+      teamId: taskForm.teamId ? Number(taskForm.teamId) : undefined,
       type: taskForm.type,
       priority: taskForm.priority,
       requestedBy: taskForm.requestedBy.trim() || "Admin Principal"
     });
     setIsTaskModalOpen(false);
-    setTaskForm({ title: '', dueDate: '', institutionId: '', userId: '', type: 'Llamada', priority: 'Media', requestedBy: '' });
+    setTaskForm({ 
+      title: '', 
+      dueDate: '', 
+      institutionId: '', 
+      userId: '', 
+      userIds: [], 
+      teamId: '', 
+      type: 'Llamada', 
+      priority: 'Media', 
+      requestedBy: '' 
+    });
+  };
+
+  const handleTeamSelectChange = (selectedTeamIdStr: string) => {
+    if (!selectedTeamIdStr) {
+      setTaskForm(prev => ({
+        ...prev,
+        teamId: '',
+      }));
+      return;
+    }
+    const tId = Number(selectedTeamIdStr);
+    const teamMembers = users.filter(u => u.teamId === tId).map(u => u.id);
+    setTaskForm(prev => ({
+      ...prev,
+      teamId: selectedTeamIdStr,
+      userIds: teamMembers.length > 0 ? teamMembers : prev.userIds,
+      userId: teamMembers.length > 0 ? String(teamMembers[0]) : prev.userId
+    }));
+  };
+
+  const handleToggleUserInTaskForm = (userId: number) => {
+    setTaskForm(prev => {
+      const exists = prev.userIds.includes(userId);
+      const updatedUserIds = exists 
+        ? prev.userIds.filter(id => id !== userId) 
+        : [...prev.userIds, userId];
+      return {
+        ...prev,
+        userIds: updatedUserIds,
+        userId: updatedUserIds.length > 0 ? String(updatedUserIds[0]) : ''
+      };
+    });
   };
 
   const toggleTaskStatus = (id: number, currentStatus: "Pendiente" | "Completada") => {
+    const taskObj = tasks.find(t => t.id === id);
+    if (!taskObj) return false;
+
+    const isSuperAdmin = currentUser?.role === 'Superadministrador' || currentUser?.role === 'Admin Principal';
+    const isAssigned = (taskObj.userId !== undefined && taskObj.userId !== null && Number(taskObj.userId) === Number(currentUser?.id)) ||
+      (taskObj.userIds && taskObj.userIds.includes(Number(currentUser?.id)));
+
+    if (!isSuperAdmin && !isAssigned) {
+      alert("Solo los usuarios asignados a esta tarea o el super administrador pueden cambiar su estado de finalización.");
+      return false;
+    }
+
     updateTask(id, { status: currentStatus === "Pendiente" ? "Completada" : "Pendiente" });
+    return true;
   };
 
   const handleOpenTaskDetail = (task: Task) => {
@@ -179,7 +265,7 @@ export function Agenda() {
           const noteHeader = `[Tarea Futura programada para ${futureDate}: "${futureTitle}" (${futureType})]`;
           matchedLead.notes = `${noteHeader}\n${matchedLead.notes}`;
           crmLeads[leadIndex] = matchedLead;
-          localStorage.setItem("crm_leads_v1", JSON.stringify(crmLeads));
+          safeLocalStorageSet("crm_leads_v1", crmLeads);
         }
       } catch (err) {
         console.error("Error scheduling future activity in CRM:", err);
@@ -196,7 +282,9 @@ export function Agenda() {
       dueDate: futureDate,
       status: "Pendiente",
       type: futureType,
-      userId: activeTask.userId || users[0]?.id,
+      priority: "Media",
+      requestedBy: currentUser?.name || "Admin Principal",
+      userId: activeTask.userId || currentUser?.id || users[0]?.id,
       leadId: leadId || undefined,
       notes: ""
     });
@@ -235,7 +323,7 @@ export function Agenda() {
           
           matchedLead.notes = `${noteHeader}\n${matchedLead.notes}`;
           crmLeads[leadIndex] = matchedLead;
-          localStorage.setItem("crm_leads_v1", JSON.stringify(crmLeads));
+          safeLocalStorageSet("crm_leads_v1", crmLeads);
         }
       } catch (err) {
         console.error("Error updating CRM notes:", err);
@@ -380,10 +468,11 @@ export function Agenda() {
             <svg className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" /></svg>
             Filtros Avanzados de Agenda
           </h3>
-          {(filterUser !== "Todos" || filterRequestor !== "Todos" || filterType !== "Todos" || filterPriority !== "Todos") && (
+          {(filterUser !== "Todos" || filterTeam !== "Todos" || filterRequestor !== "Todos" || filterType !== "Todos" || filterPriority !== "Todos") && (
             <button
               onClick={() => {
                 setFilterUser("Todos");
+                setFilterTeam("Todos");
                 setFilterRequestor("Todos");
                 setFilterType("Todos");
                 setFilterPriority("Todos");
@@ -395,7 +484,7 @@ export function Agenda() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           {/* FILTER 1: SOLICITANTE */}
           <div>
             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Quién Solicitó</label>
@@ -418,7 +507,23 @@ export function Agenda() {
             </select>
           </div>
 
-          {/* FILTER 2: RESPONSABLE ASIGNADO */}
+          {/* FILTER 2: EQUIPO ASIGNADO */}
+          <div>
+            <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Equipo Asignado</label>
+            <select
+              value={filterTeam}
+              onChange={(e) => setFilterTeam(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl p-2.5 text-xs bg-slate-50/50 hover:bg-white text-slate-700 hover:border-slate-300 focus:ring-1 focus:ring-indigo-500 font-semibold outline-none transition"
+            >
+              <option value="Todos">👥 Todos los Equipos</option>
+              {teams.map(t => (
+                <option key={t.id} value={String(t.id)}>👥 {t.name}</option>
+              ))}
+              <option value="SinEquipo">❌ Sin Equipo</option>
+            </select>
+          </div>
+
+          {/* FILTER 3: RESPONSABLE ASIGNADO */}
           <div>
             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Responsable Asignado</label>
             <select
@@ -434,7 +539,7 @@ export function Agenda() {
             </select>
           </div>
 
-          {/* FILTER 3: TIPO DE ACCION */}
+          {/* FILTER 4: TIPO DE ACCION */}
           <div>
             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Tipo de Acción / Canal</label>
             <select
@@ -451,7 +556,7 @@ export function Agenda() {
             </select>
           </div>
 
-          {/* FILTER 4: PRIORIDAD */}
+          {/* FILTER 5: PRIORIDAD */}
           <div>
             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Prioridad</label>
             <select
@@ -583,7 +688,7 @@ export function Agenda() {
                             >
                               {t.status === "Completada" ? <CheckCircle2 className="w-6 h-6 text-emerald-500" /> : <Circle className="w-6 h-6" />}
                             </button>
-                            {(currentUser?.role === 'Superadministrador' || currentUser?.role === 'Academia' || currentUser?.role === 'Admin Principal') && (
+                            {currentUser?.role === 'Superadministrador' && (
                               <button 
                                 onClick={(e) => { 
                                   e.stopPropagation(); 
@@ -661,12 +766,36 @@ export function Agenda() {
                                   <span className="truncate">{institutions.find(i => i.id === t.institutionId)?.name || "Institución"}</span>
                                 </div>
                               )}
-                              {t.userId && (
-                                <div className="inline-flex items-center text-xs bg-indigo-50 text-indigo-705 px-2.5 py-1 rounded-md border border-indigo-100 font-semibold">
-                                  <svg className="w-3.5 h-3.5 mr-1.5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                                  <span className="truncate">{users.find(u => u.id === t.userId)?.name || "Usuario"}</span>
-                                </div>
-                              )}
+                              {t.teamId && (() => {
+                                const tObj = teams.find(team => team.id === t.teamId);
+                                return tObj ? (
+                                  <div className="inline-flex items-center text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-md border border-indigo-200/70 font-semibold">
+                                    <Users className="w-3.5 h-3.5 mr-1.5 shrink-0 text-indigo-500" />
+                                    <span className="truncate">Equipo: {tObj.name}</span>
+                                  </div>
+                                ) : null;
+                              })()}
+                              {(() => {
+                                const assignedUserIds = t.userIds && t.userIds.length > 0 
+                                  ? t.userIds 
+                                  : (t.userId ? [t.userId] : []);
+                                if (assignedUserIds.length === 0) return null;
+                                if (assignedUserIds.length === 1) {
+                                  const u = users.find(user => user.id === assignedUserIds[0]);
+                                  return (
+                                    <div className="inline-flex items-center text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-md border border-indigo-100 font-semibold">
+                                      <svg className="w-3.5 h-3.5 mr-1.5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                      <span className="truncate">{u?.name || "Usuario"}</span>
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div className="inline-flex items-center text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-md border border-indigo-100 font-semibold" title={assignedUserIds.map(uid => users.find(u => u.id === uid)?.name).filter(Boolean).join(", ")}>
+                                    <svg className="w-3.5 h-3.5 mr-1.5 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                    <span className="truncate">{assignedUserIds.length} Asignados ({assignedUserIds.map(uid => users.find(u => u.id === uid)?.name.split(" ")[0]).filter(Boolean).join(", ")})</span>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -737,7 +866,7 @@ export function Agenda() {
                                 <button onClick={(e) => { e.stopPropagation(); toggleTaskStatus(t.id, t.status); }} className="mt-0.5 shrink-0 text-slate-400 hover:text-indigo-600 transition-colors bg-white rounded-full">
                                   {t.status === 'Completada' ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Circle className="w-5 h-5" />}
                                 </button>
-                                {(currentUser?.role === 'Superadministrador' || currentUser?.role === 'Academia' || currentUser?.role === 'Admin Principal') && (
+                                {currentUser?.role === 'Superadministrador' && (
                                   <button onClick={(e) => { 
                                       e.stopPropagation(); 
                                       deleteTask(t.id);
@@ -794,12 +923,36 @@ export function Agenda() {
                                         <span className="truncate">{institutions.find(i => i.id === t.institutionId)?.name || "Institución"}</span>
                                       </div>
                                     )}
-                                    {t.userId && (
-                                      <div className="inline-flex items-center text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100/60 font-medium max-w-full">
-                                        <svg className="w-2.5 h-2.5 mr-1 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                                        <span className="truncate">{users.find(u => u.id === t.userId)?.name || "Usuario"}</span>
-                                      </div>
-                                    )}
+                                    {t.teamId && (() => {
+                                      const tObj = teams.find(team => team.id === t.teamId);
+                                      return tObj ? (
+                                        <div className="inline-flex items-center text-[9px] bg-indigo-50 text-indigo-750 px-1.5 py-0.5 rounded border border-indigo-200 font-bold max-w-full">
+                                          <Users className="w-2.5 h-2.5 mr-1 shrink-0 text-indigo-500" />
+                                          <span className="truncate">{tObj.name}</span>
+                                        </div>
+                                      ) : null;
+                                    })()}
+                                    {(() => {
+                                      const assignedUserIds = t.userIds && t.userIds.length > 0 
+                                        ? t.userIds 
+                                        : (t.userId ? [t.userId] : []);
+                                      if (assignedUserIds.length === 0) return null;
+                                      if (assignedUserIds.length === 1) {
+                                        const u = users.find(user => user.id === assignedUserIds[0]);
+                                        return (
+                                          <div className="inline-flex items-center text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100/60 font-medium max-w-full">
+                                            <svg className="w-2.5 h-2.5 mr-1 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                            <span className="truncate">{u?.name || "Usuario"}</span>
+                                          </div>
+                                        );
+                                      }
+                                      return (
+                                        <div className="inline-flex items-center text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100/60 font-bold max-w-full" title={assignedUserIds.map(uid => users.find(u => u.id === uid)?.name).filter(Boolean).join(", ")}>
+                                          <svg className="w-2.5 h-2.5 mr-1 shrink-0 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                          <span className="truncate">{assignedUserIds.length} Asignados</span>
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                               </div>
                             </div>
@@ -903,15 +1056,103 @@ export function Agenda() {
               ))}
             </select>
           </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Asignar a Usuario (Opcional)</label>
-            <select value={taskForm.userId} onChange={e => setTaskForm({...taskForm, userId: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
-              <option value="">Ninguno</option>
-              {users.map(u => (
-                <option key={u.id} value={u.id}>{u.name}</option>
-              ))}
+
+          {/* ASIGNAR A EQUIPO */}
+          <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-200/70 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                👥 Asignar a un Equipo (Opcional)
+              </label>
+              {taskForm.teamId && (
+                <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">
+                  Asignará a todos los miembros
+                </span>
+              )}
+            </div>
+            <select
+              value={taskForm.teamId}
+              onChange={e => handleTeamSelectChange(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg p-2 text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none font-medium text-slate-700"
+            >
+              <option value="">Ningún equipo en específico</option>
+              {teams.map(t => {
+                const memberCount = users.filter(u => u.teamId === t.id).length;
+                return (
+                  <option key={t.id} value={t.id}>
+                    👥 {t.name} ({memberCount} miembros)
+                  </option>
+                );
+              })}
             </select>
+            <p className="text-[11px] text-slate-500">
+              Al seleccionar un equipo, se marcarán automáticamente todos sus integrantes en la lista de abajo.
+            </p>
           </div>
+
+          {/* ASIGNAR A MULTIPLES USUARIOS */}
+          <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-200/70 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                👤 Asignar a Personas / Responsables ({taskForm.userIds.length} seleccionados)
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allIds = users.map(u => u.id);
+                    setTaskForm({ ...taskForm, userIds: allIds, userId: allIds[0] ? String(allIds[0]) : "" });
+                  }}
+                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold"
+                >
+                  Todos
+                </button>
+                <span className="text-slate-300">|</span>
+                <button
+                  type="button"
+                  onClick={() => setTaskForm({ ...taskForm, userIds: [], userId: "" })}
+                  className="text-[10px] text-slate-500 hover:text-slate-700 font-bold"
+                >
+                  Limpiar
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-1">
+              {users.map(u => {
+                const isSelected = taskForm.userIds.includes(u.id);
+                const userTeam = teams.find(t => t.id === u.teamId);
+                return (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => handleToggleUserInTaskForm(u.id)}
+                    className={`flex items-center justify-between p-2 rounded-lg border text-left transition-all ${
+                      isSelected
+                        ? "bg-indigo-50 border-indigo-300 text-indigo-900 font-bold shadow-xs"
+                        : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 ${
+                        isSelected ? "bg-indigo-600 border-indigo-600 text-white" : "border-slate-300 bg-white"
+                      }`}>
+                        {isSelected && "✓"}
+                      </div>
+                      <div className="truncate">
+                        <span className="text-xs block truncate">{u.name}</span>
+                        {userTeam && (
+                          <span className="text-[9px] text-slate-400 font-normal block truncate">
+                            👥 {userTeam.name}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Quién Solicitó (Solicitante)</label>
             <input 
@@ -985,6 +1226,14 @@ export function Agenda() {
                 }`}>
                   ⚡ Prioridad: {(activeTask.priority || "Media")}
                 </span>
+                {activeTask.teamId && (() => {
+                  const tObj = teams.find(t => t.id === activeTask.teamId);
+                  return tObj ? (
+                    <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200 flex items-center gap-1">
+                      <Users className="w-3 h-3" /> Equipo: {tObj.name}
+                    </span>
+                  ) : null;
+                })()}
               </div>
               
               <h3 className="text-base font-bold text-slate-800 mt-1">{activeTask.title}</h3>
@@ -998,16 +1247,43 @@ export function Agenda() {
                   <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                   <span>Solicitado por: <strong className="font-extrabold text-slate-800">{activeTask.requestedBy || "Admin Principal"}</strong></span>
                 </p>
-                <p className="flex items-center gap-1.5">
-                  <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                  <span>Responsable: <strong className="font-extrabold text-slate-800">{users.find(u => u.id === activeTask.userId)?.name || "Sin asignar"}</strong></span>
-                </p>
                 {activeTask.institutionId && (
                   <p className="flex items-center gap-1.5">
                     <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 21h18"/><path d="M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16"/><path d="M19 21v-4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v4"/><path d="M19 7h6"/><path d="M19 11h6"/></svg>
                     <span>Institución: <strong className="font-extrabold text-slate-800">{institutions.find(i => i.id === activeTask.institutionId)?.name}</strong></span>
                   </p>
                 )}
+              </div>
+
+              {/* ASIGNADOS */}
+              <div className="mt-2 pt-2 border-t border-slate-200/50">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  👥 Responsables Asignados
+                </span>
+                {(() => {
+                  const assignedUserIds = activeTask.userIds && activeTask.userIds.length > 0
+                    ? activeTask.userIds
+                    : (activeTask.userId ? [activeTask.userId] : []);
+                  if (assignedUserIds.length === 0) {
+                    return <span className="text-xs text-slate-400 italic">Sin asignar</span>;
+                  }
+                  return (
+                    <div className="flex flex-wrap gap-1.5">
+                      {assignedUserIds.map(uid => {
+                        const u = users.find(user => user.id === uid);
+                        if (!u) return null;
+                        const uTeam = teams.find(t => t.id === u.teamId);
+                        return (
+                          <span key={uid} className="inline-flex items-center text-xs bg-white text-slate-700 px-2 py-1 rounded-lg border border-slate-200 shadow-xs font-semibold gap-1">
+                            <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                            {u.name}
+                            {uTeam && <span className="text-[9px] text-slate-400 font-normal">({uTeam.name})</span>}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               {activeTask.leadId && (
@@ -1120,9 +1396,10 @@ export function Agenda() {
               <button 
                 type="button" 
                 onClick={() => {
-                  toggleTaskStatus(activeTask.id, activeTask.status);
-                  // Update active task instance as well to toggle visual state inside modal instantly
-                  setActiveTask(prev => prev ? { ...prev, status: prev.status === "Pendiente" ? "Completada" : "Pendiente" } : null);
+                  if (toggleTaskStatus(activeTask.id, activeTask.status)) {
+                    // Update active task instance as well to toggle visual state inside modal instantly
+                    setActiveTask(prev => prev ? { ...prev, status: prev.status === "Pendiente" ? "Completada" : "Pendiente" } : null);
+                  }
                 }} 
                 className={`w-full sm:w-auto px-4 py-2 border rounded-lg text-xs font-bold uppercase tracking-wider transition-colors flex items-center justify-center space-x-2 ${
                   activeTask.status === "Completada" 
@@ -1135,7 +1412,7 @@ export function Agenda() {
               </button>
 
               <div className="flex flex-wrap gap-2 w-full sm:w-auto justify-end items-center">
-                {(currentUser?.role === 'Superadministrador' || currentUser?.role === 'Academia' || currentUser?.role === 'Admin Principal') && (
+                {currentUser?.role === 'Superadministrador' && (
                   <button 
                     type="button" 
                     onClick={() => {

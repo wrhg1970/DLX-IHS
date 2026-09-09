@@ -144,7 +144,21 @@ export function Dashboard() {
       
       const activeEnrollments = instEnrollments.filter(e => e.status !== 'Withdrawn');
       const dynamicRevenue = activeEnrollments.length > 0
-        ? activeEnrollments.reduce((sum, e) => sum + getAgreedPrice(e), 0)
+        ? instStudentsList.reduce((totalSum, s) => {
+            const sActiveEnrollments = activeEnrollments.filter(e => Number(e.studentId) === Number(s.id));
+            let sTotal = sActiveEnrollments.reduce((sum, e) => sum + getAgreedPrice(e), 0);
+
+            // Apply school-targeted scholarship deduction if active
+            if (s.hasScholarship && s.scholarshipTarget === 'Escuela') {
+              const val = s.scholarshipValue || 0;
+              if (s.scholarshipType === 'Porcentaje') {
+                sTotal = Math.max(0, sTotal * (1 - val / 100));
+              } else {
+                sTotal = Math.max(0, sTotal - val);
+              }
+            }
+            return totalSum + sTotal;
+          }, 0)
         : (inst.revenue || 0);
 
       return {
@@ -263,7 +277,21 @@ export function Dashboard() {
       const activeEnrollments = instEnrollments.filter(e => e.status !== 'Withdrawn');
       
       const totalVendido = activeEnrollments.length > 0
-        ? activeEnrollments.reduce((sum, e) => sum + getAgreedPrice(e), 0)
+        ? instStudents.reduce((totalSum, s) => {
+            const sActiveEnrollments = activeEnrollments.filter(e => Number(e.studentId) === Number(s.id));
+            let sTotal = sActiveEnrollments.reduce((sum, e) => sum + getAgreedPrice(e), 0);
+
+            // Apply school-targeted scholarship deduction if active
+            if (s.hasScholarship && s.scholarshipTarget === 'Escuela') {
+              const val = s.scholarshipValue || 0;
+              if (s.scholarshipType === 'Porcentaje') {
+                sTotal = Math.max(0, sTotal * (1 - val / 100));
+              } else {
+                sTotal = Math.max(0, sTotal - val);
+              }
+            }
+            return totalSum + sTotal;
+          }, 0)
         : (inst.revenue || 0);
 
       // Total pagado/recaudado de las transacciones (financialTransactions) (ignoring initial mock transactions)

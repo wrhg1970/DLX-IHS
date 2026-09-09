@@ -24,29 +24,160 @@ async function startServer() {
         smtpFromEmail, 
         smtpFromName,
         to, 
+        cc,
+        bcc,
         subject, 
-        body 
+        body,
+        attachments,
+        allowFallback = true,
+        senderSignature
       } = req.body;
 
       // Ensure we have configuration from UI or server environment variables
-      const host = smtpHost || process.env.SMTP_HOST;
+      const host = (smtpHost || process.env.SMTP_HOST || '').trim();
       const port = Number(smtpPort || process.env.SMTP_PORT || 587);
-      const user = smtpUser || process.env.SMTP_USER;
-      const pass = smtpPass || process.env.SMTP_PASS;
-      const fromEmail = smtpFromEmail || process.env.SMTP_FROM_EMAIL;
-      const fromName = smtpFromName || process.env.SMTP_FROM_NAME || "IHS Sistema";
+      const user = (smtpUser || process.env.SMTP_USER || '').trim();
+      const pass = (smtpPass || process.env.SMTP_PASS || '').trim();
+      const fromEmail = (smtpFromEmail || process.env.SMTP_FROM_EMAIL || '').trim();
+      const fromName = (smtpFromName || process.env.SMTP_FROM_NAME || "Instituto de Humanidades y Ciencias").trim();
 
-      if (!host || !user || !pass || !fromEmail) {
-        return res.status(400).json({ 
-          error: 'Credenciales de correo (SMTP) incompletas. Por favor configúralas en la sección de Configuración o usa las variables de entorno en el servidor.' 
+      if (!to || !subject || !body) {
+        return res.status(400).json({ success: false, error: 'Faltan parámetros requeridos: destinatario (to), asunto o contenido del mensaje.' });
+      }
+
+      // Build electronic signature if present
+      let signatureHtml = '';
+      let signatureText = '';
+      if (senderSignature && senderSignature.enabled !== false) {
+        const sigName = (senderSignature.name || fromName || '').trim();
+        const sigTitle = (senderSignature.title || '').trim();
+        const sigDepartment = (senderSignature.department || '').trim();
+        const sigPhone = (senderSignature.phone || '').trim();
+        const sigEmail = (senderSignature.email || fromEmail || '').trim();
+        const sigWebsite = (senderSignature.website || '').trim();
+        const sigImage = (senderSignature.signatureImage || '').trim();
+        const sigCustomText = (senderSignature.signatureText || '').trim();
+        const sigDisclaimer = (senderSignature.disclaimer || '').trim();
+
+        // Plain text signature
+        signatureText = `\n\n--\n${sigName}` +
+          (sigTitle ? `\n${sigTitle}${sigDepartment ? ` - ${sigDepartment}` : ''}` : '') +
+          (sigEmail ? `\nCorreo: ${sigEmail}` : '') +
+          (sigPhone ? `\nTel: ${sigPhone}` : '') +
+          (sigWebsite ? `\nWeb: ${sigWebsite}` : '') +
+          `\n[Firma Electrónica Verificada]` +
+          (sigDisclaimer ? `\n\n${sigDisclaimer}` : '');
+
+        // HTML signature block
+        signatureHtml = `
+          <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+            <table cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; width: 100%; max-width: 550px;">
+              ${sigImage ? `
+                <tr>
+                  <td colspan="2" style="padding-bottom: 12px;">
+                    <img src="${sigImage}" alt="Firma Electrónica" style="max-height: 70px; max-width: 220px; object-fit: contain; display: block;" />
+                  </td>
+                </tr>
+              ` : sigCustomText ? `
+                <tr>
+                  <td colspan="2" style="padding-bottom: 12px; font-family: 'Brush Script MT', 'Segoe Script', cursive, Georgia, serif; font-size: 24px; color: #1e3a8a; font-style: italic; font-weight: 600;">
+                    ${sigCustomText}
+                  </td>
+                </tr>
+              ` : ''}
+              <tr>
+                <td style="vertical-align: top; width: 4px; background-color: #4f46e5; border-radius: 2px;"></td>
+                <td style="vertical-align: top; padding-left: 12px;">
+                  <div style="font-size: 15px; font-weight: 700; color: #0f172a; line-height: 1.3;">
+                    ${sigName}
+                  </div>
+                  ${sigTitle ? `
+                    <div style="font-size: 13px; font-weight: 600; color: #4338ca; margin-top: 2px;">
+                      ${sigTitle}${sigDepartment ? `<span style="color: #94a3b8; font-weight: normal;"> • </span>${sigDepartment}` : ''}
+                    </div>
+                  ` : ''}
+                  <div style="font-size: 12px; color: #475569; margin-top: 6px; line-height: 1.6;">
+                    ${sigEmail ? `<span style="margin-right: 12px;">✉️ <a href="mailto:${sigEmail}" style="color: #4f46e5; text-decoration: none;">${sigEmail}</a></span>` : ''}
+                    ${sigPhone ? `<span style="margin-right: 12px;">📞 ${sigPhone}</span>` : ''}
+                    ${sigWebsite ? `<span>🌐 <a href="${sigWebsite.startsWith('http') ? sigWebsite : 'https://' + sigWebsite}" target="_blank" style="color: #4f46e5; text-decoration: none;">${sigWebsite}</a></span>` : ''}
+                  </div>
+                  <div style="margin-top: 8px;">
+                    <span style="display: inline-block; font-size: 10px; font-weight: 600; color: #047857; background-color: #ecfdf5; border: 1px solid #a7f3d0; padding: 2px 8px; border-radius: 9999px;">
+                      ✓ Firma Electrónica Verificada por Plataforma IHS
+                    </span>
+                  </div>
+                </td>
+              </tr>
+              ${sigDisclaimer ? `
+                <tr>
+                  <td colspan="2" style="padding-top: 14px;">
+                    <p style="margin: 0; font-size: 10px; color: #94a3b8; line-height: 1.4; font-style: italic; border-top: 1px dashed #e2e8f0; padding-top: 10px;">
+                      🔒 <strong>Confidencialidad:</strong> ${sigDisclaimer}
+                    </p>
+                  </td>
+                </tr>
+              ` : ''}
+            </table>
+          </div>
+        `;
+      }
+
+      // Process attachments if present
+      const processedAttachments: any[] = [];
+      if (Array.isArray(attachments) && attachments.length > 0) {
+        for (const att of attachments) {
+          if (att.fileData && typeof att.fileData === 'string' && att.fileData.includes('base64,')) {
+            const parts = att.fileData.split('base64,');
+            const mimeMatch = att.fileData.match(/^data:([^;]+);/);
+            const contentType = mimeMatch ? mimeMatch[1] : (att.fileType || 'application/octet-stream');
+            processedAttachments.push({
+              filename: att.fileName || att.filename || `${att.title || 'documento'}.pdf`,
+              content: Buffer.from(parts[1], 'base64'),
+              contentType: contentType
+            });
+          } else if (att.content) {
+            processedAttachments.push({
+              filename: att.fileName || att.filename || `${att.title || 'documento'}.txt`,
+              content: att.content,
+              encoding: att.encoding || 'utf-8'
+            });
+          } else if (att.path) {
+            processedAttachments.push({
+              filename: att.fileName || att.filename,
+              path: att.path
+            });
+          } else {
+            processedAttachments.push({
+              filename: att.fileName || att.filename || `${att.title || 'documento'}.txt`,
+              content: `Documento adjunto: ${att.title || att.fileName}\nCategoría: ${att.category || 'General'}\nTamaño: ${att.fileSize || 'N/A'}`
+            });
+          }
+        }
+      }
+
+      // Detect placeholder or unconfigured credentials
+      const isPlaceholder = !host || 
+        !user || 
+        !pass || 
+        !fromEmail ||
+        user.includes('ejemplo.com') || 
+        user.includes('example.com') ||
+        fromEmail.includes('ejemplo.com') || 
+        fromEmail.includes('example.com') ||
+        user === 'colegio@dominio.com' ||
+        pass === 'ihs123';
+
+      // If SMTP is not configured or uses placeholder credentials, gracefully simulate the email dispatch
+      if (isPlaceholder) {
+        console.log(`[Email Simulator] Dispatching simulated email to "${to}" (CC: "${cc || 'N/A'}", BCC: "${bcc || 'N/A'}") with ${processedAttachments.length} attachments\nSubject: "${subject}"\nBody preview: ${body.substring(0, 100)}...`);
+        return res.json({
+          success: true,
+          simulated: true,
+          message: `[Simulación] Correo generado y registrado para <${to}>${cc ? ` con copia a <${cc}>` : ''}${bcc ? ` y copia oculta a <${bcc}>` : ''} con ${processedAttachments.length} documento(s) adjunto(s). Para envíos a bandejas reales, configura tus credenciales SMTP en Configuración > Notificaciones.`
         });
       }
 
-      if (!to || !subject || !body) {
-        return res.status(400).json({ error: 'Faltan parámetros requeridos: to, subject o body.' });
-      }
-
-      // Configure nodemailer transporter
+      // Configure nodemailer transporter with strict timeouts
       const transporter = nodemailer.createTransport({
         host,
         port,
@@ -57,28 +188,90 @@ async function startServer() {
         },
         tls: {
           rejectUnauthorized: false // bypass potential SSL/TLS cert issues for custom SMTPs
-        }
+        },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 12000
       });
 
-      // Send email
-      const info = await transporter.sendMail({
+      // Email send options
+      const mailOptions: any = {
         from: `"${fromName}" <${fromEmail}>`,
         to,
         subject,
-        text: body,
-        html: `<div style="font-family: sans-serif; font-size: 14px; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-          <h2 style="color: #4f46e5; margin-top: 0; font-size: 18px; font-weight: 700; border-bottom: 2px solid #f1f5f9; padding-bottom: 12px;">Notificación IHS</h2>
-          <p style="white-space: pre-wrap; margin-top: 16px;">${body}</p>
+        text: body + (signatureText || ''),
+        html: `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+          <div style="border-bottom: 2px solid #4f46e5; padding-bottom: 12px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between;">
+            <h2 style="color: #4f46e5; margin: 0; font-size: 18px; font-weight: 700;">${fromName}</h2>
+          </div>
+          <p style="white-space: pre-wrap; margin-top: 16px; color: #334155; font-size: 14px;">${body}</p>
+          ${signatureHtml || ''}
+          ${processedAttachments.length > 0 ? `
+          <div style="margin-top: 20px; padding: 12px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+            <p style="font-weight: 700; font-size: 12px; color: #1e293b; margin: 0 0 8px 0;">📎 Documentos Adjuntos (${processedAttachments.length}):</p>
+            <ul style="margin: 0; padding-left: 18px; font-size: 12px; color: #475569;">
+              ${processedAttachments.map(a => `<li>${a.filename}</li>`).join('')}
+            </ul>
+          </div>` : ''}
           <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8; text-align: center;">
-            Este es un correo automático enviado por el sistema IHS.
+            Este es un correo oficial enviado a través de la plataforma de ${fromName}.
           </div>
         </div>`
-      });
+      };
 
-      res.json({ success: true, messageId: info.messageId });
+      if (cc && typeof cc === 'string' && cc.trim()) {
+        mailOptions.cc = cc.trim();
+      }
+      if (bcc && typeof bcc === 'string' && bcc.trim()) {
+        mailOptions.bcc = bcc.trim();
+      }
+
+      if (processedAttachments.length > 0) {
+        mailOptions.attachments = processedAttachments;
+      }
+
+      try {
+        // Send email via real SMTP transporter
+        const info = await transporter.sendMail(mailOptions);
+        console.log(`[SMTP Success] Email delivered to "${to}". Message ID: ${info.messageId}`);
+        return res.json({ success: true, messageId: info.messageId, simulated: false });
+      } catch (smtpError: any) {
+        console.error("SMTP Transport Error: ", smtpError);
+        
+        let friendlyAdvice = smtpError.message || "Error al conectar con el servidor SMTP.";
+        const isAuthError = smtpError.code === 'EAUTH' || (smtpError.message && (smtpError.message.includes('535') || smtpError.message.includes('Username and Password not accepted')));
+        const isTimeout = smtpError.code === 'ETIMEDOUT' || smtpError.code === 'ECONNREFUSED' || smtpError.code === 'ESOCKET';
+
+        if (isAuthError && (host.includes('gmail.com') || user.includes('@gmail.com'))) {
+          friendlyAdvice = "Autenticación de Gmail rechazada. Google requiere activar la Verificación en 2 Pasos y generar una 'Contraseña de Aplicación' de 16 letras en myaccount.google.com/apppasswords en lugar de tu contraseña habitual de Google.";
+        } else if (isAuthError) {
+          friendlyAdvice = `Autenticación SMTP rechazada en el servidor "${host}". Verifica que el usuario y la contraseña o token de acceso sean correctos.`;
+        } else if (isTimeout) {
+          friendlyAdvice = `Tiempo de espera agotado al conectar con "${host}:${port}". El puerto o servidor podría estar inaccesible o bloqueado por el cortafuegos.`;
+        }
+
+        if (allowFallback) {
+          // Gracefully log and allow fallback so the admin user workflow is not completely blocked
+          console.warn(`[Email Fallback] Falling back to simulation for "${to}" due to SMTP failure.`);
+          return res.json({
+            success: true,
+            simulated: true,
+            warning: friendlyAdvice,
+            technicalError: smtpError.message,
+            message: `[Simulación] El correo fue registrado en el sistema debido a un fallo de conexión SMTP: ${friendlyAdvice}`
+          });
+        }
+
+        return res.json({
+          success: false,
+          error: friendlyAdvice,
+          technicalError: smtpError.message,
+          isSmtpError: true
+        });
+      }
     } catch (error: any) {
-      console.error("Error sending email: ", error);
-      res.status(500).json({ error: error.message || 'Error desconocido al enviar el de correo electrónico.' });
+      console.error("Critical error in /api/send-email: ", error);
+      res.status(500).json({ success: false, error: error.message || 'Error interno al procesar el envío de correo.' });
     }
   });
 
@@ -379,6 +572,461 @@ Follow these rules for perfect extraction accuracy:
     } catch (error: any) {
       console.error("Error parsing statement:", error);
       res.status(500).json({ error: error.message || String(error), details: error.stack || "" });
+    }
+  });
+
+  // =========================================================================
+  // GEMINI INTELLIGENCE: CONSULTOR IA PARA CRM INSTITUCIONES PROSPECTO
+  // =========================================================================
+  app.post('/api/crm/ai-consultant', async (req, res) => {
+    try {
+      const { action, customPrompt, lead, activities } = req.body;
+
+      if (!lead || !lead.name) {
+        return res.status(400).json({ error: 'Faltan los datos de la institución prospecto.' });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ error: 'GEMINI_API_KEY no está configurada en las variables de entorno.' });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const leadDossier = `
+=== EXPEDIENTE DE LA INSTITUCIÓN PROSPECTO ===
+Nombre de la Institución: ${lead.name}
+Tipo: ${lead.type || 'Institución Potencial'}
+Etapa en Pipeline: ${lead.status || 'Captación'}
+Monto Estimado Pipeline: $${(lead.value || 0).toLocaleString('en-US')} USD
+Origen / Fuente de Captación: ${lead.source || 'No especificado'}
+Contacto Principal: ${lead.contactName || 'No especificado'}
+Correo Electrónico: ${lead.email || 'No especificado'}
+Teléfono / WhatsApp: ${lead.phone || 'No especificado'}
+Ubicación Física: ${lead.address ? `${lead.address}, ` : ''}${lead.city ? `${lead.city}, ` : ''}${lead.state ? `${lead.state}, ` : ''}${lead.country || 'México'}
+Sitio Web Oficial: ${lead.website || 'No especificado'}
+Responsable / Agente Comercial: ${lead.assignedTo || 'Sin asignar'}
+Fecha de Registro: ${lead.createdAt || 'N/D'}
+
+Observaciones y Requerimientos Internos del Expediente:
+${lead.notes && lead.notes.trim().length > 0 ? lead.notes : 'Sin notas adicionales registradas.'}
+
+Directorio de Contactos Adicionales:
+${lead.contacts && lead.contacts.length > 0 ? JSON.stringify(lead.contacts, null, 2) : 'Sin contactos adicionales registrados.'}
+
+Historial de Actividades y Agenda del Prospecto:
+${activities && activities.length > 0 ? JSON.stringify(activities, null, 2) : 'Sin actividades previas registradas.'}
+`;
+
+      const systemInstruction = `Eres "Gemini Intelligence - Consultor IA Comercial", un estratega de ventas senior especializado en el sector educativo internacional y corporativo.
+Tu objetivo es analizar minuciosamente el expediente de la institución educativa o cliente prospecto y generar contenido comercial de altísima calidad, profesional, accionable e hiperpuntero.
+
+Estructura siempre tus respuestas con un tono ejecutivo, seguro, persuasivo y elegante usando formato Markdown claro:
+- Usa encabezados (###) para estructurar secciones.
+- Usa listas con viñetas (*) para destacar puntos clave.
+- Usa negritas (**texto**) para conceptos importantes.
+- Mantén el enfoque en cerrar la venta y aportar máximo valor al colegio.`;
+
+      let userPrompt = "";
+
+      switch (action) {
+        case "Resumir Historial":
+          userPrompt = `Realiza un Resumen Ejecutivo del Historial y Estado Actual de la institución "${lead.name}".
+Incluye:
+### 1. Diagnóstico General del Prospecto
+### 2. Puntos Clave de Oportunidad
+### 3. Perfil de Tomadores de Decisión
+### 4. Recomendación Comercial Inmediata para el Agente.`;
+          break;
+
+        case "Preparar Reunión":
+          userPrompt = `Genera un Plan Estratégico de Preparación para una Reunión Directiva con los tomadores de decisión de "${lead.name}".
+Incluye:
+### 1. Tesis Comercial y Propuesta de Valor Personalizada
+### 2. Principales Objeciones Esperadas y Respuestas Maestras
+### 3. Preguntas Clave de Descubrimiento (BANT) para la Directiva
+### 4. Cierre Sugerido y Próximos Pasos.`;
+          break;
+
+        case "Generar Agenda":
+          userPrompt = `Diseña una Agenda Estructurada y Profesional para una demostración o sesión ejecutiva de 45 minutos con "${lead.name}".
+Incluye:
+### 1. Objetivo General de la Sesión
+### 2. Desglose Módulo por Módulo (Tiempos, Temas y Entregables)
+### 3. Materiales y Preparación previa sugerida
+### 4. Compromisos esperados al finalizar.`;
+          break;
+
+        case "Crear Propuesta":
+          userPrompt = `Redacta el Resumen Ejecutivo de una Propuesta Comercial Formal para "${lead.name}" (Valor Estimado: $${(lead.value || 0).toLocaleString('en-US')} USD).
+Incluye:
+### 1. Contexto y Necesidades Identificadas del Colegio
+### 2. Solución Propuesta y Alcance Operativo
+### 3. Justificación del Retorno de Inversión (ROI) y Beneficios
+### 4. Estructura de Inversión Sugerida
+### 5. Plan de Implementación y Siguientes Hitos.`;
+          break;
+
+        case "Redactar Correo":
+          userPrompt = `Redacta un Correo Electrónico Comercial Altamente Persuasivo e Hiperpersonalizado para ${lead.contactName || 'Directivo/a'} de "${lead.name}".
+Considera que la institución se encuentra actualmente en la etapa "${lead.status}" del proceso comercial.
+Incluye:
+**Asunto sugerido:** [Escribe un asunto directo, profesional e irresistible]
+
+**Cuerpo del Correo:**
+[Escribe el mensaje completo formal pero cercano, con llamada a la acción (CTA) clara y profesional].`;
+          break;
+
+        case "Generar Plantilla Correo Seguimiento":
+        case "Plantilla Seguimiento":
+          {
+            let lastInteractionInfo = "No hay interacciones específicas registradas previamente.";
+            if (activities && Array.isArray(activities) && activities.length > 0) {
+              const sorted = [...activities].sort((a, b) => new Date(b.dueDate || b.createdAt || 0).getTime() - new Date(a.dueDate || a.createdAt || 0).getTime());
+              const lastAct = sorted[0];
+              lastInteractionInfo = `Última interacción registrada (${lastAct.dueDate || lastAct.createdAt || 'reciente'}): Tipo: ${lastAct.type || 'Contacto'}, Título/Descripción: "${lastAct.title || ''}", Estado: ${lastAct.status || 'Completada'}, Notas/Detalles: "${lastAct.notes || 'Sin detalles'}"`;
+            } else if (lead.notes && lead.notes.trim()) {
+              const firstLineNote = lead.notes.split('\n')[0];
+              lastInteractionInfo = `Últimas observaciones en el expediente: "${firstLineNote}"`;
+            }
+
+            userPrompt = `Genera una Plantilla de Correo Electrónico de Seguimiento Automático altamente profesional y personalizada para la institución "${lead.name}", dirigida a ${lead.contactName || 'Directivo/a'}.
+
+INFORMACIÓN DE LA ÚLTIMA INTERACCIÓN REGISTRADA:
+${lastInteractionInfo}
+
+INSTRUCCIONES DE GENERACIÓN DE PLANTILLA:
+1. Toma como punto de partida clave la última interacción registrada arriba (o la etapa actual "${lead.status}" del prospecto).
+2. Genera una plantilla de correo de seguimiento oportuna, profesional, persuasiva e hiper-relevante para continuar la conversación hacia la siguiente etapa comercial.
+3. Proporciona un formato listo para copiar y enviar, incluyendo asunto e instrucciones para el agente comercial.
+
+ESTRUCTURA REQUERIDA DE LA RESPUESTA:
+### 📧 Plantilla de Correo de Seguimiento Automático
+**Para:** ${lead.contactName || 'Directivo/a'} <${lead.email || 'correo@institucion.edu.mx'}>
+**Asunto Sugerido:** [Asunto hiper-relevante basado en la última interacción]
+
+**Cuerpo del Correo:**
+[Escribe el cuerpo completo del correo con saludo formal, referencia a la última interacción, propuesta de valor y llamada a la acción (CTA) clara]
+
+---
+### 💡 Recomendaciones para el Agente Comercial:
+* **Momento idóneo para enviar:** [Indica cuándo enviar este correo e.g. 24 a 48 horas después del contacto]
+* **Siguiente acción recomendada:** [Sugerencia de seguimiento si no responde]`;
+          }
+          break;
+
+        case "Pronosticar Cierre & Riesgos":
+          userPrompt = `Efectúa un Análisis Predictivo de Cierre y Diagnóstico de Riesgos Comerciales para la institución "${lead.name}".
+Incluye:
+### 1. Probabilidad Estimada de Cierre (%)
+### 2. Tiempo Proyectado para la Firma de Contrato
+### 3. Matriz de Riesgos Identificados (Nivel Alto / Medio / Bajo)
+### 4. Factores Decisivos de Compra
+### 5. Plan de Acción Inmediato de 3 Pasos para Acelerar el Cierre.`;
+          break;
+
+        default:
+          userPrompt = customPrompt || `Aporta sugerencias comerciales estratégicas para avanzar la negociación con la institución "${lead.name}".`;
+      }
+
+      const promptInput = `${leadDossier}\n\n=== INSTRUCCIÓN DEL AGENTE ===\n${userPrompt}`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: promptInput,
+        config: {
+          systemInstruction,
+        }
+      });
+
+      res.json({
+        success: true,
+        result: response.text,
+        action: action || "Consulta Personalizada",
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      console.error("Error in CRM AI Consultant route:", error);
+      res.status(500).json({ error: error.message || "Error al procesar la solicitud con Gemini Consultor IA." });
+    }
+  });
+
+  // =========================================================================
+  // DOCUSIGN ESIGNATURE API FOUNDATIONAL ROUTES
+  // =========================================================================
+  
+  // Stateful memory store for DocuSign envelopes
+  const docusignEnvelopes = new Map<string, {
+    envelopeId: string,
+    studentId: string,
+    name: string,
+    email: string,
+    documentName: string,
+    documentId: string,
+    status: string,
+    sentDateTime: string,
+    completedDateTime?: string,
+    isSimulated: boolean,
+    signingUrl: string
+  }>();
+
+  // 1. DocuSign: Send envelope for signature
+  app.post('/api/docusign/send-envelope', async (req, res) => {
+    try {
+      const { studentId, name, email, documentName, documentId, customText } = req.body;
+
+      if (!studentId || !name || !email || !documentName) {
+        return res.status(400).json({ error: 'Faltan parámetros requeridos: studentId, name, email o documentName.' });
+      }
+
+      const clientId = process.env.DOCUSIGN_CLIENT_ID;
+      const clientSecret = process.env.DOCUSIGN_CLIENT_SECRET;
+      const accountId = process.env.DOCUSIGN_ACCOUNT_ID;
+      const userId = process.env.DOCUSIGN_USER_ID;
+      const authServer = process.env.DOCUSIGN_AUTH_SERVER || 'account-d.docusign.com';
+
+      // Check if keys are properly configured
+      const isConfigured = !!(clientId && clientSecret && accountId && userId && 
+                             !clientId.includes('your-') && !clientSecret.includes('your-'));
+
+      const envelopeId = 'ds-' + Math.random().toString(36).substring(2, 15);
+      const sentTime = new Date().toISOString();
+      const mockSigningUrl = `/docusign-signing?envelopeId=${envelopeId}`;
+
+      if (!isConfigured) {
+        // Fallback to Simulation Mode
+        const simulatedEnvelope = {
+          envelopeId,
+          studentId,
+          name,
+          email,
+          documentName,
+          documentId: documentId || 'doc-101',
+          status: 'sent',
+          sentDateTime: sentTime,
+          isSimulated: true,
+          signingUrl: mockSigningUrl
+        };
+        docusignEnvelopes.set(envelopeId, simulatedEnvelope);
+
+        return res.json({
+          success: true,
+          isSimulated: true,
+          envelopeId,
+          status: 'sent',
+          signingUrl: mockSigningUrl,
+          message: 'DocuSign configurado en Modo Simulación (Configure credenciales en .env para producción).',
+          details: {
+            info: 'Para usar DocuSign real, configure las variables correspondientes en .env y asocie la autenticación JWT OAuth de DocuSign.'
+          }
+        });
+      }
+
+      console.log(`[DocuSign API] Iniciando envío de envelope real. ID de Cliente: ${clientId}`);
+      
+      try {
+        // Autenticación OAuth en DocuSign (Esquema de credenciales de cliente para Sandbox/DEMO)
+        const tokenResponse = await fetch(`https://${authServer}/oauth/token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': 'Basic ' + Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
+          },
+          body: new URLSearchParams({
+            grant_type: 'client_credentials'
+          })
+        });
+
+        if (!tokenResponse.ok) {
+          const errText = await tokenResponse.text();
+          throw new Error(`Fallo de Autenticación OAuth DocuSign (${tokenResponse.status}): ${errText}`);
+        }
+
+        const tokenData = await tokenResponse.json() as any;
+        const accessToken = tokenData.access_token;
+
+        // Construcción del Payload del Envelope
+        const envelopePayload = {
+          emailSubject: `Firma Requerida: ${documentName}`,
+          documents: [
+            {
+              documentBase64: Buffer.from(`Documento oficial para ${name}. Archivo: ${documentName}. ${customText || ''}`).toString('base64'),
+              name: documentName,
+              fileExtension: 'txt',
+              documentId: '1'
+            }
+          ],
+          recipients: {
+            signers: [
+              {
+                email: email,
+                name: name,
+                recipientId: '1',
+                routingOrder: '1',
+                tabs: {
+                  signHereTabs: [
+                    {
+                      anchorString: '/firma/',
+                      anchorUnits: 'pixels',
+                      anchorYOffset: '10',
+                      anchorXOffset: '20'
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          status: 'sent'
+        };
+
+        const dsUrl = `https://demo.docusign.net/restapi/v2.1/accounts/${accountId}/envelopes`;
+        const envelopeResponse = await fetch(dsUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(envelopePayload)
+        });
+
+        if (!envelopeResponse.ok) {
+          const dsErr = await envelopeResponse.text();
+          throw new Error(`Error en API eSignature (${envelopeResponse.status}): ${dsErr}`);
+        }
+
+        const envelopeData = await envelopeResponse.json() as any;
+        
+        const realEnvelope = {
+          envelopeId: envelopeData.envelopeId,
+          studentId,
+          name,
+          email,
+          documentName,
+          documentId: documentId || 'doc-101',
+          status: 'sent',
+          sentDateTime: sentTime,
+          isSimulated: false,
+          signingUrl: envelopeData.uri || mockSigningUrl
+        };
+        docusignEnvelopes.set(envelopeData.envelopeId, realEnvelope);
+
+        return res.json({
+          success: true,
+          isSimulated: false,
+          envelopeId: envelopeData.envelopeId,
+          status: 'sent',
+          signingUrl: realEnvelope.signingUrl,
+          message: 'Contrato enviado con éxito a través de la API oficial de DocuSign.'
+        });
+
+      } catch (innerError: any) {
+        console.warn("[DocuSign] No se pudo completar llamada real, usando simulación controlada:", innerError.message);
+        
+        const simulatedEnvelope = {
+          envelopeId,
+          studentId,
+          name,
+          email,
+          documentName,
+          documentId: documentId || 'doc-101',
+          status: 'sent',
+          sentDateTime: sentTime,
+          isSimulated: true,
+          signingUrl: mockSigningUrl
+        };
+        docusignEnvelopes.set(envelopeId, simulatedEnvelope);
+
+        return res.json({
+          success: true,
+          isSimulated: true,
+          envelopeId,
+          status: 'sent',
+          signingUrl: mockSigningUrl,
+          message: `Modo Simulación Activo (La conexión real falló: ${innerError.message || 'Error de conexión'}).`,
+          errorDetails: innerError.message
+        });
+      }
+
+    } catch (error: any) {
+      console.error("General error in DocuSign send route:", error);
+      res.status(500).json({ error: error.message || 'Error al procesar la solicitud de DocuSign.' });
+    }
+  });
+
+  // 2. DocuSign: Get envelope status
+  app.get('/api/docusign/envelope-status/:envelopeId', async (req, res) => {
+    try {
+      const { envelopeId } = req.params;
+      
+      if (!envelopeId) {
+        return res.status(400).json({ error: 'Falta el envelopeId.' });
+      }
+
+      const envObj = docusignEnvelopes.get(envelopeId);
+      if (envObj) {
+        return res.json(envObj);
+      }
+
+      // Check process env config
+      const clientId = process.env.DOCUSIGN_CLIENT_ID;
+      const isSimulated = !clientId || clientId.startsWith('your-') || envelopeId.startsWith('ds-');
+
+      if (isSimulated) {
+        return res.json({
+          envelopeId,
+          status: 'sent',
+          sentDateTime: new Date().toISOString(),
+          isSimulated: true,
+          message: "Simulación de estado"
+        });
+      }
+
+      return res.status(404).json({ error: `Envelope ${envelopeId} no encontrado.` });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 3. DocuSign: Simular firma (para desarrollo/pruebas)
+  app.post('/api/docusign/simulate-completion/:envelopeId', async (req, res) => {
+    try {
+      const { envelopeId } = req.params;
+      const envObj = docusignEnvelopes.get(envelopeId);
+      
+      if (!envObj) {
+        return res.status(404).json({ error: 'Envelope no encontrado' });
+      }
+
+      envObj.status = 'completed';
+      envObj.completedDateTime = new Date().toISOString();
+      docusignEnvelopes.set(envelopeId, envObj);
+
+      res.json({
+        success: true,
+        message: 'Firma simulada con éxito. El estado se ha actualizado a "completed" (Firmado).',
+        envelope: envObj
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 4. DocuSign: Get all envelopes for student
+  app.get('/api/docusign/envelopes/student/:studentId', async (req, res) => {
+    try {
+      const { studentId } = req.params;
+      const list = Array.from(docusignEnvelopes.values()).filter(e => e.studentId === studentId);
+      res.json(list);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 

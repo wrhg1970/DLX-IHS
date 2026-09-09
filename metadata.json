@@ -1,6 +1,6 @@
 {
   "name": "IHS Manager (International High School)",
-  "description": "Sistema de gestión escolar internacional para administrar instituciones, alumnos, clases, pagos y reportes en múltiples regiones.",
+  "description": "Sistema de gestión escolar internacional para administrar instituciones, alumnos, clases, pagos, CRM con envío masivo de correos institucionales y reportes en múltiples regiones.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

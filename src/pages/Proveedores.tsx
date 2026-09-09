@@ -3,6 +3,7 @@ import { Truck, Plus, Mail, Phone, MapPin, Building, Globe, Search, SlidersHoriz
 import { Link, useNavigate } from "react-router-dom";
 import { useAppContext } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
+import { hasPermission } from "../utils/permissionCheck";
 
 const academicSubcats = [
   "Syllabus Académico",
@@ -15,7 +16,7 @@ const academicSubcats = [
 ];
 
 export function Proveedores() {
-  const { providers, addProvider, updateProvider } = useAppContext();
+  const { providers, addProvider, updateProvider, currentUser } = useAppContext();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const navigate = useNavigate();
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -118,13 +119,15 @@ export function Proveedores() {
           <h2 className="text-xl font-bold text-slate-800 tracking-tight font-sans">Proveedores</h2>
           <p className="text-sm text-slate-500 mt-1">Directorio de proveedores y control de tarifas de servicios</p>
         </div>
-        <button 
-          onClick={openAddModal}
-          className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-indigo-700 transition flex items-center uppercase tracking-wider cursor-pointer"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Añadir Proveedor
-        </button>
+        {hasPermission(currentUser?.role, "Proveedores", "create") && (
+          <button 
+            onClick={openAddModal}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-indigo-700 transition flex items-center uppercase tracking-wider cursor-pointer"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Añadir Proveedor
+          </button>
+        )}
       </div>
 
       {/* Header and statistics Grid */}

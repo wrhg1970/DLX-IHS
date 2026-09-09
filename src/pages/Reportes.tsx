@@ -20,10 +20,18 @@ import {
   ArrowDownRight,
   CheckCircle,
   Clock,
-  Briefcase
+  Briefcase,
+  Printer,
+  Crown,
+  CreditCard,
+  BookCheck,
+  Filter,
+  FileSpreadsheet,
+  Lock
 } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { useAppContext } from "../context/AppContext";
+import { useAppContext, Institution } from "../context/AppContext";
+import { InstitutionFinancialReportModal } from "../components/InstitutionFinancialReportModal";
 
 const COLORS = ['#4f46e5', '#818cf8', '#c7d2fe', '#312e81', '#4338ca'];
 
@@ -49,8 +57,15 @@ export function Reportes() {
     providers,
     users,
     updateFinancialTransaction,
-    catalogs
+    catalogs,
+    companyInfo,
+    providerProductServices,
+    currentUser
   } = useAppContext();
+
+  // Selected institution for financial report modal
+  const [instReportModal, setInstReportModal] = useState<Institution | null>(null);
+  const [instReportType, setInstReportType] = useState<'institucion' | 'interno'>('institucion');
 
   const [activeTab, setActiveTab] = useState<ReportTab>('Dashboard');
   const [dateRangeFilter, setDateRangeFilter] = useState({ start: '', end: '' });
@@ -73,6 +88,24 @@ export function Reportes() {
 
   // Facturas sub-filter
   const [activeFacturaFilter, setActiveFacturaFilter] = useState<'Todas' | 'Solicitadas' | 'Facturadas'>('Todas');
+
+  // Print Preview state
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
+
+  // Concept Filter state for customer payments report (Cursos vs Membresía)
+  const [paymentConceptFilter, setPaymentConceptFilter] = useState<'all' | 'courses' | 'membership'>('all');
+
+  // Print Payment Report modal state
+  const [isPrintPaymentReportOpen, setIsPrintPaymentReportOpen] = useState(false);
+
+  // Helper to categorize payment as Membership or Courses
+  const isMembershipPayment = (tx: any) => {
+    return (
+      tx.subcategory === 'sub_membresia' ||
+      (tx.concept && (tx.concept.toLowerCase().includes('membresía') || tx.concept.toLowerCase().includes('membresia'))) ||
+      (tx.description && (tx.description.toLowerCase().includes('membresía') || tx.description.toLowerCase().includes('membresia')))
+    );
+  };
 
   // --- EXCHANGE RATE COMPENSATIONS ---
   const averageExchangeRate = useMemo(() => {
@@ -300,6 +333,80 @@ export function Reportes() {
     return result;
   }, [financialTransactions, activeTab, dateRangeFilter, studentFilter, institutionFilter, statusFilter, accountFilter, searchTerm, sortConfig, students, institutions, providers, bankAccounts]);
 
+  // Separated statistics for Customer Payments (Cursos vs Membresía)
+  const paymentConcentrationStats = useMemo(() => {
+    let coursesCount = 0;
+    let coursesAmountMXN = 0;
+    let coursesAmountUSD = 0;
+
+    let membCount = 0;
+    let membAmountMXN = 0;
+    let membAmountUSD = 0;
+
+    filteredPayments.forEach(tx => {
+      const ba = bankAccounts.find(account => account.id.toString() === tx.bankAccountId?.toString());
+      const isUSDAcc = isUSDOrWellsFargoAccount(ba);
+      const rate = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+
+      // Monto MXN calculation
+      const finalMXNVal = isUSDAcc 
+        ? (tx.currency === 'USD' ? tx.amount * rate : tx.amountMXN) 
+        : tx.amountMXN;
+
+      // Monto USD calculation
+      const finalUSDVal = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rate);
+
+      if (isMembershipPayment(tx)) {
+        membCount++;
+        membAmountMXN += finalMXNVal;
+        membAmountUSD += finalUSDVal;
+      } else {
+        coursesCount++;
+        coursesAmountMXN += finalMXNVal;
+        coursesAmountUSD += finalUSDVal;
+      }
+    });
+
+    const totalCount = coursesCount + membCount;
+    const totalAmountMXN = coursesAmountMXN + membAmountMXN;
+    const totalAmountUSD = coursesAmountUSD + membAmountUSD;
+
+    const coursesPct = totalAmountUSD > 0 ? (coursesAmountUSD / totalAmountUSD) * 100 : 0;
+    const membPct = totalAmountUSD > 0 ? (membAmountUSD / totalAmountUSD) * 100 : 0;
+
+    return {
+      courses: {
+        count: coursesCount,
+        amountMXN: coursesAmountMXN,
+        amountUSD: coursesAmountUSD,
+        percentage: coursesPct,
+      },
+      membership: {
+        count: membCount,
+        amountMXN: membAmountMXN,
+        amountUSD: membAmountUSD,
+        percentage: membPct,
+      },
+      total: {
+        count: totalCount,
+        amountMXN: totalAmountMXN,
+        amountUSD: totalAmountUSD,
+      }
+    };
+  }, [filteredPayments, bankAccounts, averageExchangeRate]);
+
+  // Payments to display in the table based on active tab & concept sub-filter
+  const displayedPayments = useMemo(() => {
+    if (activeTab !== 'Pagos de Clientes') return filteredPayments;
+    if (paymentConceptFilter === 'courses') {
+      return filteredPayments.filter(tx => !isMembershipPayment(tx));
+    }
+    if (paymentConceptFilter === 'membership') {
+      return filteredPayments.filter(tx => isMembershipPayment(tx));
+    }
+    return filteredPayments;
+  }, [filteredPayments, activeTab, paymentConceptFilter]);
+
   const reportStats = useMemo(() => {
     const count = filteredPayments.length;
     let totalAmountMXN = 0;
@@ -349,6 +456,7 @@ export function Reportes() {
     setAccountFilter('');
     setAgentFilter('');
     setSearchTerm('');
+    setPaymentConceptFilter('all');
   };
 
   // --- DYNAMIC HELPERS FOR % COMISIONES ---
@@ -657,6 +765,41 @@ export function Reportes() {
 
     return list;
   }, [financialTransactions, students, institutions, expectedEnrollmentValues, dateRangeFilter, institutionFilter, statusFilter, accountFilter, searchTerm, sortConfig, bankAccounts, averageExchangeRate]);
+
+  // --- TOTALS FOR ESTADO DE CUENTA ---
+  const estadoDeCuentaTotals = useMemo(() => {
+    let expectedMXN = 0;
+    let expectedUSD = 0;
+    let realMXN = 0;
+    let realUSD = 0;
+    let expenseMXN = 0;
+    let expenseUSD = 0;
+    let commissionMXN = 0;
+    let commissionUSD = 0;
+    let marginMXN = 0;
+    let marginUSD = 0;
+
+    estadoDeCuentaRows.forEach(row => {
+      expectedMXN += row.expectedIncomeMXN || 0;
+      expectedUSD += row.expectedIncomeUSD || 0;
+      realMXN += row.realIncomeMXN || 0;
+      realUSD += row.realIncomeUSD || 0;
+      expenseMXN += row.expenseMXN || 0;
+      expenseUSD += row.expenseUSD || 0;
+      commissionMXN += row.commissionMXN || 0;
+      commissionUSD += row.commissionUSD || 0;
+      marginMXN += row.marginMXN || 0;
+      marginUSD += row.marginUSD || 0;
+    });
+
+    return {
+      expectedMXN, expectedUSD,
+      realMXN, realUSD,
+      expenseMXN, expenseUSD,
+      commissionMXN, commissionUSD,
+      marginMXN, marginUSD
+    };
+  }, [estadoDeCuentaRows]);
 
   // --- DYNAMIC HELPERS FOR FACTURAS ---
   const facturasRows = useMemo(() => {
@@ -1329,8 +1472,355 @@ export function Reportes() {
         </div>
       )}
 
-      {/* CUSTOMER AND PROVIDER PAYMENT REVIEWS (PRESERVED ENDPOINTS) */}
-      {(activeTab === 'Pagos de Clientes' || activeTab === 'Pagos a Proveedores') && (
+      {/* CUSTOMER PAYMENT REVIEWS (WITH CONCENTRATED BREAKDOWN FOR COURSES VS MEMBERSHIP) */}
+      {activeTab === 'Pagos de Clientes' && (
+        <div className="flex flex-col flex-1 min-h-0 space-y-4">
+          
+          {/* Header Action & Concentrator Cards */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-indigo-600" />
+                Concentrado de Pagos: Cursos vs Membresía
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">
+                Resumen financiero concentrado y separado de ingresos por programas académicos y membresías institucionales.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsPrintPaymentReportOpen(true)}
+              className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-4 py-2 rounded-xl text-xs font-black transition shadow-sm cursor-pointer shrink-0"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Imprimir Reporte Concentrado (PDF)</span>
+            </button>
+          </div>
+
+          {/* 3 Interactive Concentration KPI Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            
+            {/* 1. Pagos por Cursos */}
+            <div 
+              onClick={() => setPaymentConceptFilter(prev => prev === 'courses' ? 'all' : 'courses')}
+              className={`p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                paymentConceptFilter === 'courses'
+                  ? 'bg-indigo-50/80 border-indigo-300 ring-2 ring-indigo-500/20 shadow-md'
+                  : 'bg-white border-slate-200 hover:border-indigo-200 hover:bg-slate-50/60 shadow-xs'
+              }`}
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-md shadow-indigo-100">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-indigo-100 text-indigo-700">
+                      📚 Cursos e Inscripciones
+                    </span>
+                    <h4 className="text-xs font-bold text-slate-800 mt-0.5">Pagos de Cursos</h4>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-black text-indigo-700 bg-indigo-100/70 px-2 py-0.5 rounded-lg">
+                    {paymentConcentrationStats.courses.percentage.toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1 mt-2">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[11px] font-semibold text-slate-500">Monto USD:</span>
+                  <span className="text-base font-black text-indigo-950 font-mono">
+                    ${paymentConcentrationStats.courses.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[10px] font-medium text-slate-400">Equivalente MXN:</span>
+                  <span className="text-xs font-bold text-slate-700 font-mono">
+                    ${paymentConcentrationStats.courses.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Transacciones:</span>
+                  <span className="text-xs font-black text-indigo-600 font-mono">
+                    {paymentConcentrationStats.courses.count} {paymentConcentrationStats.courses.count === 1 ? 'pago' : 'pagos'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Pagos por Membresía */}
+            <div 
+              onClick={() => setPaymentConceptFilter(prev => prev === 'membership' ? 'all' : 'membership')}
+              className={`p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                paymentConceptFilter === 'membership'
+                  ? 'bg-amber-50/80 border-amber-300 ring-2 ring-amber-500/20 shadow-md'
+                  : 'bg-white border-slate-200 hover:border-amber-200 hover:bg-slate-50/60 shadow-xs'
+              }`}
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center text-white shadow-md shadow-amber-100">
+                    <Crown className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-800">
+                      ⭐ Membresías
+                    </span>
+                    <h4 className="text-xs font-bold text-slate-800 mt-0.5">Pagos de Membresía</h4>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-black text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-lg">
+                    {paymentConcentrationStats.membership.percentage.toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1 mt-2">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[11px] font-semibold text-slate-500">Monto USD:</span>
+                  <span className="text-base font-black text-amber-950 font-mono">
+                    ${paymentConcentrationStats.membership.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[10px] font-medium text-slate-400">Equivalente MXN:</span>
+                  <span className="text-xs font-bold text-slate-700 font-mono">
+                    ${paymentConcentrationStats.membership.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Transacciones:</span>
+                  <span className="text-xs font-black text-amber-700 font-mono">
+                    {paymentConcentrationStats.membership.count} {paymentConcentrationStats.membership.count === 1 ? 'pago' : 'pagos'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Total General Consolidado */}
+            <div 
+              onClick={() => setPaymentConceptFilter('all')}
+              className={`p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                paymentConceptFilter === 'all'
+                  ? 'bg-emerald-50/80 border-emerald-300 ring-2 ring-emerald-500/20 shadow-md'
+                  : 'bg-white border-slate-200 hover:border-emerald-200 hover:bg-slate-50/60 shadow-xs'
+              }`}
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-md shadow-emerald-100">
+                    <CreditCard className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800">
+                      💳 Consolidado Total
+                    </span>
+                    <h4 className="text-xs font-bold text-slate-800 mt-0.5">Total Recaudado</h4>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-black text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-lg">
+                    100%
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1 mt-2">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[11px] font-semibold text-slate-500">Total USD:</span>
+                  <span className="text-base font-black text-emerald-950 font-mono">
+                    ${paymentConcentrationStats.total.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[10px] font-medium text-slate-400">Total MXN:</span>
+                  <span className="text-xs font-bold text-slate-700 font-mono">
+                    ${paymentConcentrationStats.total.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Registros:</span>
+                  <span className="text-xs font-black text-emerald-700 font-mono">
+                    {paymentConcentrationStats.total.count} transacciones
+                  </span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Sub-Filter Concept Switcher */}
+          <div className="flex items-center justify-between gap-3 bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/60">
+            <div className="flex items-center gap-1 overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => setPaymentConceptFilter('all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  paymentConceptFilter === 'all'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Todos los Pagos ({paymentConcentrationStats.total.count})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentConceptFilter('courses')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  paymentConceptFilter === 'courses'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-500 hover:text-indigo-600'
+                }`}
+              >
+                <span>📚 Solo Cursos ({paymentConcentrationStats.courses.count})</span>
+                <span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded font-mono font-bold">
+                  ${paymentConcentrationStats.courses.amountUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })} USD
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentConceptFilter('membership')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  paymentConceptFilter === 'membership'
+                    ? 'bg-white text-amber-700 shadow-xs'
+                    : 'text-slate-500 hover:text-amber-600'
+                }`}
+              >
+                <span>⭐ Solo Membresía ({paymentConcentrationStats.membership.count})</span>
+                <span className="text-[10px] bg-amber-50 text-amber-800 px-1.5 py-0.2 rounded font-mono font-bold">
+                  ${paymentConcentrationStats.membership.amountUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })} USD
+                </span>
+              </button>
+            </div>
+
+            <div className="text-[11px] font-bold text-slate-400 px-3 hidden sm:block">
+              Mostrando {displayedPayments.length} de {filteredPayments.length} operaciones
+            </div>
+          </div>
+
+          {/* Customer Payments Table */}
+          <div className="flex-1 bg-white border border-slate-200 rounded-[2rem] overflow-hidden shadow-sm flex flex-col">
+            <div className="overflow-auto font-sans">
+              <table className="w-full text-left border-collapse">
+                <thead className="sticky top-0 z-10 bg-white shadow-sm border-b border-slate-100">
+                  <tr className="bg-slate-50/50">
+                    <th className="px-6 py-4">
+                      <button onClick={() => handleSort('date')} className="flex items-center text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                        Fecha <ArrowUpDown className="w-3 h-3 ml-1.5" />
+                      </button>
+                    </th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Concepto</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Sujeto</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Institución</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Cuenta</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Método</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Estado</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Monto Original</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Monto USD</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Monto MXN</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 text-slate-700">
+                  {displayedPayments.map((tx) => {
+                    const student = students.find(s => s.id === tx.studentId);
+                    const institution = institutions.find(i => i.id === (student?.institutionId || tx.institutionId));
+                    const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
+                    const isMemb = isMembershipPayment(tx);
+                    
+                    const isUSDAcc = isUSDOrWellsFargoAccount(bankAccount);
+                    const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+                    
+                    const finalMXNVal = isUSDAcc 
+                      ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN)
+                      : tx.amountMXN;
+
+                    const amountUSD = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rateUsed);
+                    
+                    return (
+                      <tr 
+                        key={tx.id} 
+                        onClick={() => setSelectedTxForDetail(tx)}
+                        className="hover:bg-indigo-50/40 transition-colors text-xs font-semibold cursor-pointer group"
+                        title="Haga clic para ver el detalle de la operación"
+                      >
+                        <td className="px-6 py-4 font-mono font-normal text-slate-400 group-hover:text-indigo-600 transition-colors">{tx.date}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {isMemb ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-50 text-amber-800 border border-amber-200">
+                              ⭐ Membresía
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              📚 Cursos
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 font-bold text-slate-900">
+                          <div className="flex flex-col">
+                            <span className="group-hover:text-indigo-600 transition-colors font-bold text-slate-800">
+                              {student ? `${student.name} ${student.lastName || ''}` : institution ? institution.name : "Cliente Global"}
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-medium font-mono">ID: {tx.id.substring(0, 8)}...</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 font-normal text-slate-600">
+                          {institution?.name || 'Administración'}
+                        </td>
+                        <td className="px-6 py-4 text-slate-500">
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                            isUSDAcc ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'text-slate-600'
+                          }`}>
+                            {bankAccount?.bankName || "Caja General"} {isUSDAcc && "(USD)"}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 font-semibold text-slate-500">{tx.paymentMethod}</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wide border ${
+                            tx.status === 'Aplicado' || tx.status === 'Pagado'
+                              ? 'bg-emerald-50 text-emerald-600 border-emerald-100' 
+                              : 'bg-amber-50 text-amber-600 border-amber-100'
+                          }`}>
+                            {tx.status || 'Aplicado'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right font-mono font-bold text-slate-500">
+                          {tx.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {tx.currency}
+                        </td>
+                        <td className="px-6 py-4 text-right font-mono font-bold text-slate-600">
+                          ${amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        </td>
+                        <td className="px-6 py-4 text-right font-mono font-black text-slate-950">
+                          <div className="flex flex-col items-end">
+                            <span>${finalMXNVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</span>
+                            {isUSDAcc && (
+                              <span className="text-[9px] text-indigo-550 text-indigo-600 font-bold leading-none mt-0.5">
+                                *(T.C. {rateUsed.toFixed(4)})
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {displayedPayments.length === 0 && (
+                    <tr>
+                      <td colSpan={10} className="px-6 py-16 text-center">
+                        <p className="text-slate-400 text-xs font-bold">No se encontraron transacciones bajo este concepto o filtro.</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PROVIDER PAYMENT REVIEWS */}
+      {activeTab === 'Pagos a Proveedores' && (
         <div className="flex flex-col flex-1 min-h-0 space-y-4">
           <div className="flex flex-wrap gap-4 mb-1">
             <div className="bg-indigo-50 px-5 py-3 rounded-2xl flex items-center space-x-3 border border-indigo-100">
@@ -1372,8 +1862,7 @@ export function Reportes() {
                         Fecha <ArrowUpDown className="w-3 h-3 ml-1.5" />
                       </button>
                     </th>
-                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Sujeto</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Institución / Proveedor</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Proveedor</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Cuenta</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Método</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Estado</th>
@@ -1384,8 +1873,6 @@ export function Reportes() {
                 </thead>
                 <tbody className="divide-y divide-slate-50 text-slate-700">
                   {filteredPayments.map((tx) => {
-                    const student = students.find(s => s.id === tx.studentId);
-                    const institution = institutions.find(i => i.id === (student?.institutionId || tx.institutionId));
                     const provider = providers.find(p => p.id === tx.providerId);
                     const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
                     
@@ -1409,13 +1896,10 @@ export function Reportes() {
                         <td className="px-6 py-4 font-bold text-slate-900">
                           <div className="flex flex-col">
                             <span className="group-hover:text-indigo-600 transition-colors font-bold text-slate-800">
-                              {student ? `${student.name} ${student.lastName || ''}` : institution ? institution.name : provider ? (provider.commercialName || provider.legalName) : "Global"}
+                              {provider ? (provider.commercialName || provider.legalName) : "Proveedor General"}
                             </span>
                             <span className="text-[9px] text-slate-400 font-medium font-mono">ID: {tx.id.substring(0, 8)}...</span>
                           </div>
-                        </td>
-                        <td className="px-6 py-4 font-normal text-slate-600">
-                          {institution?.name || (provider ? 'Proveedor Registrado' : 'Administración')}
                         </td>
                         <td className="px-6 py-4 text-slate-500">
                           <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
@@ -1455,8 +1939,8 @@ export function Reportes() {
                   })}
                   {filteredPayments.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-6 py-16 text-center">
-                        <p className="text-slate-400 text-xs font-bold">No se encontraron transacciones representadas bajo esta categoría.</p>
+                      <td colSpan={8} className="px-6 py-16 text-center">
+                        <p className="text-slate-400 text-xs font-bold">No se encontraron transacciones de egreso representadas bajo esta categoría.</p>
                       </td>
                     </tr>
                   )}
@@ -1570,7 +2054,92 @@ export function Reportes() {
 
       {/* ESTADO DE CUENTA TAB */}
       {activeTab === 'Estado de Cuenta' && (
-        <div className="space-y-4">
+        <div className="space-y-6">
+          {/* Header Action Row */}
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-5 rounded-[2rem] border border-slate-200 shadow-sm">
+            <div>
+              <h3 className="text-base font-black text-slate-800 tracking-tight">Consolidado del Estado de Cuenta</h3>
+              <p className="text-[11px] text-slate-500 font-semibold mt-0.5">
+                Mostrando <span className="text-indigo-600 font-black">{estadoDeCuentaRows.length}</span> operaciones según filtros seleccionados.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Quick Institutional Reports Trigger */}
+              {institutionFilter && (() => {
+                const targetInst = institutions.find(i => String(i.id) === institutionFilter);
+                if (!targetInst) return null;
+                return (
+                  <div className="flex items-center gap-2 mr-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInstReportModal(targetInst);
+                        setInstReportType('institucion');
+                      }}
+                      className="flex items-center space-x-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      title="Ver Estado de Cuenta Oficial para esta institución"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
+                      <span>Reporte Institución ({targetInst.name.slice(0, 18)}...)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInstReportModal(targetInst);
+                        setInstReportType('interno');
+                      }}
+                      className="flex items-center space-x-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      title="Ver Reporte Financiero y Rentabilidad Interno (ERP)"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Reporte Interno</span>
+                    </button>
+                  </div>
+                );
+              })()}
+
+              <button
+                onClick={() => setIsPrintPreviewOpen(true)}
+                className="flex items-center justify-center space-x-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-5 py-2.5 rounded-2xl text-xs font-black tracking-wide uppercase transition-all shadow-md shadow-indigo-600/10 hover:shadow-indigo-600/20 cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Imprimir Resumen Global (PDF)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Totals Bar */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="bg-white border border-slate-200 rounded-[1.5rem] p-4 shadow-xs">
+              <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ingreso Esperado</span>
+              <div className="text-sm font-black text-slate-700">${estadoDeCuentaTotals.expectedMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+              <div className="text-[9px] font-bold text-slate-400">(${estadoDeCuentaTotals.expectedUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-[1.5rem] p-4 shadow-xs">
+              <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ingreso Real</span>
+              <div className="text-sm font-black text-emerald-600">${estadoDeCuentaTotals.realMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+              <div className="text-[9px] font-bold text-slate-400">(${estadoDeCuentaTotals.realUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-[1.5rem] p-4 shadow-xs">
+              <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Egreso Total</span>
+              <div className="text-sm font-black text-rose-600">${estadoDeCuentaTotals.expenseMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+              <div className="text-[9px] font-bold text-slate-400">(${estadoDeCuentaTotals.expenseUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-[1.5rem] p-4 shadow-xs">
+              <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Comisión (10%)</span>
+              <div className="text-sm font-black text-purple-600">${estadoDeCuentaTotals.commissionMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN</div>
+              <div className="text-[9px] font-bold text-slate-400">(${estadoDeCuentaTotals.commissionUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-[1.5rem] p-4 shadow-xs col-span-2 md:col-span-1">
+              <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Margen Consolidado</span>
+              <div className={`text-sm font-black ${estadoDeCuentaTotals.marginMXN >= 0 ? 'text-indigo-600' : 'text-rose-700'}`}>
+                ${estadoDeCuentaTotals.marginMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+              </div>
+              <div className="text-[9px] font-bold text-slate-400">(${estadoDeCuentaTotals.marginUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+            </div>
+          </div>
+
           <div className="bg-white border border-slate-200 rounded-[2rem] overflow-hidden shadow-sm">
             <div className="overflow-x-auto text-[11px] md:text-xs">
               <table className="w-full text-left border-collapse">
@@ -1925,7 +2494,7 @@ export function Reportes() {
             {/* Branding/Watermark header */}
             <div className="border-b border-slate-200 pb-6 flex justify-between items-start">
               <div>
-                <p className="text-[10px] text-indigo-600 font-bold uppercase tracking-widest mb-1">Reporte Financiero Oficial</p>
+                <p className="text-[10px] text-indigo-600 font-bold uppercase tracking-widest mb-1">{companyInfo?.commercialName || 'Reporte Financiero Oficial'}</p>
                 <h3 className="text-xl font-black text-slate-900 leading-none">Estado de Resultados</h3>
                 <p className="text-xs text-slate-400 font-medium mt-1">Sincronizado con balance general y transacciones de caja.</p>
               </div>
@@ -2143,6 +2712,645 @@ export function Reportes() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* VISTA PREVIA E IMPRESIÓN DE ESTADO DE CUENTA */}
+      {isPrintPreviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm overflow-y-auto">
+          {/* Inject dynamic print styles */}
+          <style dangerouslySetInnerHTML={{ __html: `
+            @media print {
+              /* Hide everything from regular layout */
+              body * {
+                visibility: hidden !important;
+              }
+              /* Show ONLY print area */
+              #printable-report-content, #printable-report-content * {
+                visibility: visible !important;
+              }
+              #printable-report-content {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                background: white !important;
+                color: black !important;
+                font-family: 'Inter', system-ui, sans-serif !important;
+              }
+              /* Standard letter page constraints */
+              html, body {
+                height: auto !important;
+                overflow: visible !important;
+                background: white !important;
+              }
+              @page {
+                size: letter;
+                margin: 15mm;
+              }
+            }
+          `}} />
+
+          <div className="bg-slate-100 w-full max-w-5xl rounded-[2rem] border border-slate-200 shadow-2xl overflow-hidden flex flex-col my-8 max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                  <Printer className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base leading-none">Vista Previa del Reporte PDF</h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Estado de Cuenta Consolidado</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsPrintPreviewOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+                title="Cerrar Vista Previa"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable Document Area */}
+            <div className="flex-1 overflow-y-auto p-8 flex justify-center bg-slate-200/50">
+              <div 
+                id="printable-report-content" 
+                className="bg-white w-full max-w-[210mm] p-12 shadow-md border border-slate-300/30 rounded-lg flex flex-col justify-between text-xs text-slate-800 font-sans"
+              >
+                {/* Document Header */}
+                <div>
+                  <div className="flex justify-between items-start border-b-2 border-slate-900 pb-6 mb-6">
+                    <div>
+                      <h1 className="text-xl font-black text-slate-900 uppercase tracking-tight">{companyInfo?.commercialName || 'Mi Empresa S.A.'}</h1>
+                      <p className="text-[10px] text-slate-500 font-bold tracking-wider uppercase mt-1">Sistema de Gestión Financiera Centralizada</p>
+                    </div>
+                    <div className="text-right">
+                      <h2 className="text-sm font-black text-indigo-600 tracking-wider uppercase">Estado de Cuenta</h2>
+                      <p className="text-[9px] text-slate-400 font-mono mt-1">Generado: {new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                      <p className="text-[9px] text-slate-400 font-mono">Hora: {new Date().toLocaleTimeString('es-MX')}</p>
+                    </div>
+                  </div>
+
+                  {/* Filter Metadata */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 grid grid-cols-2 gap-4 text-[10px] font-semibold text-slate-600">
+                    <div>
+                      <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Rango de Fechas</span>
+                      <span className="text-slate-800">
+                        {dateRangeFilter.start ? `Desde: ${dateRangeFilter.start}` : 'Todo el historial'} {dateRangeFilter.end ? `Hasta: ${dateRangeFilter.end}` : ''}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Institución Seleccionada</span>
+                      <span className="text-slate-800">
+                        {institutionFilter ? (institutions.find(i => i.id.toString() === institutionFilter)?.name || `ID #${institutionFilter}`) : 'Todas las instituciones'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Cuenta Bancaria / Caja</span>
+                      <span className="text-slate-800">
+                        {accountFilter ? (accountFilter === 'caja' ? 'Caja General' : bankAccounts.find(ba => ba.id.toString() === accountFilter)?.bankName || `ID #${accountFilter}`) : 'Todas las cuentas'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Estado de Transacción</span>
+                      <span className="text-slate-800">
+                        {statusFilter || 'Todos los estados'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Financial Summary */}
+                  <div className="mb-6">
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider mb-3">Resumen de Cuenta Consolidado</h3>
+                    <div className="grid grid-cols-5 gap-3">
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
+                        <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Esperado (MXN)</span>
+                        <div className="text-xs font-black text-slate-800">${estadoDeCuentaTotals.expectedMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                        <div className="text-[8px] text-slate-400">(${estadoDeCuentaTotals.expectedUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD)</div>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
+                        <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Ingreso Real</span>
+                        <div className="text-xs font-black text-emerald-700">${estadoDeCuentaTotals.realMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                        <div className="text-[8px] text-slate-400">(${estadoDeCuentaTotals.realUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD)</div>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
+                        <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Egresos Totales</span>
+                        <div className="text-xs font-black text-rose-700">${estadoDeCuentaTotals.expenseMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                        <div className="text-[8px] text-slate-400">(${estadoDeCuentaTotals.expenseUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD)</div>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
+                        <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Comisión (10%)</span>
+                        <div className="text-xs font-black text-purple-700">${estadoDeCuentaTotals.commissionMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                        <div className="text-[8px] text-slate-400">(${estadoDeCuentaTotals.commissionUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD)</div>
+                      </div>
+                      <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-center">
+                        <span className="block text-[8px] font-black text-indigo-500 uppercase tracking-widest mb-1">Margen Neto</span>
+                        <div className="text-xs font-black text-indigo-700">${estadoDeCuentaTotals.marginMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                        <div className="text-[8px] text-indigo-500 font-bold">(${estadoDeCuentaTotals.marginUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD)</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Transaction List */}
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider mb-3">Detalle de Operaciones</h3>
+                    <table className="w-full text-left border-collapse text-[9px]">
+                      <thead>
+                        <tr className="border-b-2 border-slate-400 bg-slate-100 text-slate-700">
+                          <th className="px-3 py-2 font-black uppercase tracking-wider w-20">Fecha</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Concepto</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Institución</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Ingr. Esperado</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Ingr. Real</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Egreso</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Comisión</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Margen</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 font-semibold text-slate-700">
+                        {estadoDeCuentaRows.map((row, index) => (
+                          <tr key={row.id || index} className="hover:bg-slate-50/50">
+                            <td className="px-3 py-2 font-mono text-slate-500">{row.date}</td>
+                            <td className="px-3 py-2 text-slate-900 max-w-[150px] break-words">{row.description}</td>
+                            <td className="px-3 py-2 text-slate-800">{row.institutionName}</td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {row.expectedIncomeMXN > 0 ? (
+                                <div>
+                                  <div className="text-slate-800 font-bold">${row.expectedIncomeMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                  <div className="text-[8px] text-slate-400">(${row.expectedIncomeUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                                </div>
+                              ) : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {row.realIncomeMXN > 0 ? (
+                                <div>
+                                  <div className="text-emerald-700 font-bold">${row.realIncomeMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                  <div className="text-[8px] text-slate-400">(${row.realIncomeUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                                </div>
+                              ) : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {row.expenseMXN > 0 ? (
+                                <div>
+                                  <div className="text-rose-700 font-bold">${row.expenseMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                  <div className="text-[8px] text-slate-400">(${row.expenseUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                                </div>
+                              ) : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {row.commissionMXN > 0 ? (
+                                <div>
+                                  <div className="text-purple-700 font-bold">${row.commissionMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                  <div className="text-[8px] text-slate-400">(${row.commissionUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)</div>
+                                </div>
+                              ) : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              <div>
+                                <div className={`font-black ${row.marginMXN >= 0 ? "text-emerald-800" : "text-rose-800"}`}>
+                                  ${row.marginMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </div>
+                                <div className="text-[8px] text-slate-400">
+                                  (${row.marginUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD)
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {estadoDeCuentaRows.length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-3 py-12 text-center text-slate-400">
+                              No hay registros cargados para los filtros seleccionados.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Footer Section of sheet */}
+                <div className="mt-12 pt-6 border-t border-slate-300 flex justify-between items-end text-[8px] text-slate-400 font-semibold uppercase tracking-wider shrink-0">
+                  <div>
+                    <span>Documento de Control Financiero Interno - Confidencial</span>
+                  </div>
+                  <div>
+                    <span>Página 1 de 1</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="bg-white border-t border-slate-200 px-8 py-4 flex justify-between shrink-0">
+              <button 
+                onClick={() => setIsPrintPreviewOpen(false)}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl transition-all"
+              >
+                Cerrar
+              </button>
+              <button 
+                onClick={() => window.print()}
+                className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-5 py-2.5 rounded-xl text-xs font-black transition-all shadow-md"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Confirmar Impresión / Exportar PDF</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRINT PREVIEW MODAL FOR CONCENTRATED CUSTOMER PAYMENTS (CURSOS VS MEMBRESÍA) */}
+      {isPrintPaymentReportOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-5xl rounded-[2.5rem] shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+            
+            {/* Modal Navigation Header */}
+            <div className="bg-slate-900 text-white px-8 py-5 flex justify-between items-center shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+                  <Printer className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black tracking-wide uppercase text-indigo-200">Vista de Impresión</h3>
+                  <p className="text-xs text-slate-400 font-medium">Reporte Concentrado de Pagos: Cursos vs Membresía</p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-black transition shadow-sm cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Imprimir / Guardar PDF</span>
+                </button>
+                <button 
+                  onClick={() => setIsPrintPaymentReportOpen(false)}
+                  className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Printable Document Container */}
+            <div className="flex-1 overflow-y-auto p-6 md:p-10 bg-slate-100/70 flex justify-center">
+              <div className="w-full max-w-4xl bg-white p-8 md:p-12 shadow-sm rounded-3xl border border-slate-200 flex flex-col justify-between print:border-none print:shadow-none print:p-0">
+                
+                <div className="space-y-8">
+                  {/* Top Company Header */}
+                  <div className="flex flex-col md:flex-row justify-between items-start border-b border-slate-200 pb-6 gap-4">
+                    <div>
+                      {companyInfo?.logoUrl ? (
+                        <img src={companyInfo.logoUrl} alt="Logo" className="h-12 w-auto object-contain mb-2" />
+                      ) : (
+                        <div className="flex items-center space-x-2 mb-1">
+                          <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-black text-xs">
+                            EDU
+                          </div>
+                          <span className="text-lg font-black text-slate-900 tracking-tight">
+                            {companyInfo?.name || "Global Education Systems"}
+                          </span>
+                        </div>
+                      )}
+                      <p className="text-[10px] font-semibold text-slate-500 leading-tight">
+                        {companyInfo?.address || "Av. Corporativa #500, Ciudad de México"}
+                      </p>
+                      <p className="text-[10px] font-semibold text-slate-400 leading-tight">
+                        RFC: {companyInfo?.rfc || "GES180420ABC"} | Tel: {companyInfo?.phone || "+52 (55) 4160-8000"}
+                      </p>
+                    </div>
+
+                    <div className="text-left md:text-right">
+                      <span className="inline-block px-3 py-1 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-full text-[10px] font-black tracking-widest uppercase mb-1">
+                        Reporte Concentrado
+                      </span>
+                      <h2 className="text-xl font-black text-slate-900 tracking-tight">REPORTE DE PAGOS DE CLIENTES</h2>
+                      <p className="text-[10px] text-slate-500 font-bold mt-0.5">
+                        Emisión: {new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' })}
+                      </p>
+                      {institutionFilter && (
+                        <p className="text-[10px] text-indigo-600 font-bold mt-0.5">
+                          Institución: {institutions.find(i => String(i.id) === institutionFilter)?.name}
+                        </p>
+                      )}
+                      {(dateRangeFilter.start || dateRangeFilter.end) && (
+                        <p className="text-[10px] text-slate-400 font-medium">
+                          Periodo: {dateRangeFilter.start || 'Inicio'} al {dateRangeFilter.end || 'Hoy'}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Concentrated Executive Summary Box */}
+                  <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200">
+                    <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-indigo-600" />
+                      Resumen Concentrado de Ingresos
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[9px] font-black uppercase text-indigo-700 tracking-wider">📚 Pagos de Cursos</span>
+                          <span className="text-[10px] font-black text-indigo-600 bg-white px-1.5 py-0.5 rounded">
+                            {paymentConcentrationStats.courses.percentage.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="text-base font-black text-indigo-950 font-mono">
+                          ${paymentConcentrationStats.courses.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        </div>
+                        <div className="text-[10px] font-semibold text-slate-500">
+                          ${paymentConcentrationStats.courses.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })} MXN
+                        </div>
+                        <div className="text-[9px] text-indigo-600 font-bold mt-1">
+                          {paymentConcentrationStats.courses.count} transacciones
+                        </div>
+                      </div>
+
+                      <div className="bg-amber-50/70 border border-amber-100 rounded-xl p-3.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[9px] font-black uppercase text-amber-800 tracking-wider">⭐ Pagos de Membresía</span>
+                          <span className="text-[10px] font-black text-amber-700 bg-white px-1.5 py-0.5 rounded">
+                            {paymentConcentrationStats.membership.percentage.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="text-base font-black text-amber-950 font-mono">
+                          ${paymentConcentrationStats.membership.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        </div>
+                        <div className="text-[10px] font-semibold text-slate-500">
+                          ${paymentConcentrationStats.membership.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })} MXN
+                        </div>
+                        <div className="text-[9px] text-amber-700 font-bold mt-1">
+                          {paymentConcentrationStats.membership.count} transacciones
+                        </div>
+                      </div>
+
+                      <div className="bg-emerald-50/70 border border-emerald-100 rounded-xl p-3.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[9px] font-black uppercase text-emerald-800 tracking-wider">💳 Gran Total Recaudado</span>
+                          <span className="text-[10px] font-black text-emerald-700 bg-white px-1.5 py-0.5 rounded">
+                            100%
+                          </span>
+                        </div>
+                        <div className="text-base font-black text-emerald-950 font-mono">
+                          ${paymentConcentrationStats.total.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        </div>
+                        <div className="text-[10px] font-semibold text-slate-500">
+                          ${paymentConcentrationStats.total.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2 })} MXN
+                        </div>
+                        <div className="text-[9px] text-emerald-700 font-bold mt-1">
+                          {paymentConcentrationStats.total.count} transacciones totales
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECTION 1: DETALLE DE PAGOS POR CURSOS */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-black text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+                        1. Concentrado y Detalle de Pagos por Cursos
+                      </h3>
+                      <span className="text-[10px] font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                        Subtotal: ${paymentConcentrationStats.courses.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD
+                      </span>
+                    </div>
+
+                    <table className="w-full text-left border-collapse text-[9px]">
+                      <thead>
+                        <tr className="border-b-2 border-indigo-200 bg-indigo-50/60 text-indigo-950">
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Fecha</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Alumno / Sujeto</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Institución</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Descripción</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Método</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Estado</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Monto USD</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Monto MXN</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
+                        {filteredPayments.filter(tx => !isMembershipPayment(tx)).map((tx) => {
+                          const student = students.find(s => s.id === tx.studentId);
+                          const institution = institutions.find(i => i.id === (student?.institutionId || tx.institutionId));
+                          const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
+                          const isUSDAcc = isUSDOrWellsFargoAccount(bankAccount);
+                          const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+                          const finalMXNVal = isUSDAcc ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN) : tx.amountMXN;
+                          const amountUSD = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rateUsed);
+
+                          return (
+                            <tr key={tx.id} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{tx.date}</td>
+                              <td className="px-3 py-2 font-bold text-slate-900">
+                                {student ? `${student.name} ${student.lastName || ''}` : institution ? institution.name : 'Cliente'}
+                              </td>
+                              <td className="px-3 py-2 text-slate-600">{institution?.name || 'Administración'}</td>
+                              <td className="px-3 py-2 text-slate-700 max-w-[150px] truncate">{tx.description || tx.concept || 'Pago de Curso'}</td>
+                              <td className="px-3 py-2 text-slate-500">{tx.paymentMethod}</td>
+                              <td className="px-3 py-2">
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                  {tx.status || 'Aplicado'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">
+                                ${amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono font-bold text-slate-950">
+                                ${finalMXNVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {filteredPayments.filter(tx => !isMembershipPayment(tx)).length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-3 py-6 text-center text-slate-400 italic">
+                              No hay registros de pagos por cursos en el periodo seleccionado.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-indigo-200 bg-indigo-50/40 font-black text-[9px] text-indigo-950">
+                          <td colSpan={6} className="px-3 py-2 text-right uppercase tracking-wider">
+                            Subtotal Pagos por Cursos:
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-indigo-900">
+                            ${paymentConcentrationStats.courses.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-indigo-950">
+                            ${paymentConcentrationStats.courses.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* SECTION 2: DETALLE DE PAGOS POR MEMBRESÍA */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-black text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <Crown className="w-3.5 h-3.5 text-amber-600" />
+                        2. Concentrado y Detalle de Pagos por Membresía
+                      </h3>
+                      <span className="text-[10px] font-black text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-100">
+                        Subtotal: ${paymentConcentrationStats.membership.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD
+                      </span>
+                    </div>
+
+                    <table className="w-full text-left border-collapse text-[9px]">
+                      <thead>
+                        <tr className="border-b-2 border-amber-200 bg-amber-50/60 text-amber-950">
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Fecha</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Institución / Titular</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Descripción</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Método</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Cuenta</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider">Estado</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Monto USD</th>
+                          <th className="px-3 py-2 font-black uppercase tracking-wider text-right">Monto MXN</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
+                        {filteredPayments.filter(tx => isMembershipPayment(tx)).map((tx) => {
+                          const student = students.find(s => s.id === tx.studentId);
+                          const institution = institutions.find(i => i.id === (student?.institutionId || tx.institutionId));
+                          const bankAccount = bankAccounts.find(ba => ba.id.toString() === tx.bankAccountId?.toString());
+                          const isUSDAcc = isUSDOrWellsFargoAccount(bankAccount);
+                          const rateUsed = tx.exchangeRate && tx.exchangeRate > 1 ? tx.exchangeRate : averageExchangeRate;
+                          const finalMXNVal = isUSDAcc ? (tx.currency === 'USD' ? tx.amount * rateUsed : tx.amountMXN) : tx.amountMXN;
+                          const amountUSD = tx.currency === 'USD' ? tx.amount : (tx.amountMXN / rateUsed);
+
+                          return (
+                            <tr key={tx.id} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{tx.date}</td>
+                              <td className="px-3 py-2 font-bold text-slate-900">
+                                {institution ? institution.name : student ? `${student.name} ${student.lastName || ''}` : 'Membresía'}
+                              </td>
+                              <td className="px-3 py-2 text-slate-700 max-w-[180px] truncate">{tx.description || tx.concept || 'Pago de Membresía'}</td>
+                              <td className="px-3 py-2 text-slate-500">{tx.paymentMethod}</td>
+                              <td className="px-3 py-2 text-slate-500">{bankAccount?.bankName || "Caja General"}</td>
+                              <td className="px-3 py-2">
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                  {tx.status || 'Aplicado'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">
+                                ${amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono font-bold text-slate-950">
+                                ${finalMXNVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {filteredPayments.filter(tx => isMembershipPayment(tx)).length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-3 py-6 text-center text-slate-400 italic">
+                              No hay registros de pagos por membresía en el periodo seleccionado.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-amber-200 bg-amber-50/40 font-black text-[9px] text-amber-950">
+                          <td colSpan={6} className="px-3 py-2 text-right uppercase tracking-wider">
+                            Subtotal Pagos por Membresía:
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-amber-900">
+                            ${paymentConcentrationStats.membership.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-amber-950">
+                            ${paymentConcentrationStats.membership.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* SECTION 3: RESUMEN FINANCIERO CONSOLIDADO */}
+                  <div className="bg-slate-900 text-white rounded-2xl p-5 shadow-sm">
+                    <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                      <div>
+                        <span className="text-[9px] uppercase tracking-widest text-indigo-300 font-black block mb-0.5">
+                          Consolidación Final
+                        </span>
+                        <h4 className="text-sm font-black tracking-tight">
+                          Gran Total de Ingresos Recibidos (Cursos + Membresía)
+                        </h4>
+                      </div>
+                      <div className="flex items-center gap-6 text-right">
+                        <div>
+                          <span className="text-[8px] uppercase tracking-wider text-slate-400 block">Total USD</span>
+                          <span className="text-xl font-black text-emerald-400 font-mono">
+                            ${paymentConcentrationStats.total.amountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                          </span>
+                        </div>
+                        <div className="border-l border-slate-700 pl-6">
+                          <span className="text-[8px] uppercase tracking-wider text-slate-400 block">Total MXN</span>
+                          <span className="text-xl font-black text-white font-mono">
+                            ${paymentConcentrationStats.total.amountMXN.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Footer Section of sheet */}
+                <div className="mt-12 pt-6 border-t border-slate-300 flex justify-between items-end text-[8px] text-slate-400 font-semibold uppercase tracking-wider shrink-0">
+                  <div>
+                    <span>Documento de Reporte Financiero Concentrado - Generado por Sistema ERP</span>
+                  </div>
+                  <div>
+                    <span>Página 1 de 1</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="bg-white border-t border-slate-200 px-8 py-4 flex justify-between shrink-0">
+              <button 
+                onClick={() => setIsPrintPaymentReportOpen(false)}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl transition-all cursor-pointer"
+              >
+                Cerrar
+              </button>
+              <button 
+                onClick={() => window.print()}
+                className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-5 py-2.5 rounded-xl text-xs font-black transition-all shadow-md cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Confirmar Impresión / Exportar PDF</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {instReportModal && (
+        <InstitutionFinancialReportModal
+          isOpen={!!instReportModal}
+          onClose={() => setInstReportModal(null)}
+          institution={instReportModal}
+          students={students}
+          enrollments={enrollments}
+          classes={classes}
+          catalogs={catalogs}
+          providerProductServices={providerProductServices}
+          providers={providers}
+          financialTransactions={financialTransactions}
+          users={users}
+          companyInfo={companyInfo}
+          bankAccounts={bankAccounts}
+          isUserAdminOrSuperAdmin={true}
+          initialType={instReportType}
+        />
       )}
 
     </div>

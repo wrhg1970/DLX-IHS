@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext, TransactionType, CurrencyCode } from '../context/AppContext';
-import { Save, UploadCloud } from 'lucide-react';
+import { Save } from 'lucide-react';
+import { PaymentAttachmentsManager, PaymentAttachmentsData } from './PaymentAttachmentsManager';
 
 interface FinancialTransactionFormProps {
   initialType?: TransactionType;
@@ -32,7 +33,14 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
     providerId: fixedProviderId?.toString() || '',
     status: 'Aplicado' as 'Aplicado' | 'Pendiente' | 'Pagado' | 'Programado',
     taxId: '',
-    attachmentUrl: ''
+    attachmentUrl: '',
+    paymentLink: '',
+    invoicePdfUrl: '',
+    invoicePdfName: '',
+    invoiceXmlUrl: '',
+    invoiceXmlName: '',
+    receiptPdfUrl: '',
+    receiptPdfName: ''
   });
 
   const selectedStudent = formType === 'income' && formData.studentId ? students.find(s => s.id === Number(formData.studentId)) : null;
@@ -70,7 +78,14 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
         providerId: (initialData.providerId || fixedProviderId)?.toString() || '',
         status: initialData.status || 'Aplicado',
         taxId: initialData.taxId || '',
-        attachmentUrl: initialData.attachmentUrl || ''
+        attachmentUrl: initialData.attachmentUrl || '',
+        paymentLink: initialData.paymentLink || '',
+        invoicePdfUrl: initialData.invoicePdfUrl || '',
+        invoicePdfName: initialData.invoicePdfName || '',
+        invoiceXmlUrl: initialData.invoiceXmlUrl || '',
+        invoiceXmlName: initialData.invoiceXmlName || '',
+        receiptPdfUrl: initialData.receiptPdfUrl || initialData.attachmentUrl || '',
+        receiptPdfName: initialData.receiptPdfName || (initialData.attachmentUrl ? initialData.attachmentUrl.split('/').pop() : '') || ''
       });
     }
   }, [initialData, initialType, fixedStudentId, fixedProviderId]);
@@ -165,13 +180,20 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
       bankAccountId: formData.bankAccountId,
       status: formData.status,
       taxId: formData.taxId,
-      attachmentUrl: formData.attachmentUrl,
+      attachmentUrl: formData.attachmentUrl || formData.receiptPdfName || '',
       providerId: formType === 'expense' && formData.providerId ? Number(formData.providerId) : undefined,
       studentId: formType === 'income' && formData.studentId ? Number(formData.studentId) : undefined,
       institutionId: currentInstitutionId ? Number(currentInstitutionId) : undefined,
       iva: registeredIva,
       originalAmount: baseAmount,
       originalCurrency: formCurrency as any,
+      paymentLink: formData.paymentLink,
+      invoicePdfUrl: formData.invoicePdfUrl || undefined,
+      invoicePdfName: formData.invoicePdfName || undefined,
+      invoiceXmlUrl: formData.invoiceXmlUrl || undefined,
+      invoiceXmlName: formData.invoiceXmlName || undefined,
+      receiptPdfUrl: formData.receiptPdfUrl || undefined,
+      receiptPdfName: formData.receiptPdfName || undefined
     };
 
     if (initialData?.id) {
@@ -329,13 +351,43 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
          <div>
           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Método de Pago</label>
           <select value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-            <option value="Transferencia">Transferencia</option>
-            <option value="Tarjeta de Credito">Tarjeta de Crédito</option>
-            <option value="Cheque">Cheque</option>
-            <option value="Efectivo">Efectivo</option>
+            {catalogs['Métodos de Pago']?.map((m: any) => (
+              <option key={m.id} value={m.name}>{m.name}</option>
+            )) || (
+              <>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Tarjeta de Credito">Tarjeta de Crédito</option>
+                <option value="Cheque">Cheque</option>
+                <option value="Efectivo">Efectivo</option>
+              </>
+            )}
           </select>
         </div>
-        <div>
+        {formData.paymentMethod?.toLowerCase().includes('flywire') && (
+          <div className="col-span-1 sm:col-span-2 md:col-span-4 bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100 flex flex-col sm:flex-row gap-3 items-center w-full mt-2 animate-in fade-in slide-in-from-top-1 duration-200">
+            <div className="flex-1 w-full">
+              <label className="block text-[10px] font-black uppercase text-indigo-900 tracking-wider mb-1">Liga de Pago Flywire</label>
+              <input
+                type="text"
+                value={formData.paymentLink || ''}
+                onChange={e => setFormData({ ...formData, paymentLink: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-mono"
+                placeholder="https://payment.flywire.com/..."
+              />
+            </div>
+            {formData.paymentLink && (
+              <a
+                href={formData.paymentLink}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-5 sm:mt-0 px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition"
+              >
+                Probar Liga
+              </a>
+            )}
+          </div>
+        )}
+        <div className="col-span-1 sm:col-span-1 md:col-span-2">
           <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Cuenta de Pago</label>
           <select value={formData.bankAccountId} onChange={e => setFormData({...formData, bankAccountId: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
             <option value="">No aplica / Otra</option>
@@ -351,27 +403,49 @@ export function FinancialTransactionForm({ initialType = 'income', initialData, 
             ))}
           </select>
         </div>
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Folio Fiscal</label>
-          <input type="text" value={formData.taxId} onChange={e => setFormData({...formData, taxId: e.target.value})} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="UUID / Folio" />
+        <div className="col-span-1 sm:col-span-1 md:col-span-2">
+          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Folio Fiscal / UUID (Factura)</label>
+          <input 
+            type="text" 
+            value={formData.taxId} 
+            onChange={e => setFormData({...formData, taxId: e.target.value})} 
+            className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" 
+            placeholder="Ej. FAC-1029 o UUID de CFDI" 
+          />
         </div>
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Comprobante de Pago</label>
-          <div className="relative">
-            <input 
-              type="file" 
-              onChange={(e) => {
-                const fileName = e.target.files?.[0]?.name || '';
-                setFormData({...formData, attachmentUrl: fileName});
-              }} 
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
-            />
-            <div className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 flex items-center text-slate-500">
-              <UploadCloud className="w-4 h-4 mr-2" />
-              <span className="truncate">{formData.attachmentUrl || 'Subir archivo...'}</span>
-            </div>
-          </div>
-        </div>
+      </div>
+
+      {/* Sección de Adjuntos de Facturación y Comprobante */}
+      <div className="mt-4 p-4 bg-slate-50/70 border border-slate-200 rounded-2xl">
+        <PaymentAttachmentsManager
+          data={{
+            invoicePdfUrl: formData.invoicePdfUrl,
+            invoicePdfName: formData.invoicePdfName,
+            invoiceXmlUrl: formData.invoiceXmlUrl,
+            invoiceXmlName: formData.invoiceXmlName,
+            receiptPdfUrl: formData.receiptPdfUrl,
+            receiptPdfName: formData.receiptPdfName,
+            attachmentUrl: formData.attachmentUrl
+          }}
+          onChange={(updated: PaymentAttachmentsData) => {
+            setFormData(prev => ({
+              ...prev,
+              invoicePdfUrl: updated.invoicePdfUrl || '',
+              invoicePdfName: updated.invoicePdfName || '',
+              invoiceXmlUrl: updated.invoiceXmlUrl || '',
+              invoiceXmlName: updated.invoiceXmlName || '',
+              receiptPdfUrl: updated.receiptPdfUrl || '',
+              receiptPdfName: updated.receiptPdfName || '',
+              attachmentUrl: updated.receiptPdfName || updated.attachmentUrl || ''
+            }));
+          }}
+          onExtractTaxId={(taxId: string) => {
+            setFormData(prev => ({
+              ...prev,
+              taxId: prev.taxId || taxId
+            }));
+          }}
+        />
       </div>
 
       {/* Resumen detallado de Registro Contable */}
