@@ -41,7 +41,7 @@ export function FormAlumno() {
   const isCoordinador = currentUser?.role === "Coordinador";
 
   const [activeTab, setActiveTab] = useState("Información Personal");
-  
+
   const [formData, setFormData] = useState({
     name: '',
     lastName: '',
@@ -135,6 +135,19 @@ export function FormAlumno() {
     }
   }, [id, isEditing, students, institutions, isCoordinador, currentUser, defaultInstId]);
 
+  const isHomeschool = (formData.modality || '').trim().toLowerCase() === 'homeschool';
+  const showHomeschoolFields = !isEditing 
+    ? isHomeschool 
+    : (isHomeschool || Boolean(formData.phone || formData.passport || formData.address || formData.parentPhone));
+
+  const visibleTabs = tabs.filter(tab => tab !== "Dirección" || showHomeschoolFields);
+
+  useEffect(() => {
+    if (!showHomeschoolFields && activeTab === "Dirección") {
+      setActiveTab("Información Personal");
+    }
+  }, [showHomeschoolFields, activeTab]);
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
@@ -144,6 +157,14 @@ export function FormAlumno() {
     e.preventDefault();
     const cleanData = {
       ...formData,
+      phone: (!isEditing && !isHomeschool) ? '' : formData.phone,
+      passport: (!isEditing && !isHomeschool) ? '' : formData.passport,
+      address: (!isEditing && !isHomeschool) ? '' : formData.address,
+      city: (!isEditing && !isHomeschool) ? '' : formData.city,
+      state: (!isEditing && !isHomeschool) ? '' : formData.state,
+      zipCode: (!isEditing && !isHomeschool) ? '' : formData.zipCode,
+      country: (!isEditing && !isHomeschool) ? '' : formData.country,
+      parentPhone: (!isEditing && !isHomeschool) ? '' : formData.parentPhone,
       institutionId: Number(formData.institutionId),
       agentId: formData.agentId ? Number(formData.agentId) : undefined,
       hasScholarship: formData.hasScholarship,
@@ -201,7 +222,7 @@ export function FormAlumno() {
       <div className="flex-1 flex bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden min-h-0">
         {/* Sidebar Nav */}
         <div className="w-56 bg-slate-50 border-r border-slate-100 flex flex-col pt-2 shrink-0">
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab}
               type="button"
@@ -247,7 +268,7 @@ export function FormAlumno() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">ID Estudiante</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">ID/Username</label>
                   <input name="studentCustomId" value={formData.studentCustomId} onChange={handleChange} disabled={isAlumno} placeholder="Ej. STU-10801" type="text" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed" />
                 </div>
                 <div>
@@ -258,6 +279,13 @@ export function FormAlumno() {
                       <option key={m.id} value={m.name}>{m.name}</option>
                     ))}
                   </select>
+                  {!isEditing && (
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {isHomeschool 
+                        ? "Modalidad Homeschool: habilitados campos de Teléfono Móvil, Pasaporte/ID, Dirección y Teléfono Celular de emergencia." 
+                        : "Solo en modalidad Homeschool se solicitan Teléfono Móvil, Pasaporte/ID, Dirección y Teléfono Celular de emergencia."}
+                    </p>
+                  )}
                 </div>
                 {(formData.modality?.toLowerCase() === 'homeschool' || formData.modality === 'Homeschool') && (
                   <div>
@@ -273,7 +301,7 @@ export function FormAlumno() {
                   </div>
                 )}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Año Escolar</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Grado Escolar</label>
                   <input name="schoolYear" value={formData.schoolYear} onChange={handleChange} disabled={isAlumno} placeholder="Ej. 10º Grado" type="text" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed" />
                 </div>
               </div>
@@ -298,18 +326,20 @@ export function FormAlumno() {
           {activeTab === "Contacto y Nacimiento" && (
             <div className="max-w-2xl space-y-6">
               <div className="grid grid-cols-2 gap-6">
-                <div>
+                <div className={showHomeschoolFields ? "" : "col-span-2"}>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
                     Correo Electrónico <Mail className="w-3 h-3 ml-1 text-slate-400" />
                   </label>
                   <input name="email" value={formData.email} onChange={handleChange} type="email" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
-                    Teléfono Móvil <Phone className="w-3 h-3 ml-1 text-slate-400" />
-                  </label>
-                  <input name="phone" value={formData.phone} onChange={handleChange} type="tel" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" />
-                </div>
+                {showHomeschoolFields && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
+                      Teléfono Móvil <Phone className="w-3 h-3 ml-1 text-slate-400" />
+                    </label>
+                    <input name="phone" value={formData.phone} onChange={handleChange} type="tel" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" />
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
                     Fecha Nacimiento <Calendar className="w-3 h-3 ml-1 text-slate-400" />
@@ -322,17 +352,19 @@ export function FormAlumno() {
                   </label>
                   <input name="nationality" value={formData.nationality} onChange={handleChange} type="text" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
-                    Pasaporte / ID <Hash className="w-3 h-3 ml-1 text-slate-400" />
-                  </label>
-                  <input name="passport" value={formData.passport} onChange={handleChange} type="text" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono uppercase" />
-                </div>
+                {showHomeschoolFields && (
+                  <div className="col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
+                      Pasaporte / ID # <Hash className="w-3 h-3 ml-1 text-slate-400" />
+                    </label>
+                    <input name="passport" value={formData.passport} onChange={handleChange} type="text" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono uppercase" />
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          {activeTab === "Dirección" && (
+          {showHomeschoolFields && activeTab === "Dirección" && (
             <div className="max-w-2xl space-y-6">
               <div className="grid grid-cols-2 gap-6">
                 <div className="col-span-2">
@@ -395,18 +427,20 @@ export function FormAlumno() {
                   </select>
                 </div>
                 <div className="col-span-2 grid grid-cols-2 gap-6 pt-4 border-t border-slate-100">
-                  <div>
+                  <div className={showHomeschoolFields ? "" : "col-span-2"}>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
                       Correo Electrónico <Mail className="w-3 h-3 ml-1 text-slate-400" />
                     </label>
                     <input name="parentEmail" value={formData.parentEmail} onChange={handleChange} type="email" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
-                      Teléfono Célular <Phone className="w-3 h-3 ml-1 text-slate-400" />
-                    </label>
-                    <input name="parentPhone" value={formData.parentPhone} onChange={handleChange} type="tel" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" />
-                  </div>
+                  {showHomeschoolFields && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center">
+                        Teléfono Celular <Phone className="w-3 h-3 ml-1 text-slate-400" />
+                      </label>
+                      <input name="parentPhone" value={formData.parentPhone} onChange={handleChange} type="tel" className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

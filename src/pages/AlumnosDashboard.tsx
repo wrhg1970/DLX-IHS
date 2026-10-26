@@ -419,10 +419,10 @@ export function AlumnosDashboard() {
           </div>
         </div>
 
-        {/* Panel 2: Años escolares y Grados */}
+        {/* Panel 2: Grados escolares */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <div>
-            <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider mb-3">Distribución por Año Escolar</h4>
+            <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider mb-3">Distribución por Grado Escolar</h4>
             <div className="space-y-3 max-h-[220px] overflow-auto pr-1">
               {schoolYearData.slice(0, 6).map((item) => {
                 const percentage = kpis.total > 0 ? ((item.alumnos / kpis.total) * 100).toFixed(1) : '0';
@@ -437,7 +437,7 @@ export function AlumnosDashboard() {
                 );
               })}
               {schoolYearData.length === 0 && (
-                <p className="text-slate-400 text-xs italic text-center py-6">Sin registros de año escolar</p>
+                <p className="text-slate-400 text-xs italic text-center py-6">Sin registros de grado escolar</p>
               )}
             </div>
           </div>

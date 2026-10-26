@@ -1,6 +1,7 @@
-import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye, Database, RotateCcw, CheckCircle2, AlertCircle, Loader2, RefreshCw, CheckSquare, Zap } from "lucide-react";
-import React, { useState, useEffect } from "react";
+import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye, Database, RotateCcw, CheckCircle2, AlertCircle, Loader2, RefreshCw, CheckSquare, Zap, Plus, Search, Filter, GraduationCap, School, SlidersHorizontal, Info, ArrowRightCircle, Cloud, HardDrive, ExternalLink } from "lucide-react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useAppContext, resolveCreditPrices, generateUniqueId } from "../context/AppContext";
+import { safeLocalStorageGet } from "../utils/storage";
 import { PermissionMenu, DEFAULT_MENUS as menus, DEFAULT_ROLES, getSystemRoles, NO_PERMS, DEFAULT_PERMS, Role } from "../utils/permissionCheck";
 import {
   getTaskNotificationConfig,
@@ -10,8 +11,21 @@ import {
   sendRealNotificationEmail,
   sendRealNotificationWhatsApp,
   sendTaskAssignmentNotification,
-  sendTaskDeadlineNotification
+  sendTaskDeadlineNotification,
+  safeParseJsonResponse
 } from "../utils/notifications";
+import { compressLogoImage, validateImageFile } from "../utils/imageUtils";
+import {
+  connectGoogleDrive,
+  disconnectGoogleDrive,
+  isGoogleDriveTokenAvailable,
+  getSavedConnectedDriveEmail,
+  listGoogleDriveBackups,
+  downloadGoogleDriveBackup,
+  deleteGoogleDriveBackup,
+  DriveBackupFile,
+  BackupScheduleConfig
+} from "../utils/googleDriveBackup";
 
 export function Configuracion() {
   const [activeTab, setActiveTab] = useState("Usuarios");
@@ -44,18 +58,24 @@ export function Configuracion() {
   const [importSearch, setImportSearch] = useState('');
   const [expandedRawRows, setExpandedRawRows] = useState<Record<number, boolean>>({});
 
-  // Backup-specific state variables
-  const [autoBackupEnabled, setAutoBackupEnabled] = useState(() => {
-    const saved = localStorage.getItem('auto_backup_enabled');
-    return saved === null ? true : saved === 'true';
-  });
-  const [autoBackupDay, setAutoBackupDay] = useState(() => localStorage.getItem('auto_backup_day') || "Domingo");
-  const [autoBackupTime, setAutoBackupTime] = useState(() => localStorage.getItem('auto_backup_time') || "23:00");
+  // Backup and Google Drive state variables
   const [backupRestoreFile, setBackupRestoreFile] = useState<File | null>(null);
   const [restorePayload, setRestorePayload] = useState<any | null>(null);
   const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
   const [backupGenerating, setBackupGenerating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Google Drive connection & cloud files state
+  const [driveConnectedEmail, setDriveConnectedEmail] = useState<string | null>(() => getSavedConnectedDriveEmail());
+  const [isDriveTokenValid, setIsDriveTokenValid] = useState<boolean>(() => isGoogleDriveTokenAvailable());
+  const [isConnectingDrive, setIsConnectingDrive] = useState(false);
+  const [isBackingUpToDrive, setIsBackingUpToDrive] = useState(false);
+  const [driveBackupsList, setDriveBackupsList] = useState<DriveBackupFile[]>([]);
+  const [isLoadingDriveFiles, setIsLoadingDriveFiles] = useState(false);
+  const [driveFileToDelete, setDriveFileToDelete] = useState<DriveBackupFile | null>(null);
+  const [isDeletingDriveFile, setIsDeletingDriveFile] = useState(false);
+  const [driveFileToRestore, setDriveFileToRestore] = useState<{ file: DriveBackupFile; data: any } | null>(null);
+  const [isFetchingDriveRestore, setIsFetchingDriveRestore] = useState(false);
 
   const { 
     institutions, addInstitution, addStudent, addClass, addPayment, addProvider, 
@@ -69,10 +89,73 @@ export function Configuracion() {
     addFinancialTransaction, bankAccounts,
     tasks, triggerDeadlineScan, notifyTaskAssignee, notifyTaskDeadline,
     backups, triggerFullBackup, restoreBackup, deleteBackup,
+    backupSchedule, updateBackupSchedule, triggerGoogleDriveBackup,
     systemRoles, updateSystemRoles, restoreDefaultRoles, addSystemRole, deleteSystemRole,
     dbMetrics, resetDbMetrics,
-    teams
+    teams,
+    addCatalogItem, updateCatalogItem, deleteCatalogItem
   } = useAppContext();
+
+  // Local schedule form state initialized from context
+  const [schedForm, setSchedForm] = useState<BackupScheduleConfig>(backupSchedule);
+
+  useEffect(() => {
+    if (backupSchedule) {
+      setSchedForm(backupSchedule);
+    }
+  }, [backupSchedule]);
+
+  // Listen to Google Drive auth state changes
+  useEffect(() => {
+    const handleAuthChange = (e: any) => {
+      const email = getSavedConnectedDriveEmail();
+      setDriveConnectedEmail(email);
+      setIsDriveTokenValid(isGoogleDriveTokenAvailable());
+      if (e.detail?.connected) {
+        refreshDriveFiles();
+      }
+    };
+    window.addEventListener('google-drive-auth-changed', handleAuthChange);
+    return () => window.removeEventListener('google-drive-auth-changed', handleAuthChange);
+  }, []);
+
+  const refreshDriveFiles = async () => {
+    if (!isGoogleDriveTokenAvailable()) return;
+    setIsLoadingDriveFiles(true);
+    try {
+      const files = await listGoogleDriveBackups();
+      setDriveBackupsList(files);
+    } catch (err) {
+      console.error("Error cargando archivos de Google Drive:", err);
+    } finally {
+      setIsLoadingDriveFiles(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "Respaldos" && isGoogleDriveTokenAvailable()) {
+      refreshDriveFiles();
+    }
+  }, [activeTab]);
+
+  // Permiso específico para Super Administrador
+  const isSuperAdmin = useMemo(() => {
+    if (!currentUser) return false;
+    const role = (currentUser.role || "").trim().toLowerCase();
+    const email = (currentUser.email || "").trim().toLowerCase();
+    return (
+      role.includes("super") ||
+      role === "super admin" ||
+      role === "super administrador" ||
+      role === "superadministrador" ||
+      role === "admin" ||
+      role === "administrador" ||
+      email === "wrhg1970@gmail.com" ||
+      email === "admin@ihs.com" ||
+      currentUser.id === 1 ||
+      currentUser.id === 6
+    );
+  }, [currentUser]);
 
   // CSV formatting and trigger browser download
   const exportToCSV = (filename: string, headers: string[], rows: any[][]) => {
@@ -301,6 +384,16 @@ export function Configuracion() {
   };
 
   const [companyForm, setCompanyForm] = useState(companyInfo);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [showLogoUrlInput, setShowLogoUrlInput] = useState(false);
+  const [tempLogoUrl, setTempLogoUrl] = useState('');
+
+  // Sincronizar formulario si companyInfo cambia (p.ej. al cargar desde Firestore)
+  useEffect(() => {
+    if (companyInfo) {
+      setCompanyForm(companyInfo);
+    }
+  }, [companyInfo]);
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [newDoc, setNewDoc] = useState({ name: '', date: '', validity: '', url: '' });
@@ -385,7 +478,7 @@ export function Configuracion() {
     body: string;
   } | null>(null);
 
-  const [reminderTemplates, setReminderTemplates] = useState([
+  const DEFAULT_REMINDER_TEMPLATES = [
     {
       id: "student_pre",
       target: "Alumno",
@@ -430,10 +523,118 @@ export function Configuracion() {
       subject: "AVISO DE COBRO: Factura de Convenio Atrasada",
       body: "Estimado/a Coordinador/a de {nombre_institucion}, hacemos de su conocimiento que la factura correspondiente a su convenio por {monto} venció el {fecha_limite} y se encuentra pendiente de liquidar. Le solicitamos realizar el depósito y subir el comprobante hoy mismo."
     }
-  ]);
+  ];
 
+  const [reminderTemplates, setReminderTemplates] = useState<Array<{
+    id: string;
+    target: string;
+    type: string;
+    title: string;
+    triggerDays: number;
+    channel: string;
+    enabled: boolean;
+    subject: string;
+    body: string;
+  }>>(() => {
+    try {
+      const saved = localStorage.getItem("reminder_templates_v1");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_REMINDER_TEMPLATES;
+  });
+
+  const saveReminderTemplates = (updated: typeof reminderTemplates) => {
+    setReminderTemplates(updated);
+    try {
+      localStorage.setItem("reminder_templates_v1", JSON.stringify(updated));
+    } catch {}
+  };
+
+  // Eliminación de Notificación de Pago por Super Admin
+  const handleDeleteReminderTemplate = (tplId: string, tplTitle: string) => {
+    if (!isSuperAdmin) {
+      alert("Solo el Super Administrador tiene autorización para borrar notificaciones de pagos.");
+      return;
+    }
+    if (confirm(`¿Estás seguro de que deseas eliminar permanentemente la notificación de pago "${tplTitle}"?`)) {
+      const updated = reminderTemplates.filter(t => t.id !== tplId);
+      saveReminderTemplates(updated);
+      triggerToast(`Notificación de pago "${tplTitle}" eliminada exitosamente.`);
+    }
+  };
+
+  const handleOpenCreateReminderTemplate = () => {
+    if (!isSuperAdmin) {
+      alert("Solo el Super Administrador puede crear nuevas notificaciones de pagos.");
+      return;
+    }
+    setEditingTemplateId("new");
+    setTemplateForm({
+      id: `notif_${generateUniqueId()}`,
+      target: "Alumno",
+      type: "Preventivo",
+      title: "Nueva Notificación de Cobro",
+      triggerDays: 3,
+      channel: "Email & Push",
+      enabled: true,
+      subject: "Aviso de Pago Pendiente",
+      body: "Estimado/a {nombre_alumno}, le informamos que presenta un pago pendiente por {monto} con fecha límite {fecha_limite}."
+    });
+  };
+
+  // Eliminación de Remitente por Super Admin (SMTP y WhatsApp)
+  const handleDeleteSmtpRemitente = () => {
+    if (!isSuperAdmin) {
+      alert("Solo el Super Administrador tiene autorización para borrar el remitente.");
+      return;
+    }
+    if (confirm("¿Estás seguro de que deseas borrar los datos del remitente y restablecer la configuración de correo (SMTP)?")) {
+      const emptyConfig = {
+        host: "",
+        port: "",
+        user: "",
+        pass: "",
+        fromName: "",
+        fromEmail: ""
+      };
+      setSmtpConfig(emptyConfig);
+      try {
+        localStorage.removeItem("smtp_credentials");
+      } catch {}
+      updateCompanyInfo({
+        ...companyInfo,
+        smtpConfig: emptyConfig
+      } as any);
+      triggerToast("Configuración del remitente de correo borrada exitosamente.");
+    }
+  };
+
+  const handleDeleteWhatsappRemitente = () => {
+    if (!isSuperAdmin) {
+      alert("Solo el Super Administrador tiene autorización para borrar el remitente.");
+      return;
+    }
+    if (confirm("¿Estás seguro de que deseas borrar el número remitente y credenciales de WhatsApp?")) {
+      const emptyConfig = {
+        provider: "meta" as const,
+        apiUrl: "",
+        phoneNumberId: "",
+        accessToken: ""
+      };
+      setWhatsappConfig(emptyConfig);
+      try {
+        localStorage.removeItem("whatsapp_credentials");
+      } catch {}
+      triggerToast("Configuración del remitente de WhatsApp borrada exitosamente.");
+    }
+  };
+
+  // Bitácora de Envíos: Inicia de cero como solicitado por el usuario y es inmutable
   const [notifHistory, setNotifHistory] = useState<Array<{
-    id: number;
+    id: number | string;
     date: string;
     recipient: string;
     target: "Alumno" | "Institución";
@@ -442,30 +643,65 @@ export function Configuracion() {
     channel: string;
     subject: string;
     amount: string;
-  }>>([
-    {
-      id: 1,
-      date: "2026-05-27T10:30:00Z",
-      recipient: "Colegio Anglo Mexicano (Coordinador)",
-      target: "Institución",
-      type: "Cobro Atrasado",
-      campaignName: "Cobro de Factura Vencida",
-      channel: "Email",
-      subject: "AVISO DE COBRO: Factura de Convenio Atrasada",
-      amount: "$45,000.00"
-    },
-    {
-      id: 2,
-      date: "2026-05-28T09:15:00Z",
-      recipient: "Sofía Martínez (Alumno)",
-      target: "Alumno",
-      type: "Preventivo",
-      campaignName: "Recordatorio de Pago de Colegiatura",
-      channel: "Email & Push",
-      subject: "Aviso de Próximo Vencimiento de Colegiatura",
-      amount: "$3,200.00"
+  }>>(() => {
+    try {
+      const resetDone = localStorage.getItem("notif_history_reset_zero_v3");
+      if (!resetDone) {
+        localStorage.setItem("notif_history_v1", JSON.stringify([]));
+        localStorage.setItem("notif_history_reset_zero_v3", "true");
+        return [];
+      }
+      const saved = localStorage.getItem("notif_history_v1");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const addNotifHistoryEntry = (entry: {
+    id: number | string;
+    date: string;
+    recipient: string;
+    target: "Alumno" | "Institución";
+    type: "Preventivo" | "Cobro Atrasado";
+    campaignName: string;
+    channel: string;
+    subject: string;
+    amount: string;
+  }) => {
+    setNotifHistory(prev => {
+      const updated = [entry, ...prev];
+      try {
+        localStorage.setItem("notif_history_v1", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  // Cola de Bandeja de Envíos: elementos descartados por Super Admin
+  const [dismissedPendingIds, setDismissedPendingIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("dismissed_pending_notifs_v1");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const handleDismissPendingNotif = (notifKey: string, desc: string) => {
+    if (!isSuperAdmin) {
+      alert("Solo el Super Administrador puede descartar notificaciones de la bandeja de envíos.");
+      return;
     }
-  ]);
+    if (confirm(`¿Descartar y borrar la notificación pendiente para "${desc}" de la bandeja?`)) {
+      setDismissedPendingIds(prev => {
+        const updated = [...prev, notifKey];
+        try {
+          localStorage.setItem("dismissed_pending_notifs_v1", JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      triggerToast(`Notificación para "${desc}" descartada.`);
+    }
+  };
 
   const [smtpConfig, setSmtpConfig] = useState(() => {
     if ((companyInfo as any)?.smtpConfig) {
@@ -515,17 +751,36 @@ export function Configuracion() {
           allowFallback: allowFallback
         })
       });
-      const data = await res.json();
-      if (!res.ok && !data.simulated) {
-        throw new Error(data.error || "Error al conectar con el servidor de correo.");
+      const { isJson, data, rawText } = await safeParseJsonResponse(res);
+      if (isJson && data) {
+        if (!res.ok && !data.simulated) {
+          throw new Error(data.error || "Error al conectar con el servidor de correo.");
+        }
+        return { 
+          success: data.success !== false, 
+          simulated: data.simulated, 
+          message: data.message, 
+          warning: data.warning, 
+          error: data.error,
+          technicalError: data.technicalError
+        };
       }
+
+      if (res.status === 413 || rawText.includes("PayloadTooLargeError")) {
+        return { success: false, error: "El correo o sus datos adjuntos exceden el límite de tamaño permitido." };
+      }
+
+      if (allowFallback) {
+        return { 
+          success: true, 
+          simulated: true, 
+          message: `[Simulación] Correo registrado para <${toEmail}>.` 
+        };
+      }
+
       return { 
-        success: data.success !== false, 
-        simulated: data.simulated, 
-        message: data.message, 
-        warning: data.warning, 
-        error: data.error,
-        technicalError: data.technicalError
+        success: false, 
+        error: `Error del servidor (${res.status}): No se pudo procesar la solicitud de correo.` 
       };
     } catch (err: any) {
       console.error("Real email dispatch error: ", err);
@@ -572,11 +827,14 @@ export function Configuracion() {
           message: body
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Error de red");
+      const { isJson, data } = await safeParseJsonResponse(res);
+      if (isJson && data) {
+        if (!res.ok && !data.simulated) {
+          throw new Error(data.error || "Error de red al enviar WhatsApp");
+        }
+        return { success: data.success !== false, simulated: data.simulated, message: data.message };
       }
-      return { success: true, simulated: data.simulated, message: data.message };
+      return { success: true, simulated: true, message: `[Simulación] WhatsApp registrado para ${toPhone}` };
     } catch (err: any) {
       console.error("Real WhatsApp dispatch error: ", err);
       return { success: false, error: err.message };
@@ -586,7 +844,44 @@ export function Configuracion() {
   const handleCompanySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     updateCompanyInfo(companyForm);
-    // show success toast or similar ideally, for now just update context
+    triggerToast("Información de la empresa y logotipo guardados correctamente.", "success");
+  };
+
+  const handleLogoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      triggerToast(validation.error || "Archivo de imagen inválido.", "error");
+      return;
+    }
+
+    try {
+      setIsUploadingLogo(true);
+      const compressedDataUrl = await compressLogoImage(file);
+      setCompanyForm(prev => ({ ...prev, logoUrl: compressedDataUrl }));
+      triggerToast("Logotipo cargado correctamente. Recuerda hacer clic en 'Guardar Cambios'.", "success");
+    } catch (err: any) {
+      console.error("Error al procesar el logotipo:", err);
+      triggerToast("Ocurrió un error al procesar la imagen seleccionada.", "error");
+    } finally {
+      setIsUploadingLogo(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleRemoveLogo = () => {
+    setCompanyForm(prev => ({ ...prev, logoUrl: '' }));
+    triggerToast("Logotipo removido. Guarda los cambios para aplicar.", "success");
+  };
+
+  const handleApplyLogoUrl = () => {
+    if (!tempLogoUrl.trim()) return;
+    setCompanyForm(prev => ({ ...prev, logoUrl: tempLogoUrl.trim() }));
+    setTempLogoUrl('');
+    setShowLogoUrlInput(false);
+    triggerToast("URL de logotipo asignada. Recuerda guardar los cambios.", "success");
   };
 
   const [selectedDocFile, setSelectedDocFile] = useState<File | null>(null);
@@ -731,6 +1026,456 @@ export function Configuracion() {
     setTimeout(() => {
       setToast(prev => ({ ...prev, show: false }));
     }, 3000);
+  };
+
+  // Estados y funciones para Gestión Integral de SLA (CRM, Instituciones, Alumnos)
+  const [slaModuleTab, setSlaModuleTab] = useState<"todos" | "crm" | "instituciones" | "alumnos">("todos");
+  const [slaSearchQuery, setSlaSearchQuery] = useState("");
+  const [slaPriorityFilter, setSlaPriorityFilter] = useState<string>("todas");
+  const [slaStatusFilter, setSlaStatusFilter] = useState<string>("todos");
+  const [slaModalOpen, setSlaModalOpen] = useState(false);
+  const [editingSlaId, setEditingSlaId] = useState<string | null>(null);
+  const [slaSimulatorDays, setSlaSimulatorDays] = useState<number>(4);
+  const [slaSimulatorSelectedId, setSlaSimulatorSelectedId] = useState<string>("");
+
+  // Listado de etapas para Redes Sociales
+  const getRedesSocialesStages = () => {
+    let list = [
+      "Mensaje 1",
+      "Mensaje 2",
+      "Mensaje 3",
+      "Mensaje 4",
+      "Mensaje 5",
+      "Perdido"
+    ];
+    try {
+      const saved = localStorage.getItem("crm_stages_redes_sociales_v1");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          list = parsed.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return list;
+  };
+
+  // Listado de etapas para Instituciones (Pipeline Principal CRM)
+  const getInstitucionesStages = () => {
+    let list = [
+      "Leads",
+      "Primer contacto",
+      "Presentación",
+      "Malla curricular y boletines",
+      "Diagnostico y propuesta",
+      "Examen Inglés",
+      "Revisión",
+      "Firma",
+      "Cliente",
+      "Sin Interes",
+      "Futuro",
+      "Perdido"
+    ];
+    try {
+      const saved = localStorage.getItem("crm_stages_instituciones_v2");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          list = parsed.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return list;
+  };
+
+  // Listado de etapas para Particulares / Personas Potenciales
+  const getParticularesStages = () => {
+    let list = [
+      "Leads",
+      "Primer contacto",
+      "Presentación",
+      "Diagnóstico y propuesta",
+      "Examen Inglés",
+      "Revisión",
+      "Firma",
+      "Cliente",
+      "Sin Interés",
+      "Futuro",
+      "Perdido"
+    ];
+    try {
+      const saved = localStorage.getItem("crm_stages_particulares_v2");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          list = parsed.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return list;
+  };
+
+  // Listado de etapas disponibles según el módulo
+  const getAvailableStagesForModule = (mod: string) => {
+    if (mod === 'instituciones') {
+      return [
+        "Captación",
+        "Convenio Firmado",
+        "Integración Curricular",
+        "Activa con Alumnos",
+        "Inactiva / Sin Matrícula",
+        "Pausada",
+        "Revisión Jurídica",
+        "Baja Definitiva"
+      ];
+    }
+    if (mod === 'alumnos') {
+      return [
+        "Inscrito",
+        "Cursando",
+        "Examen Pendiente",
+        "Seguimiento Académico",
+        "Calificado",
+        "Egresado",
+        "Baja Temporal"
+      ];
+    }
+    // Para CRM incluye etapas de Redes Sociales, Instituciones y Particulares
+    const redes = getRedesSocialesStages();
+    const inst = getInstitucionesStages();
+    const part = getParticularesStages();
+    return Array.from(new Set([...redes, ...inst, ...part]));
+  };
+
+  // Plantillas de correo disponibles para automatización de SLA
+  const availableSlaTemplates = React.useMemo(() => {
+    const list = [
+      { id: "tpl_sla_reminder", title: "Recordatorio Automático de Inactividad (SLA Vencido)", subject: "Aviso de seguimiento de proceso para {{nombre_contacto}}", category: "SLA / Inactividad", body: "Estimado/a {{nombre_contacto}},\n\nHemos detectado que el proceso comercial de su institución se encuentra en espera. Nos gustaría coordinar una breve llamada para continuar con los siguientes pasos del programa." },
+      { id: "tpl_primer_contacto", title: "Presentación Oficial del Bachillerato Dual", subject: "Propuesta de Innovación Académica para {{nombre_colegio}}", category: "Primer Contacto", body: "Estimado equipo directivo, compartimos la propuesta oficial y modelo pedagógico de Bachillerato Dual Americano." },
+      { id: "tpl_seguimiento", title: "Seguimiento tras Reunión de Presentación", subject: "Próximos pasos para la incorporación del programa", category: "Seguimiento", body: "Agradecemos el tiempo dedicado a la presentación. Adjuntamos el resumen de acuerdos y fechas estimadas." },
+      { id: "tpl_propuesta", title: "Envío de Propuesta y Malla Curricular", subject: "Malla curricular y propuesta económica para {{nombre_colegio}}", category: "Propuesta", body: "Compartimos la propuesta integral con el desglose de malla curricular y estructura de costos." },
+      { id: "tpl_examen_ingles", title: "Invitación a Examen Diagnóstico de Inglés", subject: "Acceso a prueba diagnóstica de nivel de inglés", category: "Académico", body: "El enlace de acceso para la aplicación de la prueba diagnóstica se encuentra activo." },
+      { id: "tpl_documentacion", title: "Aviso de Documentación Pendiente", subject: "Requerimiento de documentación para formalización", category: "Operaciones", body: "Le recordamos que se requiere la entrega de los documentos pendientes para completar la fase actual." },
+      { id: "tpl_reactivacion", title: "Reactivación de Contacto sin Respuesta", subject: "¿Aún estás interesado en el programa de Bachillerato Dual?", category: "Reactivación", body: "Hola, queremos consultar si continúan interesados en explorar la implementación del programa este ciclo." },
+      { id: "tpl_inst_sla", title: "Aviso Institucional de SLA Superado", subject: "Actualización sobre el estatus de su institución", category: "Instituciones", body: "Notificación automática del sistema: El tiempo estipulado para la revisión del convenio ha concluido." },
+      { id: "tpl_alumno_sla", title: "Recordatorio de Entrega y Evaluación en Plataforma", subject: "Importante: Pendiente de entrega académica", category: "Alumnos", body: "Estimado alumno/tutor: Tienes actividades con fecha límite superada en la plataforma." }
+    ];
+
+    try {
+      const crmSaved = safeLocalStorageGet<any[]>("crm_email_templates_v2", []);
+      if (Array.isArray(crmSaved)) {
+        crmSaved.forEach(st => {
+          if (st && st.id && !list.some(b => b.id === st.id)) {
+            list.push({
+              id: st.id,
+              title: st.title || "Plantilla personalizada",
+              subject: st.subject || "",
+              category: st.category || "CRM",
+              body: st.body || ""
+            });
+          }
+        });
+      }
+      const instSaved = safeLocalStorageGet<any[]>("inst_notif_templates_v1", []);
+      if (Array.isArray(instSaved)) {
+        instSaved.forEach(it => {
+          if (it && it.id && !list.some(b => b.id === it.id)) {
+            list.push({
+              id: it.id,
+              title: it.title || "Plantilla institucional",
+              subject: it.subject || "",
+              category: it.category || "Instituciones",
+              body: it.content || ""
+            });
+          }
+        });
+      }
+    } catch {
+      // ignore
+    }
+
+    return list;
+  }, []);
+
+  const [slaForm, setSlaForm] = useState<{
+    name: string;
+    description: string;
+    slaDays: number | null;
+    module: "crm" | "instituciones" | "alumnos";
+    priority: "alta" | "media" | "baja";
+    responsibleRole: string;
+    actionOnAlert: string;
+    isActive: boolean;
+    emailTemplateId: string;
+    emailTemplateTitle: string;
+    targetStage: string;
+    hasSecondaryAction: boolean;
+    secondaryAction: string;
+    secondaryEmailTemplateId: string;
+    secondaryEmailTemplateTitle: string;
+    secondaryTargetStage: string;
+  }>({
+    name: "",
+    description: "",
+    slaDays: 3,
+    module: "crm",
+    priority: "alta",
+    responsibleRole: "Ventas",
+    actionOnAlert: "Alerta en Dashboard y Correo al Ejecutivo",
+    isActive: true,
+    emailTemplateId: "tpl_sla_reminder",
+    emailTemplateTitle: "Recordatorio Automático de Inactividad (SLA Vencido)",
+    targetStage: "Futuro",
+    hasSecondaryAction: false,
+    secondaryAction: "Mover a otra etapa",
+    secondaryEmailTemplateId: "tpl_sla_reminder",
+    secondaryEmailTemplateTitle: "Recordatorio Automático de Inactividad (SLA Vencido)",
+    secondaryTargetStage: "Futuro"
+  });
+
+  const rawSlaCatalog = catalogs['Fases y Alertas de Inactividad (SLA)'] || [];
+  const normalizedSlaList = rawSlaCatalog.map(item => {
+    let mod = item.module;
+    if (!mod) {
+      const sName = (item.name || '').toLowerCase();
+      if (sName.includes('convenio') || sName.includes('campus') || sName.includes('colegio') || sName.includes('sede') || sName.includes('factura') || sName.includes('instituc')) {
+        mod = 'instituciones';
+      } else if (sName.includes('alumno') || sName.includes('inscrip') || sName.includes('inglés') || sName.includes('ingles') || sName.includes('kárdex') || sName.includes('kardex') || sName.includes('admision') || sName.includes('admisión')) {
+        mod = 'alumnos';
+      } else {
+        mod = 'crm';
+      }
+    }
+    return {
+      ...item,
+      module: mod,
+      priority: item.priority || (item.slaDays && item.slaDays <= 3 ? 'alta' : 'media'),
+      responsibleRole: item.responsibleRole || (mod === 'crm' ? 'Ventas' : mod === 'instituciones' ? 'Coordinación Institucional' : 'Admisiones'),
+      actionOnAlert: item.actionOnAlert || 'Alerta en Dashboard',
+      isActive: item.isActive !== false,
+      emailTemplateId: item.emailTemplateId || '',
+      emailTemplateTitle: item.emailTemplateTitle || '',
+      targetStage: item.targetStage || '',
+      hasSecondaryAction: item.hasSecondaryAction === true,
+      secondaryAction: item.secondaryAction || '',
+      secondaryEmailTemplateId: item.secondaryEmailTemplateId || '',
+      secondaryEmailTemplateTitle: item.secondaryEmailTemplateTitle || '',
+      secondaryTargetStage: item.secondaryTargetStage || ''
+    };
+  });
+
+  const handleOpenCreateSla = (modulePref: "crm" | "instituciones" | "alumnos" = "crm") => {
+    setEditingSlaId(null);
+    const stages = getAvailableStagesForModule(modulePref);
+    setSlaForm({
+      name: "",
+      description: "",
+      slaDays: 3,
+      module: modulePref,
+      priority: "alta",
+      responsibleRole: modulePref === "crm" ? "Ventas" : modulePref === "instituciones" ? "Coordinación Institucional" : "Admisiones",
+      actionOnAlert: "Alerta en Dashboard y Correo al Ejecutivo",
+      isActive: true,
+      emailTemplateId: "tpl_sla_reminder",
+      emailTemplateTitle: "Recordatorio Automático de Inactividad (SLA Vencido)",
+      targetStage: stages[stages.length - 2] || "Futuro",
+      hasSecondaryAction: false,
+      secondaryAction: "Mover a otra etapa",
+      secondaryEmailTemplateId: "tpl_sla_reminder",
+      secondaryEmailTemplateTitle: "Recordatorio Automático de Inactividad (SLA Vencido)",
+      secondaryTargetStage: stages[stages.length - 2] || "Futuro"
+    });
+    setSlaModalOpen(true);
+  };
+
+  const handleOpenEditSla = (item: any) => {
+    setEditingSlaId(item.id);
+    const mod = (item.module as any) || "crm";
+    const stages = getAvailableStagesForModule(mod);
+    setSlaForm({
+      name: item.name || "",
+      description: item.description || "",
+      slaDays: item.slaDays !== undefined ? item.slaDays : 3,
+      module: mod,
+      priority: (item.priority as any) || "media",
+      responsibleRole: item.responsibleRole || "Operaciones",
+      actionOnAlert: item.actionOnAlert || "Alerta en Dashboard",
+      isActive: item.isActive !== false,
+      emailTemplateId: item.emailTemplateId || "tpl_sla_reminder",
+      emailTemplateTitle: item.emailTemplateTitle || "Recordatorio Automático de Inactividad (SLA Vencido)",
+      targetStage: item.targetStage || stages[stages.length - 2] || "Futuro",
+      hasSecondaryAction: item.hasSecondaryAction === true,
+      secondaryAction: item.secondaryAction || "Mover a otra etapa",
+      secondaryEmailTemplateId: item.secondaryEmailTemplateId || "tpl_sla_reminder",
+      secondaryEmailTemplateTitle: item.secondaryEmailTemplateTitle || "Recordatorio Automático de Inactividad (SLA Vencido)",
+      secondaryTargetStage: item.secondaryTargetStage || stages[stages.length - 2] || "Futuro"
+    });
+    setSlaModalOpen(true);
+  };
+
+  const handleSaveSla = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!slaForm.name.trim()) {
+      triggerToast("Ingresa un nombre para la fase o regla SLA", "error");
+      return;
+    }
+
+    try {
+      const payload = {
+        name: slaForm.name.trim(),
+        description: slaForm.description.trim(),
+        slaDays: slaForm.slaDays,
+        module: slaForm.module,
+        priority: slaForm.priority,
+        responsibleRole: slaForm.responsibleRole,
+        actionOnAlert: slaForm.actionOnAlert,
+        isActive: slaForm.isActive,
+        emailTemplateId: slaForm.emailTemplateId,
+        emailTemplateTitle: slaForm.emailTemplateTitle,
+        targetStage: slaForm.targetStage,
+        hasSecondaryAction: slaForm.hasSecondaryAction,
+        secondaryAction: slaForm.hasSecondaryAction ? slaForm.secondaryAction : "",
+        secondaryEmailTemplateId: slaForm.hasSecondaryAction ? slaForm.secondaryEmailTemplateId : "",
+        secondaryEmailTemplateTitle: slaForm.hasSecondaryAction ? slaForm.secondaryEmailTemplateTitle : "",
+        secondaryTargetStage: slaForm.hasSecondaryAction ? slaForm.secondaryTargetStage : ""
+      };
+
+      if (editingSlaId) {
+        updateCatalogItem('Fases y Alertas de Inactividad (SLA)', editingSlaId, payload);
+        triggerToast("Acuerdo SLA actualizado con éxito");
+      } else {
+        addCatalogItem('Fases y Alertas de Inactividad (SLA)', payload);
+        triggerToast("Nueva regla SLA registrada exitosamente");
+      }
+      setSlaModalOpen(false);
+    } catch (err) {
+      triggerToast("Error al guardar la regla SLA", "error");
+    }
+  };
+
+  const handleDeleteSla = (item: any) => {
+    setDeleteConfirm({
+      title: "Eliminar Acuerdo SLA",
+      message: `¿Estás seguro de que deseas eliminar la regla SLA "${item.name}"? Los procesos asociados no contarán con alerta de vencimiento automática.`,
+      onConfirm: () => {
+        deleteCatalogItem('Fases y Alertas de Inactividad (SLA)', item.id);
+        triggerToast("Regla SLA eliminada");
+      }
+    });
+  };
+
+  const handleQuickDaysUpdate = (item: any, delta: number) => {
+    const current = item.slaDays === null || item.slaDays === undefined ? 3 : item.slaDays;
+    const nextVal = Math.max(1, current + delta);
+    updateCatalogItem('Fases y Alertas de Inactividad (SLA)', item.id, { slaDays: nextVal });
+    triggerToast(`SLA de "${item.name}" ajustado a ${nextVal} días`);
+  };
+
+  const handleToggleSlaActive = (item: any) => {
+    const nextStatus = item.isActive === false ? true : false;
+    updateCatalogItem('Fases y Alertas de Inactividad (SLA)', item.id, { isActive: nextStatus });
+    triggerToast(nextStatus ? `SLA "${item.name}" activado` : `SLA "${item.name}" pausado`);
+  };
+
+  const handleResetSlaDefaults = () => {
+    setDeleteConfirm({
+      title: "Restablecer SLAs Recomendados",
+      message: "¿Deseas restablecer y sincronizar los SLAs estándar recomendados para CRM, Instituciones y Alumnos? Se mantendrán tus registros y se completarán las fases faltantes.",
+      onConfirm: () => {
+        const defaultSuite: any[] = [
+          // CRM
+          { id: 'sla_1', name: 'Captación (Inicio)', description: 'Prospecto recién identificado - Etapa de Inicio (SLA 3 días)', slaDays: 3, module: 'crm', priority: 'alta', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard y Correo al Ejecutivo', isActive: true },
+          { id: 'sla_2', name: 'Prospecto Calificado', description: 'Colegio que cumple perfil para el programa dual', slaDays: 5, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_3', name: 'Primer contacto', description: 'Contacto inicial por correo, teléfono o LinkedIn', slaDays: 3, module: 'crm', priority: 'alta', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard y Correo', isActive: true },
+          { id: 'sla_4', name: 'Contacto establecido', description: 'Interés confirmado por el colegio, se solicita cita', slaDays: 4, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_5', name: 'Reunión agendada', description: 'Cita programada en Google Calendar con directivos', slaDays: 5, module: 'crm', priority: 'alta', responsibleRole: 'Dirección Comercial', actionOnAlert: 'Notificación de Calendario y Alerta', isActive: true },
+          { id: 'sla_6', name: 'Presentación realizada', description: 'Demostración del programa académico y plan dual', slaDays: 3, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_7', name: 'Propuesta enviada', description: 'Cotización formal y propuesta académica enviada', slaDays: 10, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard y Recordatorio', isActive: true },
+          { id: 'sla_8', name: 'Seguimiento', description: 'Llamadas periódicas para atender dudas de directores', slaDays: 7, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_9', name: 'Negociación', description: 'Ajustes de convenio y revisión legal de contratos', slaDays: 15, module: 'crm', priority: 'alta', responsibleRole: 'Dirección / Legal', actionOnAlert: 'Alerta Crítica y Notificación a Dirección', isActive: true },
+          { id: 'sla_10', name: 'Convenio firmado', description: 'Convenio de Bachillerato Dual firmado oficialmente', slaDays: 5, module: 'crm', priority: 'alta', responsibleRole: 'Dirección General', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_11', name: 'Implementación', description: 'Capacitación docente e inducción a alumnos', slaDays: 30, module: 'crm', priority: 'media', responsibleRole: 'Operaciones', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_12', name: 'Cliente activo', description: 'Colegio operando de forma regular el plan dual', slaDays: null, module: 'crm', priority: 'baja', responsibleRole: 'Coordinación', actionOnAlert: 'Monitoreo Periódico', isActive: true },
+          { id: 'sla_crm_inbound', name: 'Lead Inbound / Redes Sociales', description: 'Primer mensaje o formulario web de contacto recibido', slaDays: 1, module: 'crm', priority: 'alta', responsibleRole: 'Marketing / Ventas', actionOnAlert: 'Alerta Inmediata y Notificación WhatsApp', isActive: true },
+
+          // Instituciones
+          { id: 'sla_inst_1', name: 'Validación Documentos Legales y Fiscales', description: 'Revisión y cotejo de Acta Constitutiva, CIF y Poder Notarial', slaDays: 5, module: 'instituciones', priority: 'media', responsibleRole: 'Administración / Legal', actionOnAlert: 'Alerta en Dashboard y Correo a Sede', isActive: true },
+          { id: 'sla_inst_2', name: 'Revisión y Firma de Convenio Marco', description: 'Validación de firmas y envío de contraparte legal firmada', slaDays: 10, module: 'instituciones', priority: 'alta', responsibleRole: 'Dirección General', actionOnAlert: 'Alerta Crítica a Dirección', isActive: true },
+          { id: 'sla_inst_3', name: 'Configuración de Campus y Sede Dual', description: 'Creación de campus en sistema, asignación de claves y accesos', slaDays: 4, module: 'instituciones', priority: 'media', responsibleRole: 'Soporte de Sistemas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_inst_4', name: 'Capacitación a Coordinadores de Sede', description: 'Sesión de onboarding y capacitación para el portal de sede', slaDays: 5, module: 'instituciones', priority: 'media', responsibleRole: 'Coordinación Académica', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_inst_5', name: 'Atención a Tickets y Consultas de Sede', description: 'Resolución de solicitudes técnicas, administrativas o de soporte', slaDays: 2, module: 'instituciones', priority: 'alta', responsibleRole: 'Atención a Sedes', actionOnAlert: 'Alerta Urgente por Correo y Dashboard', isActive: true },
+          { id: 'sla_inst_6', name: 'Emisión y Cobro de Póliza Inicial / Factura', description: 'Generación de factura mensual o anual y envío de datos fiscales', slaDays: 3, module: 'instituciones', priority: 'alta', responsibleRole: 'Finanzas y Facturación', actionOnAlert: 'Alerta a Finanzas y Correo a Escuela', isActive: true },
+          { id: 'sla_inst_7', name: 'Auditoría y Renovación Anual de Membresía', description: 'Revisión de metas de alumnos, renovación de licencia y actualización', slaDays: 15, module: 'instituciones', priority: 'media', responsibleRole: 'Dirección Comercial', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+
+          // Alumnos
+          { id: 'sla_alum_1', name: 'Inscripción y Alta en Plataforma', description: 'Registro completo de alumno, matrícula institucional y usuario', slaDays: 2, module: 'alumnos', priority: 'alta', responsibleRole: 'Admisiones', actionOnAlert: 'Alerta en Dashboard y Correo al Alumno', isActive: true },
+          { id: 'sla_alum_2', name: 'Validación de Expediente y Kárdex', description: 'Cotejo de boletas previas, CURP/DNI y comprobante académico', slaDays: 4, module: 'alumnos', priority: 'media', responsibleRole: 'Control Escolar', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_alum_3', name: 'Aplicación y Calificación de Examen de Inglés', description: 'Evaluación diagnóstica de nivel de idioma y entrega de resultado', slaDays: 3, module: 'alumnos', priority: 'alta', responsibleRole: 'Departamento de Idiomas', actionOnAlert: 'Notificación de Calificación Lista', isActive: true },
+          { id: 'sla_alum_4', name: 'Asignación de Grupo y Horario Académico', description: 'Asignación de grupo de Bachillerato Dual o programa Homeschool', slaDays: 3, module: 'alumnos', priority: 'media', responsibleRole: 'Coordinación Académica', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_alum_5', name: 'University Admission / Carta de Aceptación', description: 'Gestión de credenciales y carta oficial de admisión con universidad asociada', slaDays: 7, module: 'alumnos', priority: 'alta', responsibleRole: 'Consejería Universitaria', actionOnAlert: 'Alerta y Notificación a Padres/Alumno', isActive: true },
+          { id: 'sla_alum_6', name: 'Emisión de Certificado Dual Americano', description: 'Revisión de créditos completos, validación con USA y emisión oficial', slaDays: 15, module: 'alumnos', priority: 'alta', responsibleRole: 'Registro y Certificaciones', actionOnAlert: 'Alerta de Estatus de Titulación', isActive: true },
+          { id: 'sla_alum_7', name: 'Tramitación de Bajas o Cambios de Asignatura', description: 'Procesamiento de cambio de materia, horario o baja justificada', slaDays: 3, module: 'alumnos', priority: 'media', responsibleRole: 'Control Escolar', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+          { id: 'sla_alum_8', name: 'Entrega de Reporte Bimestral de Calificaciones', description: 'Cierre de ciclo, subida de notas y entrega de boleta bimestral', slaDays: 5, module: 'alumnos', priority: 'media', responsibleRole: 'Dirección Académica', actionOnAlert: 'Alerta a Coordinadores', isActive: true }
+        ];
+
+        defaultSuite.forEach(item => {
+          const exists = rawSlaCatalog.some(s => s.id === item.id || s.name.toLowerCase() === item.name.toLowerCase());
+          if (!exists) {
+            addCatalogItem('Fases y Alertas de Inactividad (SLA)', item);
+          } else {
+            const found = rawSlaCatalog.find(s => s.id === item.id || s.name.toLowerCase() === item.name.toLowerCase());
+            if (found) {
+              updateCatalogItem('Fases y Alertas de Inactividad (SLA)', found.id, {
+                module: item.module,
+                priority: found.priority || item.priority,
+                responsibleRole: found.responsibleRole || item.responsibleRole,
+                actionOnAlert: found.actionOnAlert || item.actionOnAlert,
+                isActive: found.isActive !== undefined ? found.isActive : true
+              });
+            }
+          }
+        });
+        triggerToast("Matriz de SLAs sincronizada con valores recomendados");
+      }
+    });
+  };
+
+  const handleExportSlaMatrixCSV = () => {
+    const headers = ["ID", "Fase / Proceso", "Módulo", "Límite SLA (Días)", "Prioridad", "Rol Responsable", "Acción al Exceder", "Estado", "Descripción"];
+    const rows = normalizedSlaList.map(s => [
+      s.id,
+      s.name,
+      s.module === "crm" ? "CRM & Prospectos" : s.module === "instituciones" ? "Instituciones Socias" : s.module === "alumnos" ? "Alumnos & Académico" : "General",
+      s.slaDays !== null && s.slaDays !== undefined ? `${s.slaDays} días` : "Sin límite",
+      (s.priority || "media").toUpperCase(),
+      s.responsibleRole || "Operaciones",
+      s.actionOnAlert || "Alerta en Dashboard",
+      s.isActive === false ? "Pausado" : "Activo",
+      s.description || ""
+    ]);
+    exportToCSV("Matriz_Acuerdos_SLA_Dual_System.csv", headers, rows);
+    triggerToast("Matriz SLA descargada en formato CSV");
+  };
+
+  const handleExportSlaMatrixPDF = () => {
+    const headers = ["ID", "Fase / Proceso", "Módulo", "SLA (Días)", "Prioridad", "Responsable", "Acción de Alerta", "Estado"];
+    const rows = normalizedSlaList.map(s => [
+      s.id,
+      s.name,
+      s.module === "crm" ? "CRM" : s.module === "instituciones" ? "Instituciones" : s.module === "alumnos" ? "Alumnos" : "General",
+      s.slaDays !== null && s.slaDays !== undefined ? `${s.slaDays} d` : "N/A",
+      (s.priority || "media").toUpperCase(),
+      s.responsibleRole || "Operaciones",
+      s.actionOnAlert || "Alerta Dashboard",
+      s.isActive === false ? "Inactivo" : "Activo"
+    ]);
+    exportToPDF("Matriz de Acuerdos de Nivel de Servicio (SLA) - Bachillerato Dual", headers, rows);
   };
 
   const handlePreferencesSave = () => {
@@ -1322,7 +2067,7 @@ export function Configuracion() {
             addClass({
               name: data[0] || 'Clase',
               code: data[1] || '',
-              creditType: (data[2] || 'Crédito completo') as any,
+              creditType: (data[2] ? (data[2].includes('Medio') || data[2].includes('Half') ? (data[2].includes('AP') ? 'Half Credit AP' : 'Half Credit') : (data[2].includes('AP') ? 'Full Credit AP' : 'Full Credit')) : 'Full Credit') as any,
               syllabus: data[3] || '',
               validity: data[4] || '',
               providerId: data[5] ? Number(data[5]) : undefined
@@ -1394,11 +2139,12 @@ export function Configuracion() {
               );
 
               let priceStr = "";
-              if (matchedClass.creditType === "Medio Crédito") {
+              const cType = matchedClass.creditType;
+              if (cType === "Half Credit" || cType === "Medio Crédito") {
                 priceStr = resolvedPrices.priceHalfCredit;
-              } else if (matchedClass.creditType === "Crédito completo AP") {
+              } else if (cType === "Full Credit AP" || cType === "Crédito completo AP") {
                 priceStr = resolvedPrices.priceFullApCredit;
-              } else if (matchedClass.creditType === "Medio Crédito AP") {
+              } else if (cType === "Half Credit AP" || cType === "Medio Crédito AP") {
                 priceStr = resolvedPrices.priceHalfApCredit;
               } else {
                 priceStr = resolvedPrices.priceFullCredit;
@@ -1775,7 +2521,7 @@ export function Configuracion() {
               iva: ivaValue,
               originalAmount: amt,
               originalCurrency: (transCurrency || 'MXN') as any,
-            });
+            } as any);
 
             break;
           }
@@ -2002,7 +2748,7 @@ export function Configuracion() {
         filename = "plantilla_alumnos.csv";
         break;
       case "Clases":
-        headers = "Nombre Clase,Clave,Tipo de Crédito,SyllabusURL,Vigencia,ProveedorID(Número)\nÁlgebra I,ALG101,Crédito completo,https://ejemplo.com/syllabus.pdf,2026,1";
+        headers = "Nombre Clase,Clave,Tipo de Crédito,SyllabusURL,Vigencia,ProveedorID(Número)\nÁlgebra I,ALG101,Full Credit,https://ejemplo.com/syllabus.pdf,2026,1";
         filename = "plantilla_clases.csv";
         break;
       case "Inscripciones":
@@ -2099,6 +2845,13 @@ export function Configuracion() {
             <Bell className={`h-4 w-4 mr-3 ${activeTab === 'Notificaciones' ? '' : 'opacity-70'}`} />
             Notificaciones
           </button>
+          <button 
+            onClick={() => setActiveTab("SLA")}
+            className={`w-full flex items-center p-3 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'SLA' ? 'bg-indigo-50 border border-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <Clock className={`h-4 w-4 mr-3 ${activeTab === 'SLA' ? '' : 'opacity-70'}`} />
+            Acuerdos SLA (CRM / Inst / Alum)
+          </button>
         </div>
         
         <div className="md:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-[400px]">
@@ -2106,6 +2859,118 @@ export function Configuracion() {
             <div className="flex-1 overflow-auto bg-slate-50 relative p-6">
               <div className="max-w-3xl mx-auto pb-10">
                 <form onSubmit={handleCompanySubmit} className="space-y-6">
+                  {/* Logotipo de la Empresa */}
+                  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                          <ImageIcon className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-slate-800 text-sm">Logotipo de la Empresa</h3>
+                          <p className="text-xs text-slate-500">Se mostrará en la pantalla de inicio de sesión, reportes oficiales y navegación.</p>
+                        </div>
+                      </div>
+                      {companyForm.logoUrl && (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <Check className="w-3 h-3 mr-1 text-emerald-600" /> Logotipo Activo
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+                      {/* Logo Preview Container */}
+                      <div className="flex flex-col items-center justify-center p-4 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 min-h-[140px] text-center relative overflow-hidden group">
+                        {companyForm.logoUrl ? (
+                          <div className="relative w-full h-28 flex items-center justify-center">
+                            <img
+                              src={companyForm.logoUrl}
+                              alt="Logotipo de la empresa"
+                              className="max-h-24 max-w-full object-contain drop-shadow-sm transition-transform duration-200 group-hover:scale-105"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center justify-center py-2 text-slate-400">
+                            <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mb-2 text-slate-400 border border-slate-200">
+                              <Building className="w-6 h-6 opacity-60" />
+                            </div>
+                            <span className="text-xs font-semibold text-slate-600">Sin logotipo cargado</span>
+                            <span className="text-[10px] text-slate-400 mt-0.5">Se mostrará el ícono institucional</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Upload & Controls */}
+                      <div className="md:col-span-2 space-y-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className={`cursor-pointer inline-flex items-center px-4 py-2.5 rounded-xl text-xs font-bold text-white shadow-sm transition ${isUploadingLogo ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                            {isUploadingLogo ? (
+                              <>
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                Procesando imagen...
+                              </>
+                            ) : (
+                              <>
+                                <Upload className="w-4 h-4 mr-2" />
+                                {companyForm.logoUrl ? 'Reemplazar Logotipo' : 'Subir Logotipo'}
+                              </>
+                            )}
+                            <input
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                              onChange={handleLogoFileUpload}
+                              disabled={isUploadingLogo}
+                              className="hidden"
+                            />
+                          </label>
+
+                          {companyForm.logoUrl && (
+                            <button
+                              type="button"
+                              onClick={handleRemoveLogo}
+                              className="inline-flex items-center px-3 py-2.5 rounded-xl text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition"
+                            >
+                              <Trash2 className="w-4 h-4 mr-1.5" />
+                              Quitar Logo
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => setShowLogoUrlInput(!showLogoUrlInput)}
+                            className="inline-flex items-center px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
+                          >
+                            <Globe className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
+                            {showLogoUrlInput ? 'Ocultar Enlace Web' : 'Enlazar por URL'}
+                          </button>
+                        </div>
+
+                        {showLogoUrlInput && (
+                          <div className="flex items-center gap-2 pt-2 animate-in fade-in duration-200">
+                            <input
+                              type="url"
+                              value={tempLogoUrl}
+                              onChange={(e) => setTempLogoUrl(e.target.value)}
+                              placeholder="https://ejemplo.com/logo.png"
+                              className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-indigo-500 outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleApplyLogoUrl}
+                              className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition"
+                            >
+                              Aplicar
+                            </button>
+                          </div>
+                        )}
+
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          Formatos admitidos: <strong>PNG, JPG, WebP o SVG</strong> (máx. 5MB). Se optimiza automáticamente para mantener el rendimiento y la sincronización en tiempo real.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* General */}
                   <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                     <h3 className="font-bold text-slate-800 text-sm mb-4">Información General</h3>
@@ -2126,16 +2991,6 @@ export function Configuracion() {
                           value={companyForm.legalName}
                           onChange={(e) => setCompanyForm({ ...companyForm, legalName: e.target.value })}
                           className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Logo de la Empresa URL</label>
-                        <input
-                          type="text"
-                          value={companyForm.logoUrl}
-                          onChange={(e) => setCompanyForm({ ...companyForm, logoUrl: e.target.value })}
-                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
-                          placeholder="https://ejemplo.com/logo.png"
                         />
                       </div>
                       <div>
@@ -3468,9 +4323,9 @@ export function Configuracion() {
                                     allowFallback: false
                                   })
                                 });
-                                const data = await res.json();
-                                if (!res.ok || data.success === false) {
-                                  throw new Error(data.error || "Error al conectar con el servidor SMTP.");
+                                const { isJson, data } = await safeParseJsonResponse(res);
+                                if (!res.ok || !isJson || !data || data.success === false) {
+                                  throw new Error((data && data.error) || "Error al conectar con el servidor SMTP.");
                                 }
                                 if (data.simulated) {
                                   triggerToast("¡Correo de prueba generado en Modo Simulación!");
@@ -3496,21 +4351,35 @@ export function Configuracion() {
                           </button>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            localStorage.setItem("smtp_credentials", JSON.stringify(smtpConfig));
-                            updateCompanyInfo({
-                              ...companyInfo,
-                              smtpConfig: smtpConfig
-                            } as any);
-                            triggerToast("¡Credenciales de SMTP guardadas y sincronizadas con la nube!");
-                          }}
-                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
-                        >
-                          <Save className="w-3.5 h-3.5" />
-                          <span>Guardar y Sincronizar en la Nube</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={handleDeleteSmtpRemitente}
+                              className="px-3.5 py-2 border border-rose-200 bg-rose-50 hover:bg-rose-100 font-bold text-rose-700 rounded-xl text-xs transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                              title="Borrar datos del remitente y servidor SMTP (Solo Super Admin)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                              <span>Borrar Remitente</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              localStorage.setItem("smtp_credentials", JSON.stringify(smtpConfig));
+                              updateCompanyInfo({
+                                ...companyInfo,
+                                smtpConfig: smtpConfig
+                              } as any);
+                              triggerToast("¡Credenciales de SMTP guardadas y sincronizadas con la nube!");
+                            }}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>Guardar y Sincronizar en la Nube</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -3629,16 +4498,30 @@ export function Configuracion() {
                           </button>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            localStorage.setItem("whatsapp_credentials", JSON.stringify(whatsappConfig));
-                            triggerToast("¡Credenciales de WhatsApp guardadas exitosamente!");
-                          }}
-                          className="px-4 py-1.5 bg-indigo-650 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer bg-indigo-600"
-                        >
-                          Guardar Configuración
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={handleDeleteWhatsappRemitente}
+                              className="px-3.5 py-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 font-bold text-rose-700 rounded-xl text-xs transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                              title="Borrar credenciales y remitente de WhatsApp (Solo Super Admin)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                              <span>Borrar Remitente</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              localStorage.setItem("whatsapp_credentials", JSON.stringify(whatsappConfig));
+                              triggerToast("¡Credenciales de WhatsApp guardadas exitosamente!");
+                            }}
+                            className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-xl text-xs shadow-sm transition-all cursor-pointer"
+                          >
+                            Guardar Configuración
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -4105,6 +4988,30 @@ export function Configuracion() {
                       </div>
                     </div>
 
+                    {/* Header de Campañas y Botón Nueva Notificación */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
+                      <div>
+                        <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                          <span>Plantillas y Campañas de Notificaciones de Pagos</span>
+                          <span className="text-[10px] bg-indigo-50 text-indigo-700 font-extrabold px-2 py-0.5 rounded-full border border-indigo-150">
+                            {reminderTemplates.length} activas
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500">Recordatorios de colegiaturas escolares y facturas de convenio con variables automáticas.</p>
+                      </div>
+
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={handleOpenCreateReminderTemplate}
+                          className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Nueva Notificación de Pago</span>
+                        </button>
+                      )}
+                    </div>
+
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                       {reminderTemplates.map((tpl) => (
                         <div
@@ -4141,11 +5048,10 @@ export function Configuracion() {
                                 type="checkbox"
                                 checked={tpl.enabled}
                                 onChange={(e) => {
-                                  setReminderTemplates(
-                                    reminderTemplates.map((t) =>
-                                      t.id === tpl.id ? { ...t, enabled: e.target.checked } : t
-                                    )
+                                  const updated = reminderTemplates.map((t) =>
+                                    t.id === tpl.id ? { ...t, enabled: e.target.checked } : t
                                   );
+                                  saveReminderTemplates(updated);
                                   triggerToast(
                                     `Campaña ${tpl.title} ${e.target.checked ? "activada" : "desactivada"}`
                                   );
@@ -4181,14 +5087,25 @@ export function Configuracion() {
                             </div>
                           </div>
 
-                          {/* Botón de edición */}
-                          <div className="mt-4 flex justify-end">
+                          {/* Botones de acción (Editar y Borrar para Super Admin) */}
+                          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                            {isSuperAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteReminderTemplate(tpl.id, tpl.title)}
+                                title="Eliminar Notificación de Pago (Super Admin)"
+                                className="text-xs font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-200 transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                <span>Borrar</span>
+                              </button>
+                            )}
                             <button
                               onClick={() => {
                                 setEditingTemplateId(tpl.id);
                                 setTemplateForm({ ...tpl });
                               }}
-                              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-3.5 py-1.5 rounded-lg border border-indigo-200 transition-all flex items-center"
+                              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-3.5 py-1.5 rounded-lg border border-indigo-200 transition-all flex items-center ml-auto cursor-pointer"
                             >
                               <Edit2 className="w-3.5 h-3.5 mr-1.5" />
                               Editar Plantilla y Tiempos
@@ -4235,6 +5152,7 @@ export function Configuracion() {
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-xs">
                             {/* Alumno 1 */}
+                            {!dismissedPendingIds.includes("pending_student_0") && (
                             <tr className="hover:bg-slate-50/50 transition">
                               <td className="px-6 py-4">
                                 <div className="font-bold text-slate-800">
@@ -4259,66 +5177,77 @@ export function Configuracion() {
                                 </span>
                               </td>
                               <td className="px-6 py-4 text-right">
-                                <button
-                                  onClick={() => {
-                                    const studentName = students.length > 0 ? `${students[0].name} ${students[0].lastName}` : "Sofía Martínez";
-                                    const limit = "05/06/2026";
-                                    const amount = "$3,200.00";
-                                    
-                                    const actualStudent = students.find(s => s.id === (students[0]?.id || 0)) || students[0];
-                                    const isAlumnoActive = actualStudent?.notificationPayment ? actualStudent.notificationPayment.alumno : true;
-                                    
-                                    if (!isAlumnoActive) {
-                                      const activeAlternatives = [];
-                                      if (actualStudent?.notificationPayment?.instituto) activeAlternatives.push("Instituto");
-                                      if (actualStudent?.notificationPayment?.agente) activeAlternatives.push("Agente");
+                                <div className="flex items-center justify-end gap-2">
+                                  {isSuperAdmin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDismissPendingNotif("pending_student_0", students.length > 0 ? `${students[0].name} ${students[0].lastName}` : "Sofía Martínez")}
+                                      title="Descartar y borrar notificación de la bandeja (Super Admin)"
+                                      className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg border border-rose-200 transition cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => {
+                                      const studentName = students.length > 0 ? `${students[0].name} ${students[0].lastName}` : "Sofía Martínez";
+                                      const limit = "05/06/2026";
+                                      const amount = "$3,200.00";
                                       
-                                      alert(
-                                        `⚠️ ENVÍO DIRIGIDO FILTRADO:\n` +
-                                        `Este alumno tiene DESACTIVADA la opción 'Alumno' para recibir 'Notificación de Pago' en su perfil.\n\n` +
-                                        `Por lo tanto, no se le enviará directamente de forma digital a ${studentName}.\n` +
-                                        `La notificación ha sido redirigida a los receptores designados activos: ${activeAlternatives.join(", ") || "Ninguno (Sin envío)"}.`
-                                      );
-                                      if (activeAlternatives.length === 0) {
-                                        triggerToast("No se envió: sin receptores activos");
-                                        return;
-                                      }
-                                    }
-
-                                    // Populated message mock
-                                    const template = reminderTemplates.find(t => t.id === 'student_pre');
-                                    let body = template?.body || "";
-                                    body = body.replace("{nombre_alumno}", studentName).replace("{monto}", amount).replace("{fecha_limite}", limit);
-                                    
-                                    const subject = template?.subject || "Aviso de Pago";
-                                    
-                                    const confirmSend = confirm(
-                                      `PREVISUALIZACIÓN DEL CORREO PARA EL ALUMNO:\n\n` +
-                                      `Para: ${studentName}\n` +
-                                      `Asunto: ${subject}\n` +
-                                      `Mensaje:\n"${body}"\n\n` +
-                                      `¿Deseas enviar esta notificación ahora?`
-                                    );
-                                    
-                                    if(confirmSend) {
-                                      const actualStudentObj = students.find(s => s.id === (students[0]?.id || 0)) || students[0];
-                                      const emailTarget = actualStudentObj?.email || "colegio-prueba@ejemplo.com"; const phoneTarget = actualStudentObj?.phone || "+52 55 4567 8901"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡WhatsApp simulado con éxito!" : "¡Notificación de WhatsApp enviada!"); });
+                                      const actualStudent = students.find(s => s.id === (students[0]?.id || 0)) || students[0];
+                                      const isAlumnoActive = actualStudent?.notificationPayment ? actualStudent.notificationPayment.alumno : true;
                                       
-                                      sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
-                                        if (res.success) {
-                                          triggerToast("¡Recordatorio preventivo enviado vía SMTP real con éxito!");
-                                        } else {
-                                          triggerToast("¡Recordatorio registrado en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                      if (!isAlumnoActive) {
+                                        const activeAlternatives = [];
+                                        if (actualStudent?.notificationPayment?.instituto) activeAlternatives.push("Instituto");
+                                        if (actualStudent?.notificationPayment?.agente) activeAlternatives.push("Agente");
+                                        
+                                        alert(
+                                          `⚠️ ENVÍO DIRIGIDO FILTRADO:\n` +
+                                          `Este alumno tiene DESACTIVADA la opción 'Alumno' para recibir 'Notificación de Pago' en su perfil.\n\n` +
+                                          `Por lo tanto, no se le enviará directamente de forma digital a ${studentName}.\n` +
+                                          `La notificación ha sido redirigida a los receptores designados activos: ${activeAlternatives.join(", ") || "Ninguno (Sin envío)"}.`
+                                        );
+                                        if (activeAlternatives.length === 0) {
+                                          triggerToast("No se envió: sin receptores activos");
+                                          return;
                                         }
-                                      });
+                                      }
 
-                                      addActivity({
-                                        date: new Date().toISOString(),
-                                        description: `Recordatorio preventivo enviado por correo a Alumno: ${studentName} por ${amount}.`
-                                      });
+                                      // Populated message mock
+                                      const template = reminderTemplates.find(t => t.id === 'student_pre');
+                                      let body = template?.body || "";
+                                      body = body.replace("{nombre_alumno}", studentName).replace("{monto}", amount).replace("{fecha_limite}", limit);
                                       
-                                      setNotifHistory([
-                                        {
+                                      const subject = template?.subject || "Aviso de Pago";
+                                      
+                                      const confirmSend = confirm(
+                                        `PREVISUALIZACIÓN DEL CORREO PARA EL ALUMNO:\n\n` +
+                                        `Para: ${studentName}\n` +
+                                        `Asunto: ${subject}\n` +
+                                        `Mensaje:\n"${body}"\n\n` +
+                                        `¿Deseas enviar esta notificación ahora?`
+                                      );
+                                      
+                                      if(confirmSend) {
+                                        const actualStudentObj = students.find(s => s.id === (students[0]?.id || 0)) || students[0];
+                                        const emailTarget = actualStudentObj?.email || "colegio-prueba@ejemplo.com"; const phoneTarget = actualStudentObj?.phone || "+52 55 4567 8901"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡WhatsApp simulado con éxito!" : "¡Notificación de WhatsApp enviada!"); });
+                                        
+                                        sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
+                                          if (res.success) {
+                                            triggerToast("¡Recordatorio preventivo enviado vía SMTP real con éxito!");
+                                          } else {
+                                            triggerToast("¡Recordatorio registrado en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                          }
+                                        });
+
+                                        addActivity({
+                                          institutionId: actualStudentObj?.institutionId || 0,
+                                          date: new Date().toISOString(),
+                                          description: `Recordatorio preventivo enviado por correo a Alumno: ${studentName} por ${amount}.`
+                                        });
+                                        
+                                        addNotifHistoryEntry({
                                           id: generateUniqueId(),
                                           date: new Date().toISOString(),
                                           recipient: `${studentName} (Alumno)`,
@@ -4328,21 +5257,21 @@ export function Configuracion() {
                                           channel: "Email & Push",
                                           subject: subject,
                                           amount: amount
-                                        },
-                                        ...notifHistory
-                                      ]);
-                                    }
-                                  }}
-                                  className="px-3.5 py-1.5 bg-indigo-600 font-bold text-white rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-1 ml-auto text-[11px]"
-                                >
-                                  <Send className="w-3 h-3" />
-                                  Enviar Alerta
-                                </button>
+                                        });
+                                      }
+                                    }}
+                                    className="px-3.5 py-1.5 bg-indigo-600 font-bold text-white rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-1 text-[11px] cursor-pointer"
+                                  >
+                                    <Send className="w-3 h-3" />
+                                    Enviar Alerta
+                                  </button>
+                                </div>
                               </td>
                             </tr>
+                            )}
 
                             {/* Alumno 2 */}
-                            {students.length > 1 && (
+                            {students.length > 1 && !dismissedPendingIds.includes("pending_student_1") && (
                               <tr className="hover:bg-slate-50/50 transition">
                                 <td className="px-6 py-4">
                                   <div className="font-bold text-slate-800">
@@ -4367,64 +5296,75 @@ export function Configuracion() {
                                   </span>
                                 </td>
                                 <td className="px-6 py-4 text-right">
-                                  <button
-                                    onClick={() => {
-                                      const studentName = `${students[1].name} ${students[1].lastName}`;
-                                      const limit = "25/05/2026";
-                                      const amount = "$1,500.00";
-                                      
-                                      const actualStudent = students[1];
-                                      const isAlumnoActive = actualStudent?.notificationPayment ? actualStudent.notificationPayment.alumno : true;
-                                      
-                                      if (!isAlumnoActive) {
-                                        const activeAlternatives = [];
-                                        if (actualStudent?.notificationPayment?.instituto) activeAlternatives.push("Instituto");
-                                        if (actualStudent?.notificationPayment?.agente) activeAlternatives.push("Agente");
+                                  <div className="flex items-center justify-end gap-2">
+                                    {isSuperAdmin && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDismissPendingNotif("pending_student_1", `${students[1].name} ${students[1].lastName}`)}
+                                        title="Descartar y borrar notificación de la bandeja (Super Admin)"
+                                        className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg border border-rose-200 transition cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => {
+                                        const studentName = `${students[1].name} ${students[1].lastName}`;
+                                        const limit = "25/05/2026";
+                                        const amount = "$1,500.00";
                                         
-                                        alert(
-                                          `⚠️ RECLAMACIÓN FILTRADA:\n` +
-                                          `Este alumno tiene DESACTIVADA la opción 'Alumno' para recibir 'Notificación de Pago' en su perfil.\n\n` +
-                                          `Por lo tanto, no se le enviará directamente a ${studentName}.\n` +
-                                          `La alerta ha sido redirigida a los receptores designados activos: ${activeAlternatives.join(", ") || "Ninguno (Sin envío)"}.`
-                                        );
-                                        if (activeAlternatives.length === 0) {
-                                          triggerToast("No se envió: sin receptores activos");
-                                          return;
-                                        }
-                                      }
-
-                                      const template = reminderTemplates.find(t => t.id === 'student_post');
-                                      let body = template?.body || "";
-                                      body = body.replace("{nombre_alumno}", studentName).replace("{monto}", amount).replace("{fecha_limite}", limit);
-                                      
-                                      const subject = template?.subject || "Urgente: Colegiatura Vencida";
-                                      
-                                      const confirmSend = confirm(
-                                        `PREVISUALIZACIÓN DE ALERTA DE COBRO EXTEMPORÁNEO:\n\n` +
-                                        `Para: ${studentName}\n` +
-                                        `Asunto: ${subject}\n` +
-                                        `Mensaje:\n"${body}"\n\n` +
-                                        `¿Deseas enviar esta notificación ahora?`
-                                      );
-                                      
-                                      if(confirmSend) {
-                                        const emailTarget = students[1]?.email || "colegio-prueba@ejemplo.com"; const phoneTarget = students[1]?.phone || "+52 81 2345 6789"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡Reclamación WhatsApp simulada!" : "¡Reclamación por WhatsApp enviada!"); });
+                                        const actualStudent = students[1];
+                                        const isAlumnoActive = actualStudent?.notificationPayment ? actualStudent.notificationPayment.alumno : true;
                                         
-                                        sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
-                                          if (res.success) {
-                                            triggerToast("¡Reclamación de Alumno enviada vía SMTP real con éxito!");
-                                          } else {
-                                            triggerToast("¡Reclamación registrada en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                        if (!isAlumnoActive) {
+                                          const activeAlternatives = [];
+                                          if (actualStudent?.notificationPayment?.instituto) activeAlternatives.push("Instituto");
+                                          if (actualStudent?.notificationPayment?.agente) activeAlternatives.push("Agente");
+                                          
+                                          alert(
+                                            `⚠️ RECLAMACIÓN FILTRADA:\n` +
+                                            `Este alumno tiene DESACTIVADA la opción 'Alumno' para recibir 'Notificación de Pago' en su perfil.\n\n` +
+                                            `Por lo tanto, no se le enviará directamente a ${studentName}.\n` +
+                                            `La alerta ha sido redirigida a los receptores designados activos: ${activeAlternatives.join(", ") || "Ninguno (Sin envío)"}.`
+                                          );
+                                          if (activeAlternatives.length === 0) {
+                                            triggerToast("No se envió: sin receptores activos");
+                                            return;
                                           }
-                                        });
+                                        }
 
-                                        addActivity({
-                                          date: new Date().toISOString(),
-                                          description: `Notificación de adeudo atrasado despachada a Alumno: ${studentName} por ${amount}.`
-                                        });
+                                        const template = reminderTemplates.find(t => t.id === 'student_post');
+                                        let body = template?.body || "";
+                                        body = body.replace("{nombre_alumno}", studentName).replace("{monto}", amount).replace("{fecha_limite}", limit);
                                         
-                                        setNotifHistory([
-                                          {
+                                        const subject = template?.subject || "Urgente: Colegiatura Vencida";
+                                        
+                                        const confirmSend = confirm(
+                                          `PREVISUALIZACIÓN DE ALERTA DE COBRO EXTEMPORÁNEO:\n\n` +
+                                          `Para: ${studentName}\n` +
+                                          `Asunto: ${subject}\n` +
+                                          `Mensaje:\n"${body}"\n\n` +
+                                          `¿Deseas enviar esta notificación ahora?`
+                                        );
+                                        
+                                        if(confirmSend) {
+                                          const emailTarget = students[1]?.email || "colegio-prueba@ejemplo.com"; const phoneTarget = students[1]?.phone || "+52 81 2345 6789"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡Reclamación WhatsApp simulada!" : "¡Reclamación por WhatsApp enviada!"); });
+                                          
+                                          sendRealNotificationEmail(emailTarget, studentName, subject, body).then((res) => {
+                                            if (res.success) {
+                                              triggerToast("¡Reclamación de Alumno enviada vía SMTP real con éxito!");
+                                            } else {
+                                              triggerToast("¡Reclamación registrada en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                            }
+                                          });
+
+                                          addActivity({
+                                            institutionId: actualStudent?.institutionId || 0,
+                                            date: new Date().toISOString(),
+                                            description: `Notificación de adeudo atrasado despachada a Alumno: ${studentName} por ${amount}.`
+                                          });
+                                          
+                                          addNotifHistoryEntry({
                                             id: generateUniqueId(),
                                             date: new Date().toISOString(),
                                             recipient: `${studentName} (Alumno)`,
@@ -4434,23 +5374,24 @@ export function Configuracion() {
                                             channel: "Email, WhatsApp & Push",
                                             subject: subject,
                                             amount: amount
-                                          },
-                                          ...notifHistory
-                                        ]);
-                                      }
-                                    }}
-                                    className="px-3.5 py-1.5 bg-rose-600 font-bold text-white rounded-lg hover:bg-rose-750 transition flex items-center justify-center gap-1 ml-auto text-[11px]"
-                                  >
-                                    <Send className="w-3 h-3" />
-                                    Enviar Reclamación
-                                  </button>
+                                          });
+                                        }
+                                      }}
+                                      className="px-3.5 py-1.5 bg-rose-600 font-bold text-white rounded-lg hover:bg-rose-750 transition flex items-center justify-center gap-1 text-[11px] cursor-pointer"
+                                    >
+                                      <Send className="w-3 h-3" />
+                                      Enviar Reclamación
+                                    </button>
+                                  </div>
                                 </td>
                               </tr>
                             )}
 
                             {/* Instituciones de la DB */}
-                            {institutions.filter(i => i.status === 'Pendiente' || i.status === 'Atrasado').map((inst) => {
-                              const calculatedAmount = inst.billingAmount ? `$${Number(inst.billingAmount).toLocaleString()}` : "$45,000.00";
+                            {institutions
+                              .filter(i => (i.status === 'Pendiente' || i.status === 'Atrasado') && !dismissedPendingIds.includes(`pending_inst_${i.id}`))
+                              .map((inst) => {
+                              const calculatedAmount = (inst as any).billingAmount ? `${Number((inst as any).billingAmount).toLocaleString()}` : "$45,000.00";
                               return (
                                 <tr key={inst.id} className="hover:bg-slate-50/50 transition">
                                   <td className="px-6 py-4">
@@ -4474,41 +5415,51 @@ export function Configuracion() {
                                     </span>
                                   </td>
                                   <td className="px-6 py-4 text-right">
-                                    <button
-                                      onClick={() => {
-                                        const template = reminderTemplates.find(t => t.id === 'inst_post');
-                                        let body = template?.body || "";
-                                        body = body.replace("{nombre_institucion}", inst.name).replace("{monto}", calculatedAmount).replace("{fecha_limite}", "24/05/2026");
-                                        
-                                        const subject = template?.subject || "Urgente: Factura de Convenio Vencida";
-                                        
-                                        const confirmSend = confirm(
-                                          `PREVISUALIZACIÓN DE RECLAMACIÓN PARA LA INSTITUCIÓN:\n\n` +
-                                          `Institución: ${inst.name}\n` +
-                                          `Asunto: ${subject}\n` +
-                                          `Mensaje:\n"${body}"\n\n` +
-                                          `¿Deseas despachar esta alerta de cobro institucional por correo electrónico?`
-                                        );
-                                        
-                                        if(confirmSend) {
-                                          const emailTarget = (inst as any).email || "coordinador@ejemplo.com"; const phoneTarget = inst.phone || "+52 55 1122 3344"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡Reclamación de WhatsApp simulada!" : "¡Reclamación institucional por WhatsApp enviada!"); });
+                                    <div className="flex items-center justify-end gap-2">
+                                      {isSuperAdmin && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDismissPendingNotif(`pending_inst_${inst.id}`, inst.name)}
+                                          title="Descartar y borrar notificación de la bandeja (Super Admin)"
+                                          className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg border border-rose-200 transition cursor-pointer"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => {
+                                          const template = reminderTemplates.find(t => t.id === 'inst_post');
+                                          let body = template?.body || "";
+                                          body = body.replace("{nombre_institucion}", inst.name).replace("{monto}", calculatedAmount).replace("{fecha_limite}", "24/05/2026");
                                           
-                                          sendRealNotificationEmail(emailTarget, inst.name, subject, body).then((res) => {
-                                            if (res.success) {
-                                              triggerToast("¡Reclamación de Institución enviada vía SMTP real con éxito!");
-                                            } else {
-                                              triggerToast("¡Reclamación registrada en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
-                                            }
-                                          });
+                                          const subject = template?.subject || "Urgente: Factura de Convenio Vencida";
+                                          
+                                          const confirmSend = confirm(
+                                            `PREVISUALIZACIÓN DE RECLAMACIÓN PARA LA INSTITUCIÓN:\n\n` +
+                                            `Institución: ${inst.name}\n` +
+                                            `Asunto: ${subject}\n` +
+                                            `Mensaje:\n"${body}"\n\n` +
+                                            `¿Deseas despachar esta alerta de cobro institucional por correo electrónico?`
+                                          );
+                                          
+                                          if(confirmSend) {
+                                            const emailTarget = (inst as any).email || "coordinador@ejemplo.com"; const phoneTarget = inst.phone || "+52 55 1122 3344"; sendRealNotificationWhatsApp(phoneTarget, body).then(wa => { if (wa.success) triggerToast(wa.simulated ? "¡Reclamación de WhatsApp simulada!" : "¡Reclamación institucional por WhatsApp enviada!"); });
+                                            
+                                            sendRealNotificationEmail(emailTarget, inst.name, subject, body).then((res) => {
+                                              if (res.success) {
+                                                triggerToast("¡Reclamación de Institución enviada vía SMTP real con éxito!");
+                                              } else {
+                                                triggerToast("¡Reclamación registrada en el portal! (Configura tus credenciales SMTP para envío real en vivo)");
+                                              }
+                                            });
 
-                                          addActivity({
-                                            institutionId: inst.id,
-                                            date: new Date().toISOString(),
-                                            description: `Enviar Reclamación de Facturación Vencida a Coordinador de ${inst.name} por ${calculatedAmount}.`
-                                          });
-                                          
-                                          setNotifHistory([
-                                            {
+                                            addActivity({
+                                              institutionId: inst.id,
+                                              date: new Date().toISOString(),
+                                              description: `Enviar Reclamación de Facturación Vencida a Coordinador de ${inst.name} por ${calculatedAmount}.`
+                                            });
+                                            
+                                            addNotifHistoryEntry({
                                               id: generateUniqueId(),
                                               date: new Date().toISOString(),
                                               recipient: `${inst.name} (Coordinador)`,
@@ -4518,16 +5469,15 @@ export function Configuracion() {
                                               channel: "Email & Teléfono",
                                               subject: subject,
                                               amount: calculatedAmount
-                                            },
-                                            ...notifHistory
-                                          ]);
-                                        }
-                                      }}
-                                      className="px-3.5 py-1.5 bg-rose-600 font-bold text-white rounded-lg hover:bg-rose-750 transition flex items-center justify-center gap-1 ml-auto text-[11px]"
-                                    >
-                                      <Send className="w-3 h-3" />
-                                      Enviar Reclamación
-                                    </button>
+                                            });
+                                          }
+                                        }}
+                                        className="px-3.5 py-1.5 bg-rose-600 font-bold text-white rounded-lg hover:bg-rose-750 transition flex items-center justify-center gap-1 text-[11px] cursor-pointer"
+                                      >
+                                        <Send className="w-3 h-3" />
+                                        Enviar Reclamación
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               );
@@ -4542,17 +5492,28 @@ export function Configuracion() {
                 {notifSubtab === "history" && (
                   <div className="space-y-6">
                     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                      <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                        <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Historial Reciente de Alertas Enviadas</span>
-                        <span className="text-xs text-slate-450 text-[11px] text-slate-500 font-semibold font-mono">
-                          {notifHistory.length} despachos loggeados
+                      <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex flex-wrap justify-between items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Bitácora Oficial de Envíos</span>
+                          <span className="text-[10px] bg-slate-100 border border-slate-200 text-slate-600 font-bold px-2 py-0.5 rounded-full">
+                            Inmutable / Auditoría
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-semibold font-mono">
+                          {notifHistory.length} {notifHistory.length === 1 ? "despacho registrado" : "despachos registrados"}
                         </span>
                       </div>
 
                       <div className="overflow-x-auto font-sans text-xs">
                         {notifHistory.length === 0 ? (
-                          <div className="p-8 text-center text-slate-400">
-                            No se han registrado envíos en la sesión actual.
+                          <div className="p-10 text-center space-y-2">
+                            <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center">
+                              <Bell className="w-6 h-6 text-slate-400" />
+                            </div>
+                            <p className="font-bold text-slate-700 text-sm">Bitácora iniciada de cero</p>
+                            <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                              No hay despachos previos registrados. Cada notificación de pago despachada manual o automáticamente quedará asentada aquí de forma permanente e inalterable para trazabilidad y auditoría (no se puede borrar).
+                            </p>
                           </div>
                         ) : (
                           <table className="w-full text-left border-collapse">
@@ -4954,20 +5915,22 @@ export function Configuracion() {
                                 </button>
 
                                 {/* Eliminar regla */}
-                                <button
-                                  onClick={() => {
-                                    if (confirm(`¿Estás seguro de que deseas eliminar permanentemente la regla "${rule.name}"?`)) {
-                                      const updated = customRules.filter(r => r.id !== rule.id);
-                                      setCustomRules(updated);
-                                      localStorage.setItem("custom_notification_rules", JSON.stringify(updated));
-                                      triggerToast("Regla de cobro eliminada con éxito");
-                                    }
-                                  }}
-                                  title="Eliminar regla de cobranza"
-                                  className="text-slate-400 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 p-1.5 rounded-lg cursor-pointer transition"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                {isSuperAdmin && (
+                                  <button
+                                    onClick={() => {
+                                      if (confirm(`¿Estás seguro de que deseas eliminar permanentemente la regla "${rule.name}"?`)) {
+                                        const updated = customRules.filter(r => r.id !== rule.id);
+                                        setCustomRules(updated);
+                                        localStorage.setItem("custom_notification_rules", JSON.stringify(updated));
+                                        triggerToast("Regla de cobro eliminada con éxito");
+                                      }
+                                    }}
+                                    title="Eliminar regla de cobranza (Super Admin)"
+                                    className="text-rose-500 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 p-1.5 rounded-lg cursor-pointer transition border border-rose-200"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -4977,17 +5940,17 @@ export function Configuracion() {
                 )}
               </div>
 
-              {/* Modal de Edición de Plantillas */}
+              {/* Modal de Creación / Edición de Plantillas de Cobro */}
               {editingTemplateId && templateForm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
-                  <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-                    <div className="flex justify-between items-center p-5 border-b border-slate-100">
+                  <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 font-sans">
+                    <div className="flex justify-between items-center p-5 border-b border-slate-100 bg-slate-50/50">
                       <div>
                         <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-[10px] font-bold text-indigo-700 uppercase tracking-wider mb-1">
-                          Editar Campaña • {templateForm.target}
+                          {editingTemplateId === "new" ? "Nueva Plantilla de Cobranza" : `Campaña • ${templateForm.target}`}
                         </span>
                         <h3 className="font-bold text-base text-slate-800">
-                          {templateForm.title}
+                          {editingTemplateId === "new" ? "Crear Notificación de Pago" : templateForm.title}
                         </h3>
                       </div>
                       <button
@@ -4995,7 +5958,7 @@ export function Configuracion() {
                           setEditingTemplateId(null);
                           setTemplateForm(null);
                         }}
-                        className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+                        className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
                       >
                         <X className="w-5 h-5" />
                       </button>
@@ -5004,20 +5967,78 @@ export function Configuracion() {
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
-                        setReminderTemplates(
-                          reminderTemplates.map((t) =>
-                            t.id === templateForm.id ? { ...templateForm } : t
-                          )
-                        );
+                        if (editingTemplateId === "new") {
+                          saveReminderTemplates([...reminderTemplates, { ...templateForm }]);
+                          triggerToast("Nueva notificación de pago creada con éxito");
+                        } else {
+                          saveReminderTemplates(
+                            reminderTemplates.map((t) =>
+                              t.id === templateForm.id ? { ...templateForm } : t
+                            )
+                          );
+                          triggerToast("Plantilla de campaña guardada con éxito");
+                        }
                         setEditingTemplateId(null);
                         setTemplateForm(null);
-                        triggerToast("Plantilla de campaña guardada con éxito");
                       }}
-                      className="p-5 space-y-4"
+                      className="p-5 space-y-4 max-h-[80vh] overflow-y-auto"
                     >
-                      <div className="grid grid-cols-2 gap-4">
+                      {/* Título de la Campaña */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                          Título de la Notificación de Pago <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={templateForm.title}
+                          onChange={(e) =>
+                            setTemplateForm({ ...templateForm, title: e.target.value })
+                          }
+                          placeholder="Ej: Recordatorio Preventivo de Mensualidad"
+                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-xs font-bold text-slate-705 uppercase tracking-wider mb-1.5 text-slate-505 text-slate-700">Frecuencia / Tiempo de Alerta</label>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Destinatario Target
+                          </label>
+                          <select
+                            value={templateForm.target}
+                            onChange={(e) =>
+                              setTemplateForm({ ...templateForm, target: e.target.value })
+                            }
+                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          >
+                            <option value="Alumno">Alumno</option>
+                            <option value="Institución">Institución</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Tipo de Alerta
+                          </label>
+                          <select
+                            value={templateForm.type}
+                            onChange={(e) =>
+                              setTemplateForm({ ...templateForm, type: e.target.value })
+                            }
+                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          >
+                            <option value="Preventivo">Preventivo (Antes de vencer)</option>
+                            <option value="Cobro Atrasado">Cobro Atrasado (Después de vencer)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            {templateForm.type === "Preventivo" ? "Días Antes del Vencimiento" : "Días Después de Vencido"}
+                          </label>
                           <div className="relative">
                             <input
                               type="number"
@@ -5030,7 +6051,7 @@ export function Configuracion() {
                                   triggerDays: Number(e.target.value)
                                 })
                               }
-                              className="w-full border border-slate-300 rounded-xl pl-4 pr-12 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
+                              className="w-full border border-slate-300 rounded-xl pl-4 pr-12 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
                             />
                             <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[11px] uppercase tracking-wider font-bold text-slate-400">
                               Días
@@ -5039,21 +6060,26 @@ export function Configuracion() {
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-slate-707 uppercase tracking-wider mb-1.5 text-slate-700">Canal de Envío</label>
-                          <input
-                            type="text"
-                            required
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Canal de Envío</label>
+                          <select
                             value={templateForm.channel}
                             onChange={(e) =>
                               setTemplateForm({ ...templateForm, channel: e.target.value })
                             }
-                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
-                          />
+                            className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          >
+                            <option value="Email & Push">Email & Push</option>
+                            <option value="Email">Solo Email</option>
+                            <option value="WhatsApp">WhatsApp</option>
+                            <option value="Email & WhatsApp">Email & WhatsApp</option>
+                            <option value="Email, WhatsApp & Push">Email, WhatsApp & Push</option>
+                            <option value="Email & Teléfono">Email & Teléfono</option>
+                          </select>
                         </div>
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-slate-708 uppercase tracking-wider mb-1.5 text-slate-700">Asunto del Mensaje</label>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Asunto del Mensaje</label>
                         <input
                           type="text"
                           required
@@ -5061,15 +6087,15 @@ export function Configuracion() {
                           onChange={(e) =>
                             setTemplateForm({ ...templateForm, subject: e.target.value })
                           }
-                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
+                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
                         />
                       </div>
 
                       <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="block text-xs font-bold text-slate-709 uppercase tracking-wider text-slate-700">Cuerpo del Mensaje</label>
+                        <div className="flex flex-wrap justify-between items-center gap-1 mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Cuerpo del Mensaje</label>
                           <span className="text-[10px] text-slate-400 font-semibold">
-                            Variables sugeridas: <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;nombre_alumno&#125;</code> <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;nombre_institucion&#125;</code> <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;monto&#125;</code> <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;fecha_limite&#125;</code>
+                            Variables: <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;nombre_alumno&#125;</code> <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;nombre_institucion&#125;</code> <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;monto&#125;</code> <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-bold">&#123;fecha_limite&#125;</code>
                           </span>
                         </div>
                         <textarea
@@ -5083,23 +6109,41 @@ export function Configuracion() {
                         />
                       </div>
 
-                      <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingTemplateId(null);
-                            setTemplateForm(null);
-                          }}
-                          className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase text-slate-600 hover:bg-slate-100 transition-colors"
-                        >
-                          Cancelar
-                        </button>
-                        <button
-                          type="submit"
-                          className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-colors"
-                        >
-                          Guardar Cambios
-                        </button>
+                      <div className="pt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100">
+                        {isSuperAdmin && editingTemplateId !== "new" ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const tplId = templateForm.id;
+                              const tplTitle = templateForm.title;
+                              setEditingTemplateId(null);
+                              setTemplateForm(null);
+                              handleDeleteReminderTemplate(tplId, tplTitle);
+                            }}
+                            className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase text-rose-600 hover:bg-rose-50 border border-rose-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Eliminar Notificación
+                          </button>
+                        ) : <div />}
+                        <div className="flex items-center gap-3 ml-auto">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTemplateId(null);
+                              setTemplateForm(null);
+                            }}
+                            className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="submit"
+                            className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-colors cursor-pointer"
+                          >
+                            {editingTemplateId === "new" ? "Crear Notificación" : "Guardar Cambios"}
+                          </button>
+                        </div>
                       </div>
                     </form>
                   </div>
@@ -5393,33 +6437,367 @@ export function Configuracion() {
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <h3 className="font-bold text-slate-800 text-lg flex items-center">
-                      <Database className="w-5 h-5 mr-2 text-indigo-600" />
-                      Respaldos de Datos
+                      <Cloud className="w-5 h-5 mr-2 text-indigo-600" />
+                      Respaldos de Datos y Google Drive
                     </h3>
                     <p className="text-xs text-slate-500 mt-1">
-                      Gestiona los puntos de restauración del sistema y las descargas de bases de datos completas.
+                      Gestiona copias de seguridad automáticas programables (semanales, diarias o mensuales) y sincronízalas en Google Drive o almacenamiento local.
                     </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {driveConnectedEmail ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        Drive Conectado
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                        <span className="w-2 h-2 rounded-full bg-slate-400" />
+                        Drive Desconectado
+                      </span>
+                    )}
+
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                      backupSchedule.enabled ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      <Clock className="w-3.5 h-3.5" />
+                      {backupSchedule.enabled 
+                        ? `Auto: ${backupSchedule.frequency === 'daily' ? 'Diario' : backupSchedule.frequency === 'weekly' ? 'Semanal' : backupSchedule.frequency === 'biweekly' ? 'Quincenal' : 'Mensual'}`
+                        : 'Auto Desactivado'}
+                    </span>
                   </div>
                 </div>
               </div>
 
               {/* Cuerpo */}
               <div className="p-6 space-y-6 max-w-5xl">
-                {/* Panel de Controles Rápidos */}
+                {/* 1. Tarjeta de Conexión con Google Drive */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex items-start gap-3.5">
+                      <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl shrink-0">
+                        <Cloud className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-extrabold text-slate-900 text-base">Almacenamiento en la Nube con Google Drive</h4>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700 uppercase">
+                            OAuth Seguro
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1 max-w-2xl leading-relaxed">
+                          Conecta tu cuenta de Google para almacenar automáticamente respaldos cifrados en formato JSON dentro de tu unidad en la carpeta <strong className="text-slate-700 font-mono">IHS_Respaldos_Sistema</strong>. El alcance solicitado se limita exclusivamente a archivos creados por esta aplicación.
+                        </p>
+
+                        {driveConnectedEmail && (
+                          <div className="mt-3 flex items-center gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg w-fit">
+                            <span className="text-slate-400 font-medium">Cuenta vinculada:</span>
+                            <span className="font-bold text-slate-800 font-mono">{driveConnectedEmail}</span>
+                            <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-bold">Activo</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-2.5 shrink-0">
+                      {!driveConnectedEmail ? (
+                        <button
+                          type="button"
+                          disabled={isConnectingDrive}
+                          onClick={async () => {
+                            setIsConnectingDrive(true);
+                            try {
+                              const res = await connectGoogleDrive();
+                              setIsDriveTokenValid(true);
+                              setDriveConnectedEmail(res.user.email || null);
+                              triggerToast(`Google Drive conectado con éxito (${res.user.email})`);
+                              await refreshDriveFiles();
+                            } catch (err: any) {
+                              console.error(err);
+                              triggerToast(err.message || "Error al conectar con Google Drive", "error");
+                            } finally {
+                              setIsConnectingDrive(false);
+                            }
+                          }}
+                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition hover:shadow cursor-pointer"
+                        >
+                          {isConnectingDrive ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                              <span>Conectando...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4" viewBox="0 0 24 24">
+                                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                              </svg>
+                              <span>Conectar con Google Drive</span>
+                            </>
+                          )}
+                        </button>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={refreshDriveFiles}
+                            disabled={isLoadingDriveFiles}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
+                            title="Recargar respaldos de Drive"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDriveFiles ? 'animate-spin' : ''}`} />
+                            <span>Actualizar</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm("¿Deseas desconectar la cuenta de Google Drive para los respaldos?")) {
+                                disconnectGoogleDrive();
+                                setIsDriveTokenValid(false);
+                                setDriveConnectedEmail(null);
+                                setDriveBackupsList([]);
+                                triggerToast("Cuenta de Google Drive desconectada");
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition cursor-pointer"
+                          >
+                            <span>Desconectar</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Programación Automática y Personalizable de Respaldos (Para Administradores) */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                        <Calendar className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-extrabold text-slate-900 text-sm">
+                          Programación de Respaldo Periódico (Administradores)
+                        </h4>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Configura la frecuencia, día y hora en la que el sistema realizará la copia íntegra de la base de datos automáticamente.
+                        </p>
+                      </div>
+                    </div>
+
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={schedForm.enabled}
+                        onChange={(e) => setSchedForm({ ...schedForm, enabled: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                      <span className="ml-2.5 text-xs font-bold text-slate-700">
+                        {schedForm.enabled ? "Respaldo Activo" : "Desactivado"}
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* Formulario de Configuración de Programación */}
+                  <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 transition-opacity ${schedForm.enabled ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Frecuencia de Ejecución
+                      </label>
+                      <select
+                        value={schedForm.frequency}
+                        onChange={(e) => setSchedForm({ ...schedForm, frequency: e.target.value as any })}
+                        className="w-full text-xs font-bold rounded-xl border-slate-300 bg-white py-2.5 px-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none shadow-2xs cursor-pointer"
+                      >
+                        <option value="daily">Diaria (Todos los días)</option>
+                        <option value="weekly">Semanal (Una vez por semana)</option>
+                        <option value="biweekly">Quincenal (Cada 14 días)</option>
+                        <option value="monthly">Mensual (Cada 30 días)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Día de la Semana
+                      </label>
+                      <select
+                        disabled={schedForm.frequency === 'daily'}
+                        value={schedForm.dayOfWeek}
+                        onChange={(e) => setSchedForm({ ...schedForm, dayOfWeek: e.target.value })}
+                        className="w-full text-xs font-bold rounded-xl border-slate-300 bg-white py-2.5 px-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none shadow-2xs cursor-pointer disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        <option value="Lunes">Lunes</option>
+                        <option value="Martes">Martes</option>
+                        <option value="Miércoles">Miércoles</option>
+                        <option value="Jueves">Jueves</option>
+                        <option value="Viernes">Viernes</option>
+                        <option value="Sábado">Sábado</option>
+                        <option value="Domingo">Domingo</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Hora Programada
+                      </label>
+                      <input
+                        type="time"
+                        value={schedForm.timeOfDay}
+                        onChange={(e) => setSchedForm({ ...schedForm, timeOfDay: e.target.value })}
+                        className="w-full text-xs font-bold rounded-xl border-slate-300 bg-white py-2 px-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none shadow-2xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Destino del Respaldo
+                      </label>
+                      <select
+                        value={schedForm.destination}
+                        onChange={(e) => setSchedForm({ ...schedForm, destination: e.target.value as any })}
+                        className="w-full text-xs font-bold rounded-xl border-slate-300 bg-white py-2.5 px-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none shadow-2xs cursor-pointer"
+                      >
+                        <option value="google_drive">Google Drive (Nube Drive)</option>
+                        <option value="cloud_and_local">Google Drive + Copia Local</option>
+                        <option value="local_only">Solo Archivo Local</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-medium text-slate-500">Historial a retener:</span>
+                      <select
+                        value={schedForm.retentionCount || 10}
+                        onChange={(e) => setSchedForm({ ...schedForm, retentionCount: Number(e.target.value) })}
+                        className="text-xs font-bold rounded-lg border-slate-200 bg-slate-50 py-1 px-2.5 focus:ring-indigo-500 outline-none"
+                      >
+                        <option value={5}>Últimos 5 respaldos</option>
+                        <option value={10}>Últimos 10 respaldos (Recomendado)</option>
+                        <option value={20}>Últimos 20 respaldos</option>
+                        <option value={50}>Últimos 50 respaldos</option>
+                      </select>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateBackupSchedule(schedForm);
+                        triggerToast("¡Programación de respaldos guardada y actualizada con éxito!");
+                      }}
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Guardar Programación</span>
+                    </button>
+                  </div>
+
+                  {/* Resumen del último respaldo */}
+                  {backupSchedule.lastBackupDate && (
+                    <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span className="text-slate-600">
+                          Último respaldo ejecutado: <strong className="text-slate-800">{new Date(backupSchedule.lastBackupDate).toLocaleString()}</strong>
+                          {backupSchedule.lastBackupSize && <span className="text-slate-400 font-mono ml-1.5">({backupSchedule.lastBackupSize})</span>}
+                        </span>
+                      </div>
+
+                      {backupSchedule.lastBackupDriveLink && (
+                        <a
+                          href={backupSchedule.lastBackupDriveLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-bold text-[11px]"
+                        >
+                          <span>Ver en Google Drive</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Panel de Acciones Manuales e Instantáneas */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Respaldo Manual */}
-                  <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+                  {/* Respaldo Manual a Google Drive */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
+                        <Cloud className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-extrabold text-slate-800 text-sm">Respaldar en Google Drive Ahora</h4>
+                        <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
+                          Empaqueta toda la base de datos (instituciones, alumnos, finanzas, CRM y configuraciones) y la sube de inmediato a tu Google Drive.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        disabled={isBackingUpToDrive || !driveConnectedEmail}
+                        onClick={async () => {
+                          if (!isGoogleDriveTokenAvailable()) {
+                            triggerToast("Primero conecta tu cuenta de Google Drive para subir el respaldo", "error");
+                            return;
+                          }
+                          setIsBackingUpToDrive(true);
+                          try {
+                            const res = await triggerGoogleDriveBackup('Manual');
+                            triggerToast(`¡Respaldo subido a Google Drive con éxito! (${res.size})`);
+                            await refreshDriveFiles();
+                          } catch (err: any) {
+                            console.error(err);
+                            triggerToast(err.message || "Error al subir respaldo a Google Drive", "error");
+                          } finally {
+                            setIsBackingUpToDrive(false);
+                          }
+                        }}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        {isBackingUpToDrive ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Subiendo a Google Drive...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Cloud className="w-4 h-4" />
+                            <span>Respaldar y Subir a Google Drive</span>
+                          </>
+                        )}
+                      </button>
+
+                      {!driveConnectedEmail && (
+                        <p className="text-[10px] text-amber-600 text-center mt-1.5 font-medium">
+                          * Requiere conectar Google Drive primero en la sección superior
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Respaldo Manual Local (JSON) */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3.5">
                     <div className="flex items-start gap-3">
                       <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
                         <Download className="w-5 h-5" />
                       </div>
                       <div>
-                        <h4 className="font-extrabold text-slate-800 text-sm">Copia de Seguridad Instantánea</h4>
+                        <h4 className="font-extrabold text-slate-800 text-sm">Descargar Copia JSON Local</h4>
                         <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
-                          Descarga un archivo JSON plano con todos los registros actuales del sistema (alumnos, instituciones, pagos, etc.) de forma local. Es 100% privado y seguro.
+                          Descarga un archivo JSON plano con todos los registros actuales de forma local a tu computadora.
                         </p>
                       </div>
                     </div>
+
                     <div className="pt-2">
                       <button
                         type="button"
@@ -5427,109 +6805,195 @@ export function Configuracion() {
                         onClick={async () => {
                           setBackupGenerating(true);
                           try {
-                            const result = await triggerFullBackup('Manual');
-                            triggerToast(`Copia de seguridad manual descargada con éxito (${result.size})`);
+                            const result = await triggerFullBackup('Manual', false);
+                            triggerToast(`Copia de seguridad descargada con éxito (${result.size})`);
                           } catch (err) {
                             triggerToast("Error al generar copia de seguridad", "error");
                           } finally {
                             setBackupGenerating(false);
                           }
                         }}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
                         {backupGenerating ? (
-                          <>Generando Respaldo...</>
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Generando Respaldo...</span>
+                          </>
                         ) : (
                           <>
                             <Download className="w-4 h-4" />
-                            Respaldar y Descargar JSON
+                            <span>Respaldar y Descargar JSON</span>
                           </>
                         )}
                       </button>
                     </div>
                   </div>
-
-                  {/* Respaldo Automático Semanal */}
-                  <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
-                    <div className="flex items-start gap-3">
-                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
-                        <Calendar className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="font-extrabold text-slate-800 text-sm">Respaldo Automático Semanal</h4>
-                        <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
-                          Al iniciar el sistema, se verifica si ya corresponde el respaldo periódico programado. Si sí, se genera y descarga una copia de respaldo sin interrumpir.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-3 pt-2">
-                      <label className="flex items-center space-x-2.5 cursor-pointer text-xs font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={autoBackupEnabled}
-                          onChange={(e) => {
-                            setAutoBackupEnabled(e.target.checked);
-                            localStorage.setItem('auto_backup_enabled', String(e.target.checked));
-                            triggerToast(e.target.checked ? "Respaldo automático activado" : "Respaldo automático desactivado");
-                          }}
-                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
-                        />
-                        <span>Habilitar Respaldo Semanal Automático</span>
-                      </label>
-
-                      <div className="grid grid-cols-2 gap-3 pt-1">
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Día Programado</label>
-                          <select
-                            disabled={!autoBackupEnabled}
-                            value={autoBackupDay}
-                            onChange={(e) => {
-                              setAutoBackupDay(e.target.value);
-                              localStorage.setItem('auto_backup_day', e.target.value);
-                              triggerToast(`Día programado actualizado a ${e.target.value}`);
-                            }}
-                            className="w-full text-xs font-semibold rounded-lg border-slate-200 bg-white py-2 px-2.5 focus:border-indigo-500 focus:ring-0 disabled:opacity-50"
-                          >
-                            <option value="Lunes">Lunes</option>
-                            <option value="Martes">Martes</option>
-                            <option value="Miércoles">Miércoles</option>
-                            <option value="Jueves">Jueves</option>
-                            <option value="Viernes">Viernes</option>
-                            <option value="Sábado">Sábado</option>
-                            <option value="Domingo">Domingo</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Hora Programada</label>
-                          <input
-                            type="time"
-                            disabled={!autoBackupEnabled}
-                            value={autoBackupTime}
-                            onChange={(e) => {
-                              setAutoBackupTime(e.target.value);
-                              localStorage.setItem('auto_backup_time', e.target.value);
-                              triggerToast(`Hora programada fijada para las ${e.target.value} hrs`);
-                            }}
-                            className="w-full text-xs font-semibold rounded-lg border-slate-200 bg-white py-1.5 px-2.5 focus:border-indigo-500 focus:ring-0 disabled:opacity-50"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
                 </div>
 
-                {/* Zona de Carga / Restaurar Respaldo */}
+                {/* 4. Explorador de Respaldos en Google Drive */}
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/40">
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+                        <Cloud className="w-4 h-4 text-indigo-600" />
+                        <span>Respaldos Almacenados en Google Drive</span>
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        Archivos disponibles en la carpeta remota <span className="font-mono text-slate-600">IHS_Respaldos_Sistema</span> de tu cuenta.
+                      </p>
+                    </div>
+
+                    {driveConnectedEmail && (
+                      <button
+                        type="button"
+                        onClick={refreshDriveFiles}
+                        disabled={isLoadingDriveFiles}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg transition"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isLoadingDriveFiles ? 'animate-spin' : ''}`} />
+                        <span>Actualizar</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {!driveConnectedEmail ? (
+                    <div className="p-8 text-center space-y-2">
+                      <Cloud className="w-10 h-10 text-slate-300 mx-auto" />
+                      <p className="text-xs font-bold text-slate-600">Google Drive no está conectado</p>
+                      <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                        Haz clic en "Conectar con Google Drive" arriba para visualizar, descargar o restaurar copias guardadas en la nube.
+                      </p>
+                    </div>
+                  ) : isLoadingDriveFiles ? (
+                    <div className="p-8 text-center space-y-2">
+                      <Loader2 className="w-6 h-6 text-indigo-600 mx-auto animate-spin" />
+                      <p className="text-xs font-medium text-slate-500">Consultando archivos en Google Drive...</p>
+                    </div>
+                  ) : driveBackupsList.length === 0 ? (
+                    <div className="p-8 text-center space-y-2">
+                      <Cloud className="w-8 h-8 text-slate-300 mx-auto" />
+                      <p className="text-xs font-bold text-slate-500">No se encontraron archivos de respaldo en Google Drive</p>
+                      <p className="text-[10px] text-slate-400">
+                        Haz clic en "Respaldar y Subir a Google Drive" para generar tu primer archivo en la nube.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200">
+                          <tr>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Nombre del Archivo</th>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Fecha de Creación</th>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400">Tamaño</th>
+                            <th className="px-5 py-3 text-[9px] uppercase tracking-wider font-bold text-slate-400 text-center">Acciones en la Nube</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {driveBackupsList.map((file) => (
+                            <tr key={file.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-5 py-3">
+                                <div className="font-bold text-slate-800 text-xs font-mono">{file.name}</div>
+                                {file.description && (
+                                  <div className="text-[10px] text-slate-400 truncate max-w-md">{file.description}</div>
+                                )}
+                              </td>
+                              <td className="px-5 py-3 text-[11px] font-semibold text-slate-600">
+                                {new Date(file.createdTime).toLocaleString()}
+                              </td>
+                              <td className="px-5 py-3 text-[11px] font-mono text-slate-500">
+                                {file.size}
+                              </td>
+                              <td className="px-5 py-3 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  {file.webViewLink && (
+                                    <a
+                                      href={file.webViewLink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="p-1 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition"
+                                      title="Abrir en Google Drive"
+                                    >
+                                      <ExternalLink className="w-3 h-3" />
+                                      <span>Ver</span>
+                                    </a>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        triggerToast("Descargando archivo desde Google Drive...");
+                                        const content = await downloadGoogleDriveBackup(file.id);
+                                        const blob = new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' });
+                                        const url = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url;
+                                        a.download = file.name;
+                                        a.click();
+                                        URL.revokeObjectURL(url);
+                                        triggerToast("Descarga completada");
+                                      } catch (err: any) {
+                                        triggerToast(err.message || "Error al descargar desde Drive", "error");
+                                      }
+                                    }}
+                                    className="p-1 px-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition"
+                                    title="Descargar copia JSON a tu equipo"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    <span>Descargar</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={isFetchingDriveRestore}
+                                    onClick={async () => {
+                                      setIsFetchingDriveRestore(true);
+                                      try {
+                                        triggerToast("Obteniendo respaldo desde Google Drive...");
+                                        const payload = await downloadGoogleDriveBackup(file.id);
+                                        setDriveFileToRestore({ file, data: payload });
+                                      } catch (err: any) {
+                                        triggerToast(err.message || "Error al leer respaldo de Drive", "error");
+                                      } finally {
+                                        setIsFetchingDriveRestore(false);
+                                      }
+                                    }}
+                                    className="p-1 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition"
+                                    title="Restaurar base de datos con este respaldo"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    <span>Restaurar</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => setDriveFileToDelete(file)}
+                                    className="p-1 px-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition"
+                                    title="Eliminar archivo de Google Drive"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* 5. Restaurar Sistema desde Archivo Local (JSON) */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
                   <div className="flex items-start gap-3">
                     <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
                       <Upload className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="font-extrabold text-slate-800 text-sm">Restaurar Sistema desde Copia de Seguridad</h4>
+                      <h4 className="font-extrabold text-slate-800 text-sm">Restaurar Sistema desde Archivo Local (JSON)</h4>
                       <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
-                        Carga una copia de seguridad local (archivo en formato JSON) para reestablecer todos tus datos. <span className="text-rose-600 font-bold">¡Atención! Esta acción sobrescribirá y reemplazará absolutamente todos los registros actuales en el sistema.</span>
+                        Carga una copia de seguridad local (archivo en formato JSON) para restablecer todos tus datos. <span className="text-rose-600 font-bold">¡Atención! Esta acción sobrescribirá y reemplazará absolutamente todos los registros actuales en el sistema.</span>
                       </p>
                     </div>
                   </div>
@@ -5574,7 +7038,7 @@ export function Configuracion() {
                   </div>
                 </div>
 
-                {/* Lista Histórica de Respaldos (Auditoría) */}
+                {/* 6. Bitácora Local de Puntos de Respaldo */}
                 <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                   <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/40">
                     <div>
@@ -5625,10 +7089,10 @@ export function Configuracion() {
                                     deleteBackup(bk.id);
                                     triggerToast("Registro de respaldo eliminado con éxito");
                                   }}
-                                  className="p-1 px-2.5 hover:bg-rose-50 text-rose-600 hover:text-rose-700 rounded-lg text-xs font-bold flex items-center gap-1 mx-auto transition-all"
+                                  className="p-1 px-2.5 hover:bg-rose-50 text-rose-600 hover:text-rose-700 rounded-lg text-xs font-bold flex items-center gap-1 mx-auto transition-all cursor-pointer"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
-                                  Borrar Log
+                                  <span>Borrar Log</span>
                                 </button>
                               </td>
                             </tr>
@@ -5687,7 +7151,7 @@ export function Configuracion() {
                       </div>
                       <div className="border-l border-white/10 pl-6 space-y-2.5">
                         <div className="flex justify-between items-center text-xs">
-                          <span className="text-slate-300 font-medium">Caché Local Multitarea (IndexedDB):</span>
+                          <span className="text-slate-300 font-medium">Caché Local Segura (Anti-Quota RAM):</span>
                           <span className="font-mono font-bold text-emerald-300">ACTIVO</span>
                         </div>
                         <div className="flex justify-between items-center text-xs">
@@ -5820,8 +7284,8 @@ export function Configuracion() {
                         <span className="font-mono font-bold text-slate-700 font-mono">ai-studio-6f563df9</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-slate-500 font-medium">Persistencia local multi-pestaña:</span>
-                        <span className="font-bold text-indigo-600">Habilitado (IndexedDB)</span>
+                        <span className="text-slate-500 font-medium">Modo de Caché Local:</span>
+                        <span className="font-bold text-indigo-600">Memoria Segura (Anti-Cuota)</span>
                       </div>
                     </div>
 
@@ -5844,6 +7308,673 @@ export function Configuracion() {
                       </div>
                     </div>
                   </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {activeTab === "SLA" && (
+            <div className="flex-1 overflow-auto bg-slate-50 relative p-6">
+              <div className="max-w-6xl mx-auto pb-12 space-y-6">
+                
+                {/* Header Card */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="flex items-start space-x-3.5">
+                      <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl shrink-0 mt-0.5">
+                        <Clock className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <h2 className="text-lg font-black text-slate-900 tracking-tight">Acuerdos de Nivel de Servicio (SLA)</h2>
+                          <span className="px-2 py-0.5 text-[10px] font-black uppercase tracking-wider rounded bg-indigo-100 text-indigo-700">
+                            Multimódulo
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1 max-w-2xl leading-relaxed">
+                          Define y calibra los tiempos máximos tolerables de atención, semáforos de inactividad y políticas de escalamiento automático para los flujos operativos de <strong className="text-slate-700">CRM & Prospectos</strong>, <strong className="text-slate-700">Instituciones Socias</strong> y <strong className="text-slate-700">Alumnos</strong>.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleResetSlaDefaults}
+                        className="inline-flex items-center px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition shadow-xs"
+                        title="Restaura y sincroniza los SLAs recomendados de fábrica para los 3 módulos"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
+                        Restablecer Recomendados
+                      </button>
+
+                      <div className="relative inline-flex items-center">
+                        <button
+                          type="button"
+                          onClick={handleExportSlaMatrixCSV}
+                          className="inline-flex items-center px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-l-xl transition shadow-xs"
+                          title="Descargar matriz completa en formato CSV"
+                        >
+                          <Download className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
+                          CSV
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleExportSlaMatrixPDF}
+                          className="inline-flex items-center px-3 py-2 text-xs font-bold text-slate-700 bg-white border-t border-b border-r border-slate-200 hover:bg-slate-50 rounded-r-xl transition shadow-xs"
+                          title="Generar vista para imprimir / guardar PDF"
+                        >
+                          <FileText className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
+                          PDF
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCreateSla(slaModuleTab === "todos" ? "crm" : slaModuleTab)}
+                        className="inline-flex items-center px-4 py-2 text-xs font-extrabold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-sm"
+                      >
+                        <Plus className="w-4 h-4 mr-1.5" />
+                        Nueva Regla SLA
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Operational KPI Metric Strip */}
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6 pt-5 border-t border-slate-100">
+                    <div className="bg-slate-50 border border-slate-200/60 rounded-xl p-3">
+                      <div className="flex items-center justify-between text-slate-400 mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Total SLAs</span>
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="text-xl font-black text-slate-800">{normalizedSlaList.length}</div>
+                      <div className="text-[10px] text-slate-500 font-medium">Reglas parametrizadas</div>
+                    </div>
+
+                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3">
+                      <div className="flex items-center justify-between text-indigo-500 mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">CRM / Leads</span>
+                        <Users className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="text-xl font-black text-indigo-900">
+                        {normalizedSlaList.filter(s => s.module === 'crm').length}
+                      </div>
+                      <div className="text-[10px] text-indigo-600/80 font-medium">Fases de prospección</div>
+                    </div>
+
+                    <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl p-3">
+                      <div className="flex items-center justify-between text-emerald-600 mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Instituciones</span>
+                        <Building className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="text-xl font-black text-emerald-900">
+                        {normalizedSlaList.filter(s => s.module === 'instituciones').length}
+                      </div>
+                      <div className="text-[10px] text-emerald-700/80 font-medium">Convenios y sedes</div>
+                    </div>
+
+                    <div className="bg-sky-50/50 border border-sky-100 rounded-xl p-3">
+                      <div className="flex items-center justify-between text-sky-600 mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Alumnos</span>
+                        <GraduationCap className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="text-xl font-black text-sky-900">
+                        {normalizedSlaList.filter(s => s.module === 'alumnos').length}
+                      </div>
+                      <div className="text-[10px] text-sky-700/80 font-medium">Académico y kárdex</div>
+                    </div>
+
+                    <div className="bg-rose-50/50 border border-rose-100 rounded-xl p-3 col-span-2 md:col-span-1">
+                      <div className="flex items-center justify-between text-rose-500 mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Críticos (≤3d)</span>
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="text-xl font-black text-rose-800">
+                        {normalizedSlaList.filter(s => s.priority === 'alta' || (s.slaDays !== null && s.slaDays <= 3)).length}
+                      </div>
+                      <div className="text-[10px] text-rose-600/80 font-medium">Atención inmediata</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sub-Navigation Module Filter Tabs */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-2 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSlaModuleTab("todos")}
+                      className={`inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold transition ${
+                        slaModuleTab === "todos"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      <span>Todos los Módulos</span>
+                      <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] ${slaModuleTab === "todos" ? "bg-slate-700 text-slate-200" : "bg-slate-100 text-slate-600"}`}>
+                        {normalizedSlaList.length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSlaModuleTab("crm")}
+                      className={`inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold transition ${
+                        slaModuleTab === "crm"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      <Users className="w-3.5 h-3.5 mr-1.5 opacity-80" />
+                      <span>CRM & Prospectos</span>
+                      <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] ${slaModuleTab === "crm" ? "bg-indigo-700 text-indigo-100" : "bg-slate-100 text-slate-600"}`}>
+                        {normalizedSlaList.filter(s => s.module === 'crm').length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSlaModuleTab("instituciones")}
+                      className={`inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold transition ${
+                        slaModuleTab === "instituciones"
+                          ? "bg-emerald-600 text-white shadow-xs"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      <Building className="w-3.5 h-3.5 mr-1.5 opacity-80" />
+                      <span>Instituciones Socias</span>
+                      <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] ${slaModuleTab === "instituciones" ? "bg-emerald-700 text-emerald-100" : "bg-slate-100 text-slate-600"}`}>
+                        {normalizedSlaList.filter(s => s.module === 'instituciones').length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSlaModuleTab("alumnos")}
+                      className={`inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold transition ${
+                        slaModuleTab === "alumnos"
+                          ? "bg-sky-600 text-white shadow-xs"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      <GraduationCap className="w-3.5 h-3.5 mr-1.5 opacity-80" />
+                      <span>Alumnos & Académico</span>
+                      <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] ${slaModuleTab === "alumnos" ? "bg-sky-700 text-sky-100" : "bg-slate-100 text-slate-600"}`}>
+                        {normalizedSlaList.filter(s => s.module === 'alumnos').length}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Active Context Helper */}
+                  <div className="text-right px-2">
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      Mostrando {normalizedSlaList.filter(s => {
+                        if (slaModuleTab !== "todos" && s.module !== slaModuleTab) return false;
+                        if (slaPriorityFilter !== "todas" && s.priority !== slaPriorityFilter) return false;
+                        if (slaStatusFilter === "activos" && s.isActive === false) return false;
+                        if (slaStatusFilter === "pausados" && s.isActive !== false) return false;
+                        if (slaSearchQuery.trim()) {
+                          const q = slaSearchQuery.toLowerCase();
+                          return (s.name || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q) || (s.responsibleRole || '').toLowerCase().includes(q);
+                        }
+                        return true;
+                      }).length} de {normalizedSlaList.length} reglas
+                    </span>
+                  </div>
+                </div>
+
+                {/* Filter and Search Bar */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                    <div className="md:col-span-5 relative">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={slaSearchQuery}
+                        onChange={(e) => setSlaSearchQuery(e.target.value)}
+                        placeholder="Buscar por fase, criterio o rol responsable..."
+                        className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none placeholder:text-slate-400 bg-slate-50/50"
+                      />
+                      {slaSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setSlaSearchQuery("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <div className="relative">
+                        <select
+                          value={slaPriorityFilter}
+                          onChange={(e) => setSlaPriorityFilter(e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50/50"
+                        >
+                          <option value="todas">Todas las prioridades</option>
+                          <option value="alta">Prioridad Alta / Crítica</option>
+                          <option value="media">Prioridad Normal / Media</option>
+                          <option value="baja">Prioridad Baja / Informativa</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <select
+                        value={slaStatusFilter}
+                        onChange={(e) => setSlaStatusFilter(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50/50"
+                      >
+                        <option value="todos">Todos los estados</option>
+                        <option value="activos">Solo Reglas Activas</option>
+                        <option value="pausados">Solo Reglas Pausadas</option>
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCreateSla(slaModuleTab === "todos" ? "crm" : slaModuleTab)}
+                        className="w-full inline-flex items-center justify-center px-3 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        Añadir en {slaModuleTab === "instituciones" ? "Inst." : slaModuleTab === "alumnos" ? "Alum." : "CRM"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Main SLA Rules Table */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-black uppercase tracking-wider text-slate-500">
+                          <th className="py-3.5 px-4">Fase / Proceso Operativo</th>
+                          <th className="py-3.5 px-3">Módulo</th>
+                          <th className="py-3.5 px-3 text-center">Límite SLA</th>
+                          <th className="py-3.5 px-3">Prioridad</th>
+                          <th className="py-3.5 px-3">Área / Rol Responsable</th>
+                          <th className="py-3.5 px-3">Acción al Vencer</th>
+                          <th className="py-3.5 px-3 text-center">Estado</th>
+                          <th className="py-3.5 px-4 text-right">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {normalizedSlaList
+                          .filter(s => {
+                            if (slaModuleTab !== "todos" && s.module !== slaModuleTab) return false;
+                            if (slaPriorityFilter !== "todas" && s.priority !== slaPriorityFilter) return false;
+                            if (slaStatusFilter === "activos" && s.isActive === false) return false;
+                            if (slaStatusFilter === "pausados" && s.isActive !== false) return false;
+                            if (slaSearchQuery.trim()) {
+                              const q = slaSearchQuery.toLowerCase();
+                              return (s.name || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q) || (s.responsibleRole || '').toLowerCase().includes(q);
+                            }
+                            return true;
+                          })
+                          .map((item) => {
+                            const isCrm = item.module === "crm";
+                            const isInst = item.module === "instituciones";
+                            const isAlum = item.module === "alumnos";
+
+                            return (
+                              <tr 
+                                key={item.id} 
+                                className={`hover:bg-slate-50/70 transition-colors ${item.isActive === false ? "opacity-60 bg-slate-50/30" : ""}`}
+                              >
+                                {/* Fase y Criterio */}
+                                <td className="py-3.5 px-4 max-w-xs">
+                                  <div className="flex items-start space-x-2.5">
+                                    <div className="mt-0.5">
+                                      <div className="font-extrabold text-slate-900 flex items-center gap-1.5">
+                                        <span>{item.name}</span>
+                                        <span className="text-[9px] font-mono font-medium text-slate-400 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
+                                          {item.id}
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2 leading-relaxed">
+                                        {item.description || "Sin descripción de proceso"}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </td>
+
+                                {/* Módulo */}
+                                <td className="py-3.5 px-3 whitespace-nowrap">
+                                  {isCrm && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                      <Users className="w-3 h-3 mr-1 text-indigo-500" />
+                                      CRM Leads
+                                    </span>
+                                  )}
+                                  {isInst && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      <Building className="w-3 h-3 mr-1 text-emerald-600" />
+                                      Institución
+                                    </span>
+                                  )}
+                                  {isAlum && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-50 text-sky-700 border border-sky-200">
+                                      <GraduationCap className="w-3 h-3 mr-1 text-sky-600" />
+                                      Alumno
+                                    </span>
+                                  )}
+                                </td>
+
+                                {/* Límite SLA con botones rápidos */}
+                                <td className="py-3.5 px-3 text-center whitespace-nowrap">
+                                  {item.slaDays !== null && item.slaDays !== undefined ? (
+                                    <div className="inline-flex items-center space-x-1.5 bg-amber-50/70 border border-amber-200 rounded-lg px-2 py-1 shadow-2xs">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickDaysUpdate(item, -1)}
+                                        title="Reducir en 1 día"
+                                        className="w-5 h-5 flex items-center justify-center rounded text-amber-700 hover:bg-amber-200 font-black text-xs transition"
+                                      >
+                                        -
+                                      </button>
+                                      <span className="font-black text-amber-900 text-xs px-1">
+                                        ⏱️ {item.slaDays} {item.slaDays === 1 ? 'día' : 'días'}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickDaysUpdate(item, 1)}
+                                        title="Aumentar en 1 día"
+                                        className="w-5 h-5 flex items-center justify-center rounded text-amber-700 hover:bg-amber-200 font-black text-xs transition"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="inline-block px-2.5 py-1 rounded-md text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-200">
+                                      Sin límite
+                                    </span>
+                                  )}
+                                </td>
+
+                                {/* Prioridad */}
+                                <td className="py-3.5 px-3 whitespace-nowrap">
+                                  {item.priority === 'alta' ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5" />
+                                      Alta / Crítica
+                                    </span>
+                                  ) : item.priority === 'baja' ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mr-1.5" />
+                                      Baja
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5" />
+                                      Normal
+                                    </span>
+                                  )}
+                                </td>
+
+                                {/* Responsable */}
+                                <td className="py-3.5 px-3">
+                                  <div className="font-bold text-slate-700 text-xs truncate max-w-[130px]" title={item.responsibleRole}>
+                                    {item.responsibleRole || "Operaciones"}
+                                  </div>
+                                </td>
+
+                                {/* Acción al Vencer */}
+                                <td className="py-3.5 px-3">
+                                  <div className="space-y-1 max-w-[210px]">
+                                    {item.actionOnAlert === "Enviar correo a contacto" ? (
+                                      <div className="space-y-0.5">
+                                        <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-xs">
+                                          <Mail className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                          <span className="truncate">Enviar correo</span>
+                                        </div>
+                                        <span className="text-[10px] bg-indigo-50 text-indigo-800 border border-indigo-200 px-1.5 py-0.2 rounded font-mono font-bold block truncate" title={item.emailTemplateTitle || item.emailTemplateId || "Plantilla SLA"}>
+                                          📄 {item.emailTemplateTitle || item.emailTemplateId || "Recordatorio SLA"}
+                                        </span>
+                                      </div>
+                                    ) : item.actionOnAlert === "Mover a otra etapa" ? (
+                                      <div className="space-y-0.5">
+                                        <div className="flex items-center gap-1.5 text-amber-700 font-bold text-xs">
+                                          <ArrowRightCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                          <span>Mover a otra etapa</span>
+                                        </div>
+                                        <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded font-mono font-bold block truncate" title={item.targetStage || "Futuro"}>
+                                          Etapa: {item.targetStage || "Futuro"}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="text-[11px] font-semibold text-slate-700 truncate" title={item.actionOnAlert}>
+                                        {item.actionOnAlert || "Alerta en Dashboard"}
+                                      </div>
+                                    )}
+
+                                    {/* Segunda acción encadenada si existe */}
+                                    {item.hasSecondaryAction && item.secondaryAction && (
+                                      <div className="inline-flex items-center gap-1 text-[9px] font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md" title={`Acción Adicional: ${item.secondaryAction}`}>
+                                        <Zap className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                        <span className="truncate">
+                                          + {item.secondaryAction === "Mover a otra etapa" ? `Mover a ${item.secondaryTargetStage || 'otra etapa'}` : item.secondaryAction === "Enviar correo" ? `Correo (${item.secondaryEmailTemplateTitle || 'Plantilla'})` : item.secondaryAction}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+
+                                {/* Estado Activo / Pausado */}
+                                <td className="py-3.5 px-3 text-center whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleSlaActive(item)}
+                                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold transition cursor-pointer ${
+                                      item.isActive !== false
+                                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                                        : "bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200"
+                                    }`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${item.isActive !== false ? "bg-emerald-500" : "bg-slate-400"}`} />
+                                    {item.isActive !== false ? "Activo" : "Pausado"}
+                                  </button>
+                                </td>
+
+                                {/* Acciones */}
+                                <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                                  <div className="inline-flex items-center space-x-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditSla(item)}
+                                      className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                                      title="Editar configuración de SLA"
+                                    >
+                                      <Edit2 className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteSla(item)}
+                                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                      title="Eliminar regla SLA"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                        {normalizedSlaList.filter(s => {
+                          if (slaModuleTab !== "todos" && s.module !== slaModuleTab) return false;
+                          if (slaPriorityFilter !== "todas" && s.priority !== slaPriorityFilter) return false;
+                          if (slaStatusFilter === "activos" && s.isActive === false) return false;
+                          if (slaStatusFilter === "pausados" && s.isActive !== false) return false;
+                          if (slaSearchQuery.trim()) {
+                            const q = slaSearchQuery.toLowerCase();
+                            return (s.name || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q) || (s.responsibleRole || '').toLowerCase().includes(q);
+                          }
+                          return true;
+                        }).length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="py-12 text-center text-slate-400">
+                              <div className="flex flex-col items-center justify-center space-y-2">
+                                <Clock className="w-8 h-8 text-slate-300" />
+                                <div className="text-sm font-bold text-slate-600">No se encontraron acuerdos SLA coincidentes</div>
+                                <p className="text-xs text-slate-400 max-w-sm">
+                                  Prueba ajustando el término de búsqueda o cambia el filtro de módulo o prioridad.
+                                </p>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Interactive SLA Semaphor Simulator Sandbox */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="p-2 bg-amber-50 text-amber-600 rounded-lg">
+                        <Zap className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="font-extrabold text-slate-800 text-sm">Simulador y Verificador de Semáforos SLA</h3>
+                        <p className="text-xs text-slate-500">Prueba cómo responde el algoritmo de inactividad según los días transcurridos sin atención.</p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
+                      Modo Diagnóstico
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const activeRule = normalizedSlaList.find(s => s.id === slaSimulatorSelectedId) || normalizedSlaList[0];
+                    const limit = (activeRule && activeRule.slaDays !== null && activeRule.slaDays !== undefined) ? activeRule.slaDays : 3;
+                    
+                    let simStatus: 'en_tiempo' | 'por_vencer' | 'vencido' = 'en_tiempo';
+                    let overdue = 0;
+                    if (slaSimulatorDays > limit) {
+                      simStatus = 'vencido';
+                      overdue = slaSimulatorDays - limit;
+                    } else if (slaSimulatorDays >= Math.max(1, Math.floor(limit * 0.65))) {
+                      simStatus = 'por_vencer';
+                    } else {
+                      simStatus = 'en_tiempo';
+                    }
+
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center pt-2">
+                        {/* Selector de Regla y Slider de Días */}
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                              Fase o Proceso a Simular
+                            </label>
+                            <select
+                              value={slaSimulatorSelectedId || activeRule?.id || ""}
+                              onChange={(e) => setSlaSimulatorSelectedId(e.target.value)}
+                              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50"
+                            >
+                              {normalizedSlaList.map(s => (
+                                <option key={s.id} value={s.id}>
+                                  [{s.module?.toUpperCase()}] {s.name} ({s.slaDays ? `${s.slaDays}d` : 'Sin límite'})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <div className="flex justify-between items-center mb-1">
+                              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                Días Inactivo Transcurridos
+                              </label>
+                              <span className="text-xs font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">
+                                {slaSimulatorDays} {slaSimulatorDays === 1 ? 'día' : 'días'}
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min={0}
+                              max={Math.max(30, limit * 2)}
+                              value={slaSimulatorDays}
+                              onChange={(e) => setSlaSimulatorDays(Number(e.target.value))}
+                              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                            />
+                            <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono">
+                              <span>0 días</span>
+                              <span>SLA Límite: {limit}d</span>
+                              <span>{Math.max(30, limit * 2)} días</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Vista previa de la Tarjeta de Semáforo */}
+                        <div className="md:col-span-2 bg-slate-50 border border-slate-200/80 rounded-2xl p-5">
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-3">
+                            Resultado Calculado en Tiempo Real:
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                            <div className="space-y-1">
+                              <div className="flex items-center space-x-2">
+                                <span className="font-extrabold text-slate-900 text-sm">{activeRule?.name}</span>
+                                <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                                  {activeRule?.module}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500">
+                                Límite acordado: <strong className="text-slate-700">{limit} días</strong> • Responsable: <strong className="text-slate-700">{activeRule?.responsibleRole}</strong>
+                              </p>
+                            </div>
+
+                            <div className="flex flex-col items-start sm:items-end space-y-1 shrink-0">
+                              {simStatus === 'vencido' ? (
+                                <div className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-black bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs animate-pulse">
+                                  <AlertCircle className="w-3.5 h-3.5 mr-1.5 text-rose-600" />
+                                  Inactiva ({slaSimulatorDays}d / {limit}d - {overdue}d retraso)
+                                </div>
+                              ) : simStatus === 'por_vencer' ? (
+                                <div className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-black bg-amber-50 text-amber-700 border border-amber-200 shadow-2xs">
+                                  <AlertTriangle className="w-3.5 h-3.5 mr-1.5 text-amber-600" />
+                                  Por vencer ({slaSimulatorDays}d / {limit}d)
+                                </div>
+                              ) : (
+                                <div className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                                  <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                                  Al día ({slaSimulatorDays}d / {limit}d)
+                                </div>
+                              )}
+
+                              <div className="text-[10px] text-right font-medium text-slate-500 space-y-0.5">
+                                <div className="flex items-center justify-end gap-1 flex-wrap">
+                                  <span className="font-bold text-slate-700">Acción:</span>
+                                  <span>{activeRule?.actionOnAlert || 'Alerta en Dashboard'}</span>
+                                  {activeRule?.actionOnAlert === "Enviar correo a contacto" && (activeRule.emailTemplateTitle || activeRule.emailTemplateId) && (
+                                    <span className="bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.2 rounded text-[9px] font-mono">
+                                      {activeRule.emailTemplateTitle || activeRule.emailTemplateId}
+                                    </span>
+                                  )}
+                                  {activeRule?.actionOnAlert === "Mover a otra etapa" && activeRule.targetStage && (
+                                    <span className="bg-amber-50 text-amber-800 font-bold px-1.5 py-0.2 rounded text-[9px]">
+                                      {activeRule.targetStage}
+                                    </span>
+                                  )}
+                                </div>
+                                {activeRule?.hasSecondaryAction && activeRule.secondaryAction && (
+                                  <div className="flex items-center justify-end gap-1 text-emerald-700 text-[9.5px] font-bold">
+                                    <Zap className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span>+ {activeRule.secondaryAction === "Mover a otra etapa" ? `Mover a ${activeRule.secondaryTargetStage || 'otra etapa'}` : activeRule.secondaryAction === "Enviar correo" ? `Correo: ${activeRule.secondaryEmailTemplateTitle || 'Plantilla'}` : activeRule.secondaryAction}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
               </div>
@@ -6844,6 +8975,547 @@ export function Configuracion() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmación de Restauración desde Google Drive */}
+      {driveFileToRestore && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 font-sans">
+            <div className="p-5 border-b border-slate-100 bg-amber-50/60 flex items-center gap-3">
+              <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0 animate-bounce" />
+              <div>
+                <h4 className="font-extrabold text-slate-900 text-sm uppercase">Restaurar desde Google Drive</h4>
+                <p className="text-[10px] text-slate-500">Sobrescribirá toda la base de datos activa</p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="text-xs text-slate-600 leading-relaxed space-y-3">
+                <p>
+                  Estás a punto de restaurar la base de datos completa con el respaldo descargado desde Google Drive:
+                </p>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 font-mono text-[11px] text-slate-800 space-y-1">
+                  <p>• <strong>Archivo:</strong> {driveFileToRestore.file.name}</p>
+                  <p>• <strong>Tamaño:</strong> {driveFileToRestore.file.size}</p>
+                  <p>• <strong>Fecha Drive:</strong> {new Date(driveFileToRestore.file.createdTime).toLocaleString()}</p>
+                </div>
+                <p className="font-bold text-rose-600">
+                  ⚠️ ADVERTENCIA: Esta acción reemplazará de inmediato todos los datos actuales del sistema con los registros de este respaldo en la nube.
+                </p>
+                <p className="font-medium text-slate-700">
+                  ¿Confirmas que deseas proceder con la restauración total?
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setDriveFileToRestore(null)}
+                  className="px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const success = restoreBackup(driveFileToRestore.data);
+                      if (success) {
+                        triggerToast("¡Base de datos restaurada de forma exitosa desde Google Drive!");
+                      } else {
+                        triggerToast("Error al procesar la restauración.", "error");
+                      }
+                    } catch (err: any) {
+                      triggerToast("Error crítico durante la restauración: " + (err.message || ''), "error");
+                    } finally {
+                      setDriveFileToRestore(null);
+                    }
+                  }}
+                  className="px-4 py-2 text-xs font-extrabold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-md transition cursor-pointer"
+                >
+                  Sí, Sobrescribir y Restaurar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmación de Eliminación de Archivo en Google Drive */}
+      {driveFileToDelete && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 font-sans">
+            <div className="p-5 border-b border-slate-100 bg-rose-50/60 flex items-center gap-3">
+              <Trash2 className="w-6 h-6 text-rose-600 shrink-0 animate-pulse" />
+              <div>
+                <h4 className="font-extrabold text-slate-900 text-sm uppercase">Eliminar de Google Drive</h4>
+                <p className="text-[10px] text-slate-500">Esta acción borrará el archivo en tu unidad</p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="text-xs text-slate-600 leading-relaxed space-y-2">
+                <p>¿Estás seguro de que deseas eliminar permanentemente este archivo de respaldo de tu Google Drive?</p>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 font-mono text-[11px] text-slate-800 space-y-1">
+                  <p className="truncate"><strong>Archivo:</strong> {driveFileToDelete.name}</p>
+                  <p><strong>Tamaño:</strong> {driveFileToDelete.size}</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isDeletingDriveFile}
+                  onClick={() => setDriveFileToDelete(null)}
+                  className="px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingDriveFile}
+                  onClick={async () => {
+                    setIsDeletingDriveFile(true);
+                    try {
+                      await deleteGoogleDriveBackup(driveFileToDelete.id);
+                      setDriveBackupsList(prev => prev.filter(f => f.id !== driveFileToDelete.id));
+                      triggerToast("Archivo eliminado de Google Drive exitosamente");
+                      setDriveFileToDelete(null);
+                    } catch (err: any) {
+                      triggerToast(err.message || "Error al eliminar de Google Drive", "error");
+                    } finally {
+                      setIsDeletingDriveFile(false);
+                    }
+                  }}
+                  className="px-4 py-2 text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-md transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                >
+                  {isDeletingDriveFile && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Confirmar Eliminación</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {slaModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100">
+            <div className="flex justify-between items-center p-5 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-slate-900">
+                    {editingSlaId ? 'Editar Acuerdo SLA' : 'Nuevo Acuerdo SLA'}
+                  </h3>
+                  <p className="text-xs text-slate-500">Parámetros de inactividad, escalamiento y tiempos de atención</p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setSlaModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1.5 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSla} className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Nombre de la Fase o Regla SLA <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={slaForm.name}
+                    onChange={(e) => setSlaForm({ ...slaForm, name: e.target.value })}
+                    placeholder="Ej. Revisión de Convenio Marco o Examen de Inglés"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Módulo Operativo <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={slaForm.module}
+                    onChange={(e) => setSlaForm({ ...slaForm, module: e.target.value as any })}
+                    className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                  >
+                    <option value="crm">CRM & Prospectos</option>
+                    <option value="instituciones">Instituciones Socias</option>
+                    <option value="alumnos">Alumnos & Académico</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Límite SLA (Días Permitidos)
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      disabled={slaForm.slaDays === null}
+                      value={slaForm.slaDays === null ? "" : slaForm.slaDays}
+                      onChange={(e) => setSlaForm({ ...slaForm, slaDays: e.target.value === "" ? 1 : Math.max(1, parseInt(e.target.value) || 1) })}
+                      placeholder={slaForm.slaDays === null ? "Ilimitado" : "Días"}
+                      className="w-28 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <label className="inline-flex items-center text-xs text-slate-600 font-medium cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={slaForm.slaDays === null}
+                        onChange={(e) => setSlaForm({ ...slaForm, slaDays: e.target.checked ? null : 3 })}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 mr-1.5"
+                      />
+                      Sin límite
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Nivel de Prioridad
+                  </label>
+                  <select
+                    value={slaForm.priority}
+                    onChange={(e) => setSlaForm({ ...slaForm, priority: e.target.value as any })}
+                    className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                  >
+                    <option value="alta">Alta / Atención Inmediata</option>
+                    <option value="media">Normal / Intermedia</option>
+                    <option value="baja">Baja / Informativa</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Área o Rol Responsable
+                  </label>
+                  <input
+                    type="text"
+                    value={slaForm.responsibleRole}
+                    onChange={(e) => setSlaForm({ ...slaForm, responsibleRole: e.target.value })}
+                    placeholder="Ej. Ventas, Admisiones, Control Escolar"
+                    className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+
+                <div className="md:col-span-2 space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>Acción Principal al Vencer SLA <span className="text-rose-500">*</span></span>
+                      {slaForm.actionOnAlert === "Enviar correo a contacto" && (
+                        <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-bold">
+                          Plantilla requerida
+                        </span>
+                      )}
+                    </label>
+                    <select
+                      value={slaForm.actionOnAlert}
+                      onChange={(e) => setSlaForm({ ...slaForm, actionOnAlert: e.target.value })}
+                      className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none bg-white shadow-2xs"
+                    >
+                      <option value="Enviar correo a contacto">📧 Enviar correo a contacto</option>
+                      <option value="Mover a otra etapa">🔄 Mover a otra etapa</option>
+                      <option value="Alerta en Dashboard y Correo al Ejecutivo">🔔 Alerta en Dashboard y Correo al Responsable</option>
+                      <option value="Alerta Inmediata y Notificación WhatsApp">💬 Alerta Inmediata y Notificación WhatsApp</option>
+                      <option value="Alerta Crítica y Notificación a Dirección">⚠️ Alerta Crítica y Notificación a Dirección</option>
+                      <option value="Escalamiento Directo a Dirección General">🚀 Escalamiento Directo a Dirección General</option>
+                      <option value="Alerta a Finanzas y Correo a Escuela">💳 Alerta a Finanzas y Correo a la Escuela</option>
+                      <option value="Notificación de Calificación Lista">🎓 Notificación de Calificación Lista</option>
+                      <option value="Monitoreo Periódico">👁️ Monitoreo Periódico</option>
+                    </select>
+                  </div>
+
+                  {/* Subsección: Template Selector cuando la acción es Enviar Correo a Contacto */}
+                  {slaForm.actionOnAlert === "Enviar correo a contacto" && (
+                    <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2.5 animate-in fade-in slide-in-from-top-1 duration-150">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-[11px] font-bold text-indigo-950 uppercase tracking-wider">
+                          Plantilla de Correo a Utilizar (Template) <span className="text-rose-500">*</span>
+                        </label>
+                        <span className="text-[10px] text-indigo-700 font-mono font-semibold">
+                          {availableSlaTemplates.length} plantillas disponibles
+                        </span>
+                      </div>
+
+                      <select
+                        value={slaForm.emailTemplateId}
+                        onChange={(e) => {
+                          const tpl = availableSlaTemplates.find(t => t.id === e.target.value);
+                          setSlaForm({
+                            ...slaForm,
+                            emailTemplateId: e.target.value,
+                            emailTemplateTitle: tpl?.title || e.target.value
+                          });
+                        }}
+                        className="w-full border border-indigo-200 bg-white rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none shadow-2xs"
+                      >
+                        {availableSlaTemplates.map(t => (
+                          <option key={t.id} value={t.id}>
+                            [{t.category || "General"}] {t.title}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Preview de la plantilla seleccionada */}
+                      {(() => {
+                        const currentTpl = availableSlaTemplates.find(t => t.id === slaForm.emailTemplateId) || availableSlaTemplates[0];
+                        if (!currentTpl) return null;
+                        return (
+                          <div className="bg-white p-3 rounded-xl border border-indigo-100 text-[11px] space-y-1.5 shadow-2xs">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9.5px] font-mono text-slate-400 font-bold uppercase tracking-wider">Asunto del Correo:</span>
+                              <span className="bg-indigo-50 text-indigo-700 font-extrabold text-[9px] px-2 py-0.2 rounded-full">
+                                {currentTpl.category}
+                              </span>
+                            </div>
+                            <p className="font-bold text-slate-800 text-xs truncate">
+                              {currentTpl.subject || "Sin asunto definido"}
+                            </p>
+                            {currentTpl.body && (
+                              <p className="text-[10.5px] text-slate-500 line-clamp-2 italic border-t border-slate-100 pt-1.5">
+                                "{currentTpl.body}"
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Subsección: Etapa de Destino cuando la acción es Mover a Otra Etapa */}
+                  {slaForm.actionOnAlert === "Mover a otra etapa" && (
+                    <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2 animate-in fade-in slide-in-from-top-1 duration-150">
+                      <label className="block text-[11px] font-bold text-amber-950 uppercase tracking-wider">
+                        Mover a la Etapa: <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        value={slaForm.targetStage}
+                        onChange={(e) => setSlaForm({ ...slaForm, targetStage: e.target.value })}
+                        className="w-full border border-amber-300 bg-white rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 outline-none shadow-2xs cursor-pointer"
+                      >
+                        {slaForm.module === 'crm' ? (
+                          <>
+                            <optgroup label="📱 Redes Sociales">
+                              {getRedesSocialesStages().map(st => (
+                                <option key={`redes-${st}`} value={st}>📱 {st}</option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="🏢 Instituciones (Pipeline Principal)">
+                              {getInstitucionesStages().map(st => (
+                                <option key={`inst-${st}`} value={st}>🏢 {st}</option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="🎓 Personas Potenciales / Particulares">
+                              {getParticularesStages().filter(st => !getInstitucionesStages().includes(st)).map(st => (
+                                <option key={`part-${st}`} value={st}>🎓 {st}</option>
+                              ))}
+                            </optgroup>
+                          </>
+                        ) : (
+                          getAvailableStagesForModule(slaForm.module).map(st => (
+                            <option key={st} value={st}>{st}</option>
+                          ))
+                        )}
+                      </select>
+                      <p className="text-[10.5px] text-amber-800/80">
+                        Al superar el límite de días, el registro avanzará o se moverá automáticamente a esta fase.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* SEGUNDA ACCION A REALIZAR: OPCION PARA OTRA ACCION */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                    <label className="flex items-center space-x-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={slaForm.hasSecondaryAction}
+                        onChange={(e) => setSlaForm({ ...slaForm, hasSecondaryAction: e.target.checked })}
+                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                          <span>¿Ejecutar otra acción adicional al vencer SLA?</span>
+                          <span className="text-[9px] bg-indigo-100 text-indigo-800 font-extrabold px-1.5 py-0.2 rounded uppercase">Encadenada</span>
+                        </span>
+                        <span className="text-[10.5px] text-slate-500 block">
+                          Si activas esta opción, se abrirá un menú secundario para realizar una segunda acción simultánea (ej. Mover a otra etapa o Enviar correo).
+                        </span>
+                      </div>
+                    </label>
+
+                    {/* MENU SECUNDARIO QUE SE ABRE SI SÍ */}
+                    {slaForm.hasSecondaryAction && (
+                      <div className="pt-3 border-t border-slate-200 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Seleccionar Segunda Acción a Realizar <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            value={slaForm.secondaryAction}
+                            onChange={(e) => setSlaForm({ ...slaForm, secondaryAction: e.target.value })}
+                            className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none bg-white shadow-2xs"
+                          >
+                            <option value="Mover a otra etapa">🔄 Mover a otra etapa</option>
+                            <option value="Enviar correo">📧 Enviar correo a contacto</option>
+                            <option value="Alerta en Dashboard y Correo al Ejecutivo">🔔 Alerta en Dashboard y Correo al Responsable</option>
+                            <option value="Alerta Inmediata y Notificación WhatsApp">💬 Alerta Inmediata y Notificación WhatsApp</option>
+                            <option value="Alerta Crítica y Notificación a Dirección">⚠️ Alerta Crítica y Notificación a Dirección</option>
+                            <option value="Escalamiento Directo a Dirección General">🚀 Escalamiento Directo a Dirección General</option>
+                            <option value="Alerta a Finanzas y Correo a Escuela">💳 Alerta a Finanzas y Correo a la Escuela</option>
+                            <option value="Notificación de Calificación Lista">🎓 Notificación de Calificación Lista</option>
+                            <option value="Monitoreo Periódico">👁️ Monitoreo Periódico</option>
+                          </select>
+                        </div>
+
+                        {/* Si la acción secundaria es Mover a otra etapa */}
+                        {slaForm.secondaryAction === "Mover a otra etapa" && (
+                          <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-1.5 shadow-2xs">
+                            <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                              Etapa de Destino Adicional:
+                            </label>
+                            <select
+                              value={slaForm.secondaryTargetStage}
+                              onChange={(e) => setSlaForm({ ...slaForm, secondaryTargetStage: e.target.value })}
+                              className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                            >
+                              {slaForm.module === 'crm' ? (
+                                <>
+                                  <optgroup label="📱 Redes Sociales">
+                                    {getRedesSocialesStages().map(st => (
+                                      <option key={`sec-redes-${st}`} value={st}>📱 {st}</option>
+                                    ))}
+                                  </optgroup>
+                                  <optgroup label="🏢 Instituciones (Pipeline Principal)">
+                                    {getInstitucionesStages().map(st => (
+                                      <option key={`sec-inst-${st}`} value={st}>🏢 {st}</option>
+                                    ))}
+                                  </optgroup>
+                                  <optgroup label="🎓 Personas Potenciales / Particulares">
+                                    {getParticularesStages().filter(st => !getInstitucionesStages().includes(st)).map(st => (
+                                      <option key={`sec-part-${st}`} value={st}>🎓 {st}</option>
+                                    ))}
+                                  </optgroup>
+                                </>
+                              ) : (
+                                getAvailableStagesForModule(slaForm.module).map(st => (
+                                  <option key={st} value={st}>{st}</option>
+                                ))
+                              )}
+                            </select>
+                            <p className="text-[10px] text-slate-400">
+                              El registro se reubicará automáticamente en esta fase.
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Si la acción secundaria es Enviar correo */}
+                        {(slaForm.secondaryAction === "Enviar correo" || slaForm.secondaryAction === "Enviar correo a contacto") && (
+                          <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2 shadow-2xs">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                                Plantilla de Correo Secundaria (Template):
+                              </label>
+                              <span className="text-[9.5px] text-indigo-600 font-mono font-semibold">
+                                {availableSlaTemplates.length} disponibles
+                              </span>
+                            </div>
+                            <select
+                              value={slaForm.secondaryEmailTemplateId}
+                              onChange={(e) => {
+                                const tpl = availableSlaTemplates.find(t => t.id === e.target.value);
+                                setSlaForm({
+                                  ...slaForm,
+                                  secondaryEmailTemplateId: e.target.value,
+                                  secondaryEmailTemplateTitle: tpl?.title || e.target.value
+                                });
+                              }}
+                              className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                            >
+                              {availableSlaTemplates.map(t => (
+                                <option key={t.id} value={t.id}>
+                                  [{t.category || "General"}] {t.title}
+                                </option>
+                              ))}
+                            </select>
+                            {(() => {
+                              const secTpl = availableSlaTemplates.find(t => t.id === slaForm.secondaryEmailTemplateId) || availableSlaTemplates[0];
+                              if (!secTpl) return null;
+                              return (
+                                <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-150 text-[10.5px] space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">Asunto:</span>
+                                    <span className="bg-indigo-50 text-indigo-700 font-bold text-[8.5px] px-1.5 py-0.2 rounded">
+                                      {secTpl.category}
+                                    </span>
+                                  </div>
+                                  <p className="font-bold text-slate-800 truncate">{secTpl.subject}</p>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Descripción del Proceso y Criterio de Medición
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={slaForm.description}
+                    onChange={(e) => setSlaForm({ ...slaForm, description: e.target.value })}
+                    placeholder="Describe qué actividad marca el inicio del SLA y qué resultado concluye el proceso..."
+                    className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-medium focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="flex items-center space-x-2.5 cursor-pointer p-3 bg-slate-50 rounded-xl border border-slate-200 hover:bg-slate-100 transition">
+                    <input
+                      type="checkbox"
+                      checked={slaForm.isActive}
+                      onChange={(e) => setSlaForm({ ...slaForm, isActive: e.target.checked })}
+                      className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 block">Regla Activa y Monitoreo Habilitado</span>
+                      <span className="text-[10px] text-slate-500 block">Los semáforos y contadores de días se calcularán activamente con esta regla</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setSlaModalOpen(false)}
+                  className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 text-xs font-extrabold uppercase tracking-wider text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm transition"
+                >
+                  {editingSlaId ? 'Actualizar Regla SLA' : 'Crear Regla SLA'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

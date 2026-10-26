@@ -10,9 +10,35 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  
+  const portArgIndex = process.argv.indexOf('--port');
+  const portArg = portArgIndex !== -1 ? Number(process.argv[portArgIndex + 1]) : NaN;
+  const PORT = !isNaN(portArg) ? portArg : (Number(process.env.PORT) || 3000);
 
-  app.use(express.json());
+  const hostArgIndex = process.argv.indexOf('--host');
+  const hostArg = hostArgIndex !== -1 ? process.argv[hostArgIndex + 1] : undefined;
+  const HOST = hostArg || process.env.HOST || '0.0.0.0';
+
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+  // Middleware to ensure body-parser or payload limit errors return JSON instead of HTML
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (req.path.startsWith('/api')) {
+      console.error('API Body Parser Error:', err);
+      if (err?.type === 'entity.too.large' || err?.status === 413) {
+        return res.status(413).json({
+          success: false,
+          error: 'El contenido o archivo adjunto excede el tamaño máximo permitido (50MB).'
+        });
+      }
+      return res.status(err?.status || 400).json({
+        success: false,
+        error: err?.message || 'Formato de petición inválido.'
+      });
+    }
+    next(err);
+  });
 
   app.post('/api/send-email', async (req, res) => {
     try {
@@ -1030,11 +1056,396 @@ Incluye:
     }
   });
 
+  // Google Sheets CRM Import Endpoint
+  app.post('/api/crm/import-google-sheets', async (req, res) => {
+    try {
+      const { url, rawText } = req.body;
+
+      if (!url && !rawText) {
+        return res.status(400).json({ success: false, error: 'Se requiere una URL de Google Sheets o el texto copiado de las celdas.' });
+      }
+
+      let csvData = '';
+
+      if (rawText && typeof rawText === 'string' && rawText.trim()) {
+        csvData = rawText.trim();
+      } else if (url && typeof url === 'string') {
+        // Extract Google Sheet ID
+        const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+        if (!match) {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'La URL proporcionada no parece ser un enlace válido de Google Sheets. Formato esperado: https://docs.google.com/spreadsheets/d/ID_DE_LA_HOJA/...' 
+          });
+        }
+        const sheetId = match[1];
+
+        // Extract gid if present
+        const gidMatch = url.match(/[#&?]gid=([0-9]+)/);
+        const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
+
+        // Try primary CSV export URL
+        const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam}`;
+        
+        let fetchSuccess = false;
+        try {
+          const response = await fetch(exportUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+            },
+            redirect: 'follow'
+          });
+
+          const contentType = response.headers.get('content-type') || '';
+          const text = await response.text();
+
+          // Check if response is HTML (login page or 404) or valid CSV
+          if (response.ok && !text.includes('<!DOCTYPE html') && !text.includes('<html') && (contentType.includes('csv') || text.includes(','))) {
+            csvData = text;
+            fetchSuccess = true;
+          }
+        } catch (e) {
+          console.warn("Direct CSV export failed, trying gviz endpoint...", e);
+        }
+
+        // Fallback to gviz endpoint if primary failed
+        if (!fetchSuccess) {
+          try {
+            const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv${gidParam}`;
+            const gvizResponse = await fetch(gvizUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+              },
+              redirect: 'follow'
+            });
+            const text = await gvizResponse.text();
+            if (gvizResponse.ok && !text.includes('<!DOCTYPE html') && !text.includes('<html')) {
+              csvData = text;
+              fetchSuccess = true;
+            }
+          } catch (e) {
+            console.warn("gviz endpoint failed...", e);
+          }
+        }
+
+        if (!fetchSuccess || !csvData) {
+          return res.json({
+            success: false,
+            isRestricted: true,
+            sheetId,
+            message: 'La hoja de cálculo de Google no tiene acceso público activado o requiere inicio de sesión.',
+            helpInstructions: [
+              'Abre tu hoja de cálculo en Google Sheets.',
+              'Haz clic en el botón azul "Compartir" (esquina superior derecha).',
+              'Bajo "Acceso general", cambia "Restringido" por "Cualquier persona con el enlace".',
+              'Verifica que el rol sea "Lector" y presiona "Hecho".',
+              'Vuelve aquí y presiona "Reintentar Conexión", o simplemente copia las celdas (Ctrl+C) y úsalas en la pestaña "Pegar desde Google Sheets".'
+            ]
+          });
+        }
+      }
+
+      // Parse CSV or TSV (copied from sheets)
+      const lines = csvData.split(/\r?\n/).filter(line => line.trim().length > 0);
+      if (lines.length < 1) {
+        return res.status(400).json({ success: false, error: 'La hoja de cálculo no contiene filas o está vacía.' });
+      }
+
+      // Check delimiter (tab, semicolon, or comma)
+      const firstLine = lines[0];
+      const isTab = firstLine.includes('\t');
+      const isSemicolon = !isTab && firstLine.includes(';') && ((firstLine.match(/;/g) || []).length >= (firstLine.match(/,/g) || []).length);
+
+      const parseLine = (line: string): string[] => {
+        if (isTab) {
+          return line.split('\t').map(c => c.trim().replace(/^"|"$/g, ''));
+        }
+        if (isSemicolon) {
+          return line.split(/;(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.trim().replace(/^"|"$/g, ''));
+        }
+        return line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.trim().replace(/^"|"$/g, ''));
+      };
+
+      const rawHeaders = parseLine(firstLine);
+      const headers = rawHeaders.map(h => h.trim());
+
+      const cleanStr = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+      const isIdHeader = (cleanH: string) => {
+        return cleanH === "id" || 
+               cleanH === "id lead" || 
+               cleanH === "lead id" || 
+               cleanH === "id_lead" || 
+               cleanH === "lead_id" || 
+               cleanH === "idlead" || 
+               cleanH === "folio" || 
+               cleanH === "codigo" || 
+               cleanH === "cve" || 
+               cleanH === "no" || 
+               cleanH === "no." || 
+               cleanH === "num" || 
+               cleanH === "numero" ||
+               cleanH.startsWith("id ") || 
+               cleanH.endsWith(" id") || 
+               cleanH.startsWith("id_") ||
+               cleanH.startsWith("id-");
+      };
+
+      // 1. Explicit ID column
+      const idxId = headers.findIndex(h => isIdHeader(cleanStr(h)));
+
+      // 2. Email column
+      const idxEmail = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c === "correo" || c === "email" || c.includes("mail") || c.includes("correo electronico"));
+      });
+
+      // 3. Phone column
+      const idxPhone = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c.includes("telefono") || c.includes("celular") || c.includes("movil") || c.includes("whatsapp") || c === "phone" || c === "tel");
+      });
+
+      // 4. Institution / School / Company Name
+      const idxInstitution = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (
+          c.includes("institucion") || 
+          c.includes("colegio") || 
+          c.includes("escuela") || 
+          c.includes("universidad") || 
+          c.includes("razon social") || 
+          c.includes("empresa") || 
+          c === "nombre institucion" || 
+          c === "nombre de institucion" || 
+          c === "nombre del colegio" || 
+          c === "nombre colegio"
+        );
+      });
+
+      // 5. Contact Person column
+      const idxContact = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (
+          c === "contacto" ||
+          c.includes("contacto principal") || 
+          c.includes("nombre contacto") || 
+          c.includes("nombre del contacto") || 
+          c.includes("persona de contacto") || 
+          c.includes("responsable") || 
+          c.includes("director") || 
+          c.includes("coordinador") || 
+          c.includes("encargado") || 
+          c.includes("representante") || 
+          c.includes("titular")
+        );
+      });
+
+      // 6. General "Nombre" column (must NOT be an ID column, and NOT contact column)
+      const idxGeneralName = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && 
+               !c.includes("contacto") && 
+               !c.includes("responsable") && 
+               (c === "nombre" || c === "nombre completo" || c === "prospecto" || c === "nombre prospecto" || c === "particular" || c === "alumno");
+      });
+
+      // Determine Name & Contact indices correctly
+      let idxName = -1;
+      let finalIdxContact = idxContact;
+
+      if (idxInstitution !== -1) {
+        idxName = idxInstitution;
+        if (finalIdxContact === -1 && idxGeneralName !== -1 && idxGeneralName !== idxInstitution) {
+          finalIdxContact = idxGeneralName;
+        }
+      } else if (idxGeneralName !== -1) {
+        idxName = idxGeneralName;
+        if (finalIdxContact === -1) {
+          finalIdxContact = idxGeneralName; // Both name and contact can default to the same column
+        }
+      } else {
+        // Fallback: pick first column that is NOT ID, NOT email, NOT phone
+        idxName = headers.findIndex((h, i) => {
+          const c = cleanStr(h);
+          return !isIdHeader(c) && i !== idxEmail && i !== idxPhone;
+        });
+        if (finalIdxContact === -1) {
+          finalIdxContact = idxName;
+        }
+      }
+
+      if (idxName === -1) idxName = 0;
+      if (finalIdxContact === -1) finalIdxContact = idxName;
+
+      // Other fields
+      const idxCity = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c === "ciudad" || c.includes("municipio") || c === "city" || c.includes("localidad"));
+      });
+      const idxState = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c === "estado" || c.includes("provincia") || c.includes("departamento") || c.includes("region") || c === "state");
+      });
+      const idxCountry = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c.includes("pais") || c === "country" || c.includes("nacion"));
+      });
+      const idxType = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c.includes("tipo") || c.includes("categoria") || c.includes("modalidad"));
+      });
+      const idxStatus = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c.includes("estatus") || (c.includes("estado") && c !== "estado") || c.includes("etapa") || c.includes("fase") || c === "status");
+      });
+      const idxSource = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c.includes("origen") || c.includes("fuente") || c.includes("medio") || c === "source" || c.includes("canal"));
+      });
+      const idxValue = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c.includes("valor") || c.includes("monto") || c.includes("presupuesto") || c.includes("inversion") || c === "value" || c.includes("precio"));
+      });
+      const idxNotes = headers.findIndex(h => {
+        const c = cleanStr(h);
+        return !isIdHeader(c) && (c.includes("nota") || c.includes("observacion") || c.includes("comentario") || c.includes("detalle") || c.includes("notes"));
+      });
+
+      const records: any[] = [];
+      const errors: string[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const row = parseLine(lines[i]);
+        if (row.length === 0 || row.every(cell => !cell)) continue;
+
+        const getVal = (idx: number, fallback: string = "") => {
+          if (idx !== -1 && idx < row.length && row[idx]) {
+            return row[idx].trim();
+          }
+          return fallback;
+        };
+
+        const rawId = getVal(idxId, "");
+        let rawName = getVal(idxName, "");
+        let rawContact = getVal(finalIdxContact, "");
+
+        // If rawName is empty or accidentally caught the ID Lead value, search other cells in this row
+        if (!rawName || (rawId && rawName === rawId)) {
+          for (let c = 0; c < row.length; c++) {
+            if (c !== idxId && c !== idxEmail && c !== idxPhone && row[c] && row[c].trim() !== rawId) {
+              rawName = row[c].trim();
+              break;
+            }
+          }
+        }
+
+        if (!rawName) {
+          errors.push(`Fila #${i + 1}: Sin nombre o institución detectada.`);
+          continue;
+        }
+
+        // Contact Name should NEVER repeat rawId, but CAN repeat or be the same as rawName
+        let contactName = rawContact ? rawContact.trim() : "";
+        if (rawId && contactName === rawId) {
+          contactName = "";
+        }
+        if (!contactName && rawName) {
+          contactName = rawName.trim();
+        }
+
+        const email = getVal(idxEmail, "");
+        const phone = getVal(idxPhone, "");
+        const city = getVal(idxCity, "");
+        const state = getVal(idxState, "");
+        const country = getVal(idxCountry, "México");
+        const typeRaw = getVal(idxType, "Institución Potencial");
+        const statusRaw = getVal(idxStatus, "Leads");
+        const source = getVal(idxSource, "Google Sheets");
+        const valRaw = getVal(idxValue, "3000");
+        const userNotes = getVal(idxNotes, "");
+
+        let notes = userNotes;
+        if (rawId) {
+          notes = notes ? `[ID Lead: ${rawId}] ${notes}` : `[ID Lead: ${rawId}] Importado de Google Sheets.`;
+        } else if (!notes) {
+          notes = "Importado automáticamente desde Google Sheets.";
+        }
+
+        records.push({
+          rowNum: i + 1,
+          idLead: rawId || undefined,
+          name: rawName,
+          contactName: contactName || rawName || "Contacto Principal",
+          email: email || "contacto@institucion.com",
+          phone: phone || "No proporcionado",
+          city,
+          state,
+          country,
+          type: typeRaw.toLowerCase().includes("redes") || typeRaw.toLowerCase().includes("social")
+            ? "Redes Sociales"
+            : typeRaw.toLowerCase().includes("persona") || typeRaw.toLowerCase().includes("particular") 
+              ? "Persona Potencial" 
+              : "Institución Potencial",
+          status: statusRaw,
+          source,
+          value: Number(valRaw.replace(/[^0-9.-]+/g, "")) || 3000,
+          notes,
+          rawRow: row
+        });
+      }
+
+      return res.json({
+        success: true,
+        headers,
+        totalRows: lines.length - 1,
+        importedCount: records.length,
+        records,
+        errors,
+        detectedMapping: {
+          idLead: idxId !== -1 ? headers[idxId] : null,
+          name: idxName !== -1 ? headers[idxName] : null,
+          contactName: finalIdxContact !== -1 ? headers[finalIdxContact] : (idxName !== -1 ? headers[idxName] : null),
+          email: idxEmail !== -1 ? headers[idxEmail] : null,
+          phone: idxPhone !== -1 ? headers[idxPhone] : null,
+          city: idxCity !== -1 ? headers[idxCity] : null,
+          country: idxCountry !== -1 ? headers[idxCountry] : null,
+        }
+      });
+    } catch (error: any) {
+      console.error("Error in /api/crm/import-google-sheets:", error);
+      res.status(500).json({ success: false, error: error.message || 'Error procesando la hoja de cálculo de Google.' });
+    }
+  });
+
+  // Explicit 404 handler for API routes to prevent falling through to Vite's index.html
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ success: false, error: `Ruta de API no encontrada: ${req.method} ${req.path}` });
+  });
+
+  // Global API error handler ensuring all /api requests always return JSON
+  app.use('/api', (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('API Error:', err);
+    if (err?.type === 'entity.too.large' || err?.status === 413) {
+      return res.status(413).json({
+        success: false,
+        error: 'El contenido o archivo excede el límite permitido (50MB).'
+      });
+    }
+    return res.status(err?.status || 500).json({
+      success: false,
+      error: err?.message || 'Error interno del servidor en la API.'
+    });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -1046,8 +1457,12 @@ Incluye:
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Server running on http://${HOST}:${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    console.error('Server listen error:', err);
   });
 }
 

@@ -7,6 +7,11 @@
 
 export function cleanLocalStorageReplacer(key: string, value: any): any {
   if (typeof value === 'string') {
+    // Preserve logoUrl so company logo is never stripped
+    if (key === 'logoUrl') {
+      return value;
+    }
+
     // Strip large base64 or data URLs from localStorage
     if (
       key === 'fileData' ||

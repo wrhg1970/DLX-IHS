@@ -1,27 +1,43 @@
-import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useMemo, useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { BarChart, Bar, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAppContext } from '../context/AppContext';
+import { DashboardAlertas } from '../components/dashboard/DashboardAlertas';
 import { 
   Building2, 
   AlertTriangle, 
   CheckCircle, 
   Clock, 
   Search, 
-  SlidersHorizontal,
-  ChevronDown,
-  UserPlus,
-  CalendarPlus,
-  FileBarChart2,
-  Sparkles,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown
+  SlidersHorizontal, 
+  ChevronDown, 
+  UserPlus, 
+  CalendarPlus, 
+  FileBarChart2, 
+  Sparkles, 
+  ArrowUpDown, 
+  ArrowUp, 
+  ArrowDown,
+  AlertCircle,
+  LayoutDashboard
 } from 'lucide-react';
 
 export function Dashboard() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { institutions, students, classes, enrollments, providers, financialTransactions, payments } = useAppContext();
+  const [mainDashboardTab, setMainDashboardTab] = useState<'general' | 'alertas'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('tab') === 'alertas' ? 'alertas' : 'general';
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('tab') === 'alertas') {
+      setMainDashboardTab('alertas');
+    }
+  }, [location.search]);
+
   const [dashboardView, setDashboardView] = useState<'performance' | 'cobranza'>('performance');
   const [semaforoFilter, setSemaforoFilter] = useState<'all' | 'rojo' | 'amarillo' | 'verde'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -115,10 +131,10 @@ export function Dashboard() {
         const cType = cl.creditType;
         let valStr = "";
         if (inst) {
-          if (cType === 'Medio Crédito') valStr = inst.priceHalfCredit || "";
-          else if (cType === 'Crédito completo AP') valStr = inst.priceFullApCredit || "";
-          else if (cType === 'Medio Crédito AP') valStr = inst.priceHalfApCredit || "";
-          else if (cType === 'Crédito completo') valStr = inst.priceFullCredit || "";
+          if (cType === 'Half Credit' || cType === 'Medio Crédito') valStr = inst.priceHalfCredit || "";
+          else if (cType === 'Full Credit AP' || cType === 'Crédito completo AP') valStr = inst.priceFullApCredit || "";
+          else if (cType === 'Half Credit AP' || cType === 'Medio Crédito AP') valStr = inst.priceHalfApCredit || "";
+          else if (cType === 'Full Credit' || cType === 'Crédito completo') valStr = inst.priceFullCredit || "";
         }
         if (valStr) {
           cp = parseFloat(valStr.replace(/[^0-9.-]+/g, "") || "0");
@@ -529,7 +545,52 @@ export function Dashboard() {
   return (
     <div className="space-y-8 flex-1 flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
       
-      {/* Header and Filter/Ordering Bar */}
+      {/* Top View Selector Switcher: General Metrics vs Dashboard de Alertas */}
+      <div className="bg-white p-2 rounded-2xl border border-slate-200/90 shadow-sm flex items-center justify-between gap-3 shrink-0">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setMainDashboardTab('general')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+              mainDashboardTab === 'general'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <LayoutDashboard className="w-4 h-4" />
+            <span>Dashboard General</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainDashboardTab('alertas')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+              mainDashboardTab === 'alertas'
+                ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                : 'text-rose-700 bg-rose-50 hover:bg-rose-100/80 border border-rose-200/60'
+            }`}
+          >
+            <AlertCircle className="w-4 h-4 animate-pulse" />
+            <span>Dashboard de Alertas</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+              mainDashboardTab === 'alertas' ? 'bg-white/20 text-white' : 'bg-rose-200 text-rose-800'
+            }`}>
+              Activo
+            </span>
+          </button>
+        </div>
+
+        <span className="text-xs text-slate-400 font-medium hidden sm:inline pr-3">
+          {mainDashboardTab === 'general' ? 'Métricas de alumnos y cobranza' : 'Recordatorios y pagos por vencer'}
+        </span>
+      </div>
+
+      {mainDashboardTab === 'alertas' ? (
+        <div className="space-y-6 flex-1 flex flex-col min-h-0 animate-in fade-in duration-300">
+          <DashboardAlertas />
+        </div>
+      ) : (
+        <>
+          {/* Header and Filter/Ordering Bar */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shrink-0">
         <div>
           <h1 className="text-xl font-bold font-sans text-slate-800 tracking-tight">Dashboard General</h1>
@@ -1132,6 +1193,8 @@ export function Dashboard() {
         </div>
 
       </div>
+        </>
+      )}
     </div>
   );
 }

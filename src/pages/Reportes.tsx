@@ -3010,15 +3010,15 @@ export function Reportes() {
                             EDU
                           </div>
                           <span className="text-lg font-black text-slate-900 tracking-tight">
-                            {companyInfo?.name || "Global Education Systems"}
+                            {companyInfo?.commercialName || companyInfo?.legalName || "Global Education Systems"}
                           </span>
                         </div>
                       )}
                       <p className="text-[10px] font-semibold text-slate-500 leading-tight">
-                        {companyInfo?.address || "Av. Corporativa #500, Ciudad de México"}
+                        {typeof companyInfo?.address === 'object' && companyInfo.address ? `${companyInfo.address.street}, ${companyInfo.address.city}, ${companyInfo.address.state}` : "Av. Corporativa #500, Ciudad de México"}
                       </p>
                       <p className="text-[10px] font-semibold text-slate-400 leading-tight">
-                        RFC: {companyInfo?.rfc || "GES180420ABC"} | Tel: {companyInfo?.phone || "+52 (55) 4160-8000"}
+                        RFC: {companyInfo?.rfc || "GES180420ABC"} | Correo: {companyInfo?.contactEmail || "contacto@ejemplo.com"}
                       </p>
                     </div>
 

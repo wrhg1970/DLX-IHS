@@ -179,6 +179,27 @@ export function getActiveUserSignature(): any | null {
   return null;
 }
 
+/**
+ * Safely parses fetch responses as JSON without throwing SyntaxError on HTML/text error pages.
+ */
+export async function safeParseJsonResponse(res: Response): Promise<{ isJson: boolean; data: any; rawText: string }> {
+  try {
+    const contentType = res.headers.get("content-type") || "";
+    const rawText = await res.text();
+    if (contentType.includes("application/json") || rawText.trim().startsWith("{") || rawText.trim().startsWith("[")) {
+      try {
+        const data = JSON.parse(rawText);
+        return { isJson: true, data, rawText };
+      } catch {
+        // Fall through if JSON.parse fails
+      }
+    }
+    return { isJson: false, data: null, rawText };
+  } catch (err: any) {
+    return { isJson: false, data: null, rawText: err?.message || "" };
+  }
+}
+
 // Dispatch Email Notification via backend API
 export async function sendRealNotificationEmail(
   toEmail: string,
@@ -209,16 +230,39 @@ export async function sendRealNotificationEmail(
         senderSignature: resolvedSignature
       })
     });
-    const data = await res.json();
-    if (!res.ok && !data.simulated) {
-      throw new Error(data.error || "Error al conectar con el servidor de correo.");
+
+    const { isJson, data, rawText } = await safeParseJsonResponse(res);
+
+    if (isJson && data) {
+      if (!res.ok && !data.simulated) {
+        throw new Error(data.error || "Error al conectar con el servidor de correo.");
+      }
+      return {
+        success: data.success !== false,
+        simulated: data.simulated,
+        message: data.message,
+        warning: data.warning,
+        error: data.error
+      };
     }
+
+    // Handled non-JSON response (e.g. HTML error from proxy or Vite)
+    if (res.status === 413 || rawText.includes("PayloadTooLargeError")) {
+      return { success: false, error: "El correo o los archivos adjuntos exceden el tamaño máximo permitido." };
+    }
+
+    if (allowFallback) {
+      console.warn("sendRealNotificationEmail: respuesta no JSON recibida del servidor, activando simulación preventiva.");
+      return {
+        success: true,
+        simulated: true,
+        message: `[Simulación] Correo registrado para <${toEmail}>.`
+      };
+    }
+
     return {
-      success: data.success !== false,
-      simulated: data.simulated,
-      message: data.message,
-      warning: data.warning,
-      error: data.error
+      success: false,
+      error: `Error del servidor (${res.status}): No se pudo procesar la solicitud de correo.`
     };
   } catch (err: any) {
     console.error("sendRealNotificationEmail error:", err);
@@ -245,14 +289,24 @@ export async function sendRealNotificationWhatsApp(
         message: message
       })
     });
-    const data = await res.json();
-    if (!res.ok && !data.simulated) {
-      throw new Error(data.error || "Error de red al enviar mensaje de WhatsApp");
+
+    const { isJson, data, rawText } = await safeParseJsonResponse(res);
+
+    if (isJson && data) {
+      if (!res.ok && !data.simulated) {
+        throw new Error(data.error || "Error de red al enviar mensaje de WhatsApp");
+      }
+      return {
+        success: data.success !== false,
+        simulated: data.simulated,
+        message: data.message
+      };
     }
+
     return {
-      success: data.success !== false,
-      simulated: data.simulated,
-      message: data.message
+      success: true,
+      simulated: true,
+      message: `[Simulación] Mensaje WhatsApp registrado para <${toPhone}>.`
     };
   } catch (err: any) {
     console.error("sendRealNotificationWhatsApp error:", err);

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Clock, 
@@ -33,10 +33,21 @@ import {
   AlertCircle,
   UserCheck,
   CheckSquare,
-  Square
+  Square,
+  BellRing
 } from 'lucide-react';
 import { useAppContext, Enrollment } from '../context/AppContext';
 import { normalizeDateToISO, getTodayISODate } from '../utils/enrollmentStatus';
+import { 
+  getSentCriticalEmailRecords, 
+  markMultipleCriticalEmailsAsSent, 
+  buildCriticalEmailPayload, 
+  notifyPendingCriticalEmails, 
+  SentCriticalEmailRecord,
+  CriticalEmailPayload 
+} from '../utils/extensionCriticalEmails';
+import { dispatchRealtimeNotification } from '../utils/realtimeNotifications';
+import { safeLocalStorageGet, safeLocalStorageSet } from '../utils/storage';
 
 export function AlumnosExtension() {
   const navigate = useNavigate();
@@ -56,7 +67,7 @@ export function AlumnosExtension() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedInstitution, setSelectedInstitution] = useState<string>('all');
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
-  const [urgencyFilter, setUrgencyFilter] = useState<'all' | 'critical' | 'upcoming' | 'expired'>('all');
+  const [urgencyFilter, setUrgencyFilter] = useState<'all' | 'critical' | 'upcoming' | 'expired' | 'pending_email'>('all');
   const [extensionStatusFilter, setExtensionStatusFilter] = useState<'all' | 'without_extension' | 'with_extension'>('all');
   const [sortBy, setSortBy] = useState<'exp_asc' | 'exp_desc' | 'student_asc' | 'inst_asc'>('exp_asc');
 
@@ -101,6 +112,13 @@ export function AlumnosExtension() {
   const [emailSuccessMsg, setEmailSuccessMsg] = useState<string | null>(null);
   const [copiedNotification, setCopiedNotification] = useState(false);
   const [showRecipientList, setShowRecipientList] = useState(false);
+
+  // Critical Automated Email State
+  const [sentCriticalMap, setSentCriticalMap] = useState<Record<number, SentCriticalEmailRecord>>(() => getSentCriticalEmailRecords());
+  const [isCriticalEmailModalOpen, setIsCriticalEmailModalOpen] = useState(false);
+  const [selectedCriticalItemForPreview, setSelectedCriticalItemForPreview] = useState<CriticalEmailPayload | null>(null);
+  const [isDispatchingCritical, setIsDispatchingCritical] = useState(false);
+  const [autoSendCritical, setAutoSendCritical] = useState<boolean>(() => safeLocalStorageGet('ihs_auto_send_critical_emails', false));
 
   const todayStr = getTodayISODate();
   const todayTime = new Date(todayStr + 'T00:00:00').getTime();
@@ -234,17 +252,29 @@ export function AlumnosExtension() {
       .filter((item): item is NonNullable<typeof item> => item !== null);
   }, [enrollments, students, classes, providers, institutions, contacts, currentUser, todayTime]);
 
-  // Overall metric counts
+  // Overall metric counts: Critico <= 15d, Proximas 15-30d, Vencidas <= 30d
   const metrics = useMemo(() => {
     const total = expiringEnrollments.length;
-    const critical = expiringEnrollments.filter(e => e.diffDays <= 7 && e.diffDays >= 0).length;
-    const expired = expiringEnrollments.filter(e => e.diffDays < 0).length;
-    const upcoming = expiringEnrollments.filter(e => e.diffDays > 7 && e.diffDays <= 30).length;
+    const critical = expiringEnrollments.filter(e => e.diffDays <= 15 && e.diffDays >= 0).length;
+    const expired = expiringEnrollments.filter(e => e.diffDays < 0 && e.diffDays >= -30).length;
+    const upcoming = expiringEnrollments.filter(e => e.diffDays > 15 && e.diffDays <= 30).length;
     const withExtension = expiringEnrollments.filter(e => e.hasExtension).length;
     const withoutExtension = total - withExtension;
 
     return { total, critical, expired, upcoming, withExtension, withoutExtension };
   }, [expiringEnrollments]);
+
+  // Pending Critical Emails list (classes in critical status diffDays <= 15 that haven't received their single email)
+  const pendingCriticalList = useMemo(() => {
+    return expiringEnrollments.filter(e => e.diffDays <= 15 && e.diffDays >= 0 && !sentCriticalMap[e.enrollment.id]);
+  }, [expiringEnrollments, sentCriticalMap]);
+
+  // Dispatch real-time notification to inform user of pending critical emails
+  useEffect(() => {
+    if (pendingCriticalList.length > 0) {
+      notifyPendingCriticalEmails(pendingCriticalList.length);
+    }
+  }, [pendingCriticalList.length]);
 
   // Filter and sort the list
   const filteredList = useMemo(() => {
@@ -290,13 +320,15 @@ export function AlumnosExtension() {
       list = list.filter(item => item.provider?.id === provId);
     }
 
-    // Urgency filter
+    // Urgency filter: Crítico <= 15 días, Próximas 15 - 30 días, Vencidas <= 30 días, Correos Pendientes
     if (urgencyFilter === 'critical') {
-      list = list.filter(item => item.diffDays <= 7 && item.diffDays >= 0);
+      list = list.filter(item => item.diffDays <= 15 && item.diffDays >= 0);
     } else if (urgencyFilter === 'upcoming') {
-      list = list.filter(item => item.diffDays > 7 && item.diffDays <= 30);
+      list = list.filter(item => item.diffDays > 15 && item.diffDays <= 30);
     } else if (urgencyFilter === 'expired') {
-      list = list.filter(item => item.diffDays < 0);
+      list = list.filter(item => item.diffDays < 0 && item.diffDays >= -30);
+    } else if (urgencyFilter === 'pending_email') {
+      list = list.filter(item => item.diffDays <= 15 && item.diffDays >= 0 && !sentCriticalMap[item.enrollment.id]);
     }
 
     // Extension status filter
@@ -495,7 +527,7 @@ International High School (IHS)`
   };
 
   const handleSelectOnlyCriticas = () => {
-    const critIds = filteredList.filter(item => item.diffDays >= 0 && item.diffDays <= 7).map(item => item.enrollment.id);
+    const critIds = filteredList.filter(item => item.diffDays >= 0 && item.diffDays <= 15).map(item => item.enrollment.id);
     setSelectedEnrollmentIds(critIds);
   };
 
@@ -609,6 +641,88 @@ International High School (IHS)`
   const handleOpenMailClient = handleOpenMailto;
   const handleSendEmails = handleExecuteSendEmails;
 
+  // Handler for bulk dispatching automatic critical emails (1 time per class)
+  const handleExecuteDispatchCriticalEmails = (itemsToDispatch: typeof pendingCriticalList) => {
+    if (itemsToDispatch.length === 0) return;
+    setIsDispatchingCritical(true);
+
+    const recordsToSave: SentCriticalEmailRecord[] = [];
+    const nowIso = new Date().toISOString().split('T')[0] + ' ' + new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+
+    let homeschoolCount = 0;
+    let schoolCount = 0;
+
+    itemsToDispatch.forEach(item => {
+      // Strictly enforce: Solo se envia 1 vez por clase
+      if (sentCriticalMap[item.enrollment.id]) return;
+
+      const payload = buildCriticalEmailPayload(item);
+      if (payload.recipientRole === 'alumno') {
+        homeschoolCount++;
+      } else {
+        schoolCount++;
+      }
+
+      const rec: SentCriticalEmailRecord = {
+        enrollmentId: payload.enrollmentId,
+        classId: payload.classId,
+        studentId: payload.studentId,
+        studentName: payload.studentName,
+        className: payload.className,
+        modality: payload.modality,
+        recipientEmail: payload.recipientEmail,
+        recipientName: payload.recipientName,
+        recipientRole: payload.recipientRole,
+        sentAt: nowIso,
+        subject: payload.subject
+      };
+
+      recordsToSave.push(rec);
+
+      // Register activity in AppContext
+      addActivity({
+        institutionId: item.institution?.id || 0,
+        date: nowIso,
+        description: `Correo crítico enviado automáticamente (≤ 15 días) a ${payload.recipientRole === 'alumno' ? 'Estudiante Homeschool' : 'Coordinador de Escuela'} [${payload.recipientEmail || 'Sin correo'}] para el alumno ${payload.studentName} en la materia "${payload.className}". Asunto: "${payload.subject}".`
+      });
+    });
+
+    markMultipleCriticalEmailsAsSent(recordsToSave);
+    const updatedMap = getSentCriticalEmailRecords();
+    setSentCriticalMap(updatedMap);
+
+    setTimeout(() => {
+      setIsDispatchingCritical(false);
+      setIsCriticalEmailModalOpen(false);
+      setSelectedCriticalItemForPreview(null);
+
+      dispatchRealtimeNotification({
+        title: "Correos Críticos Despachados",
+        message: `Se enviaron exitosamente ${recordsToSave.length} correos críticos (${homeschoolCount} a estudiantes Homeschool y ${schoolCount} a coordinadores de escuela).`,
+        type: 'task',
+        team: 'Extensión Académica',
+        actionUrl: '/alumnos/extension'
+      });
+
+      setEmailSuccessMsg(
+        `¡Se despacharon con éxito ${recordsToSave.length} correos críticos! (${homeschoolCount} a alumnos Homeschool y ${schoolCount} a coordinadores de escuela). Cada clase quedó registrada y no se volverá a enviar.`
+      );
+    }, 600);
+  };
+
+  // Automated dispatch trigger when autoSendCritical is enabled
+  useEffect(() => {
+    if (autoSendCritical && pendingCriticalList.length > 0 && !isDispatchingCritical) {
+      handleExecuteDispatchCriticalEmails(pendingCriticalList);
+    }
+  }, [autoSendCritical, pendingCriticalList.length, isDispatchingCritical]);
+
+  const handleOpenSingleCriticalEmailModal = (item: typeof expiringEnrollments[0]) => {
+    const payload = buildCriticalEmailPayload(item);
+    setSelectedCriticalItemForPreview(payload);
+    setIsCriticalEmailModalOpen(true);
+  };
+
   // Handlers for individual extension modal
   const handleOpenExtensionModal = (item: typeof filteredList[0]) => {
     setSelectedItem(item);
@@ -672,9 +786,9 @@ International High School (IHS)`
 
     const rows = filteredList.map(item => {
       let urgencia = 'Normal';
-      if (item.diffDays < 0) urgencia = 'Vencida';
-      else if (item.diffDays <= 7) urgencia = 'Crítica (≤7d)';
-      else if (item.diffDays <= 15) urgencia = 'Próxima (8-15d)';
+      if (item.diffDays < 0) urgencia = 'Vencida (≤30d)';
+      else if (item.diffDays <= 15) urgencia = 'Crítica (≤15d)';
+      else if (item.diffDays <= 30) urgencia = 'Próxima (15-30d)';
 
       return [
         `"${item.student.studentCustomId || item.student.id}"`,
@@ -756,8 +870,90 @@ International High School (IHS)`
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Critical Automated Email Alert Banner */}
+      {pendingCriticalList.length > 0 ? (
+        <div className="bg-gradient-to-r from-rose-500/10 via-amber-500/10 to-indigo-500/10 border-2 border-rose-300 rounded-2xl p-4.5 shadow-sm flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-start space-x-3.5">
+            <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0 mt-0.5">
+              <BellRing className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-black text-rose-950 uppercase tracking-wide">
+                  Correos por Enviar: {pendingCriticalList.length} {pendingCriticalList.length === 1 ? 'materia en Estado Crítico (≤ 15 días)' : 'materias en Estado Crítico (≤ 15 días)'}
+                </h3>
+                <span className="bg-rose-500 text-white text-[10px] font-mono font-black px-2 py-0.5 rounded-full animate-pulse">
+                  {pendingCriticalList.length} PENDIENTES
+                </span>
+              </div>
+              <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                Materias que vencen en 15 días o menos. El sistema enviará automáticamente al <strong>coordinador de la escuela</strong> si es modalidad escolar o al <strong>estudiante</strong> si es modalidad Homeschool. <span className="font-semibold text-rose-700">Solo se envía 1 vez por clase.</span>
+              </p>
+              <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] font-bold text-slate-600">
+                <span className="flex items-center gap-1">
+                  🎓 A Alumnos (Homeschool): <strong className="text-indigo-700">{pendingCriticalList.filter(e => (e.student.modality || '').trim().toLowerCase() === 'homeschool').length}</strong>
+                </span>
+                <span className="text-slate-300">•</span>
+                <span className="flex items-center gap-1">
+                  🏫 A Coordinadores (Escuelas): <strong className="text-amber-800">{pendingCriticalList.filter(e => (e.student.modality || '').trim().toLowerCase() !== 'homeschool').length}</strong>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 self-end lg:self-center shrink-0">
+            <label 
+              className="flex items-center gap-1.5 px-3 py-2 bg-white/90 hover:bg-white border border-rose-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer shadow-2xs select-none"
+              title="Al activar, el sistema enviará automáticamente el correo en cuanto una materia llegue a estado crítico"
+            >
+              <input
+                type="checkbox"
+                checked={autoSendCritical}
+                onChange={(e) => {
+                  setAutoSendCritical(e.target.checked);
+                  safeLocalStorageSet('ihs_auto_send_critical_emails', e.target.checked);
+                }}
+                className="w-4 h-4 rounded border-rose-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+              />
+              <span>Envío automático</span>
+            </label>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCriticalItemForPreview(null);
+                setIsCriticalEmailModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition shadow-2xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <Eye className="w-3.5 h-3.5 text-slate-500" />
+              Revisar Lista ({pendingCriticalList.length})
+            </button>
+            <button
+              type="button"
+              disabled={isDispatchingCritical}
+              onClick={() => handleExecuteDispatchCriticalEmails(pendingCriticalList)}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-sm flex items-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              <Send className="w-3.5 h-3.5" />
+              {isDispatchingCritical ? "Despachando..." : `Despachar ${pendingCriticalList.length} Correos`}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-3 px-4 flex items-center justify-between text-xs text-emerald-800 font-semibold shadow-2xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Todos los correos de estado crítico (≤ 15 días) han sido enviados. No hay correos pendientes.</span>
+          </div>
+          <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100/80 px-2.5 py-0.5 rounded-full font-mono">
+            {Object.keys(sentCriticalMap).length} clases noticiadas (1 vez)
+          </span>
+        </div>
+      )}
+
+      {/* KPI Cards: 5 Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         {/* Total en Ventana (+/- 30 días) */}
         <div 
           onClick={() => { setUrgencyFilter('all'); setExtensionStatusFilter('all'); }}
@@ -777,7 +973,7 @@ International High School (IHS)`
           <span className="text-[10px] text-slate-500 font-medium">±30 días respecto a hoy</span>
         </div>
 
-        {/* Crítico <= 7 días */}
+        {/* Crítico <= 15 días */}
         <div 
           onClick={() => setUrgencyFilter(urgencyFilter === 'critical' ? 'all' : 'critical')}
           className={`bg-white rounded-2xl p-4 border transition-all cursor-pointer shadow-xs ${
@@ -787,32 +983,51 @@ International High School (IHS)`
           }`}
         >
           <div className="flex items-center justify-between text-rose-600 mb-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Crítico (≤ 7 días)</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider">Crítico (≤ 15 días)</span>
             <div className="p-1.5 bg-rose-50 text-rose-600 rounded-lg">
               <AlertTriangle className="w-4 h-4" />
             </div>
           </div>
           <p className="text-2xl font-black text-rose-600 font-mono">{metrics.critical}</p>
-          <span className="text-[10px] text-rose-600 font-medium">Próximas a expirar esta semana</span>
+          <span className="text-[10px] text-rose-600 font-medium">Igual o menor de 15 días</span>
         </div>
 
-        {/* Vencidas (hace <= 30 días) */}
+        {/* Próximas 15 - 30 días */}
         <div 
-          onClick={() => setUrgencyFilter(urgencyFilter === 'expired' ? 'all' : 'expired')}
+          onClick={() => setUrgencyFilter(urgencyFilter === 'upcoming' ? 'all' : 'upcoming')}
           className={`bg-white rounded-2xl p-4 border transition-all cursor-pointer shadow-xs ${
-            urgencyFilter === 'expired'
+            urgencyFilter === 'upcoming'
               ? 'border-amber-500 ring-2 ring-amber-500/20 bg-amber-50/20' 
               : 'border-slate-200 hover:border-slate-300'
           }`}
         >
           <div className="flex items-center justify-between text-amber-600 mb-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Vencidas (≤ 30 días)</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider">Próximas (15 - 30 días)</span>
             <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
               <Clock className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-black text-amber-600 font-mono">{metrics.expired}</p>
-          <span className="text-[10px] text-amber-600 font-medium">Máximo 30 días de vencidas</span>
+          <p className="text-2xl font-black text-amber-600 font-mono">{metrics.upcoming}</p>
+          <span className="text-[10px] text-amber-600 font-medium">De 15 a 30 días restantes</span>
+        </div>
+
+        {/* Vencidas (menor o igual a 30 días) */}
+        <div 
+          onClick={() => setUrgencyFilter(urgencyFilter === 'expired' ? 'all' : 'expired')}
+          className={`bg-white rounded-2xl p-4 border transition-all cursor-pointer shadow-xs ${
+            urgencyFilter === 'expired'
+              ? 'border-slate-800 ring-2 ring-slate-800/20 bg-slate-50' 
+              : 'border-slate-200 hover:border-slate-300'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-700 mb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Vencidas (≤ 30 días)</span>
+            <div className="p-1.5 bg-slate-100 text-slate-700 rounded-lg">
+              <AlertCircle className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl font-black text-slate-700 font-mono">{metrics.expired}</p>
+          <span className="text-[10px] text-slate-500 font-medium">Menor o igual a 30 días</span>
         </div>
 
         {/* Con Extensión Activa */}
@@ -931,8 +1146,21 @@ International High School (IHS)`
                 : 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50'
             }`}
           >
-            🚨 Crítico (≤ 7 días)
+            🚨 Crítico (≤ 15 días)
           </button>
+
+          {pendingCriticalList.length > 0 && (
+            <button
+              onClick={() => setUrgencyFilter(urgencyFilter === 'pending_email' ? 'all' : 'pending_email')}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer flex items-center gap-1 ${
+                urgencyFilter === 'pending_email' 
+                  ? 'bg-rose-700 text-white border-rose-700 shadow-xs' 
+                  : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+              }`}
+            >
+              <span>📬 Correos por Enviar ({pendingCriticalList.length})</span>
+            </button>
+          )}
 
           <button
             onClick={() => setUrgencyFilter('upcoming')}
@@ -942,7 +1170,7 @@ International High School (IHS)`
                 : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'
             }`}
           >
-            ⏳ Próximas (8 - 30 días)
+            ⏳ Próximas (15 - 30 días)
           </button>
 
           <button
@@ -1108,13 +1336,13 @@ International High School (IHS)`
                     statusText = `Venció hace ${Math.abs(diffDays)}d`;
                   } else if (diffDays === 0) {
                     badgeStyle = 'bg-rose-100 text-rose-800 border-rose-300 font-black animate-pulse';
-                    statusText = '¡Vence Hoy!';
-                  } else if (diffDays <= 7) {
-                    badgeStyle = 'bg-rose-50 text-rose-700 border-rose-200 font-bold';
-                    statusText = `Vence en ${diffDays} días`;
+                    statusText = '¡Vence Hoy! (Crítico)';
                   } else if (diffDays <= 15) {
+                    badgeStyle = 'bg-rose-50 text-rose-700 border-rose-200 font-bold';
+                    statusText = `Crítico (${diffDays}d)`;
+                  } else if (diffDays <= 30) {
                     badgeStyle = 'bg-amber-50 text-amber-800 border-amber-200 font-bold';
-                    statusText = `Vence en ${diffDays} días`;
+                    statusText = `Próxima (${diffDays}d)`;
                   } else {
                     badgeStyle = 'bg-slate-50 text-slate-700 border-slate-200 font-medium';
                     statusText = `Vence en ${diffDays} días`;
@@ -1256,12 +1484,48 @@ International High School (IHS)`
                               <Clock className="w-2.5 h-2.5" /> Prórroga Activa
                             </span>
                           )}
+                          {/* Estado del correo crítico (solo 1 vez por clase) */}
+                          {item.diffDays <= 15 && item.diffDays >= 0 && (
+                            sentCriticalMap[item.enrollment.id] ? (
+                              <span 
+                                className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md mt-0.5"
+                                title={`Correo de estado crítico ya enviado el ${sentCriticalMap[item.enrollment.id].sentAt} a ${sentCriticalMap[item.enrollment.id].recipientEmail} (${sentCriticalMap[item.enrollment.id].recipientRole === 'alumno' ? 'Estudiante Homeschool' : 'Coordinador de Escuela'}). Solo se envía 1 vez por clase.`}
+                              >
+                                <Check className="w-2.5 h-2.5 text-emerald-600" /> Correo enviado (1 vez)
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenSingleCriticalEmailModal(item);
+                                }}
+                                className="inline-flex items-center gap-1 text-[9px] font-black text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 px-1.5 py-0.5 rounded-md mt-0.5 cursor-pointer shadow-2xs animate-pulse"
+                                title="Materia en estado crítico (≤ 15 días). Correo urgente pendiente por enviar. Clic para previsualizar y enviar."
+                              >
+                                <Mail className="w-2.5 h-2.5 text-rose-600" /> Correo por enviar
+                              </button>
+                            )
+                          )}
                         </div>
                       </td>
 
                       {/* Acciones */}
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end space-x-1.5">
+                          {/* Botón directo de despacho de correo crítico si está en estado crítico y no ha sido enviado */}
+                          {item.diffDays <= 15 && item.diffDays >= 0 && !sentCriticalMap[item.enrollment.id] && (
+                            <button
+                              id={`send-critical-email-btn-${item.enrollment.id}`}
+                              onClick={() => handleOpenSingleCriticalEmailModal(item)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-black transition-all shadow-xs cursor-pointer active:scale-95"
+                              title={`Enviar correo crítico a ${item.student.modality?.trim().toLowerCase() === 'homeschool' ? 'Estudiante Homeschool' : 'Coordinador de Escuela'} (Solo se envía 1 vez)`}
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              <span className="hidden xl:inline">Enviar Crítico</span>
+                            </button>
+                          )}
+
                           {/* Send email button */}
                           <button
                             id={`send-email-btn-${item.enrollment.id}`}
@@ -1315,7 +1579,7 @@ International High School (IHS)`
           </div>
           <div className="flex items-center gap-4 text-[11px]">
             <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500" /> ≤ 7 días crítico
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500" /> ≤ 15 días crítico
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> Vencidas ≤ 30 días
@@ -1782,6 +2046,263 @@ International High School (IHS)`
                       : `Enviar Recordatorio (${computedEmails.length} correos)`}
                   </span>
                 </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Despacho y Revisión de Correos de Estado Crítico (≤ 15 días) */}
+      {isCriticalEmailModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl w-full overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
+            
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-rose-600 via-rose-700 to-amber-700 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-white/10 rounded-xl">
+                  <BellRing className="w-5 h-5 text-rose-100" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm tracking-wide text-white">
+                    {selectedCriticalItemForPreview 
+                      ? "Vista Previa de Correo Crítico (≤ 15 días)" 
+                      : `Correos por Enviar: Clases en Estado Crítico (${pendingCriticalList.length})`}
+                  </h3>
+                  <p className="text-[11px] text-rose-100">
+                    Solo se envía 1 vez por clase • Al coordinador escolar (modalidad no Homeschool) o al estudiante (Homeschool)
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsCriticalEmailModalOpen(false);
+                  setSelectedCriticalItemForPreview(null);
+                }}
+                className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4 overflow-y-auto flex-1 text-left">
+              {/* If previewing single critical item */}
+              {selectedCriticalItemForPreview ? (
+                <div className="space-y-4">
+                  {/* Recipient resolution explanation */}
+                  <div className={`p-4 rounded-xl border ${
+                    selectedCriticalItemForPreview.recipientRole === 'alumno'
+                      ? 'bg-indigo-50/70 border-indigo-200 text-indigo-900'
+                      : 'bg-amber-50/70 border-amber-200 text-amber-950'
+                  }`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">
+                        {selectedCriticalItemForPreview.recipientRole === 'alumno' ? '🎓' : '🏫'}
+                      </span>
+                      <span className="font-black text-xs uppercase tracking-wider">
+                        {selectedCriticalItemForPreview.recipientRole === 'alumno' 
+                          ? 'Modalidad Homeschool detectada: Correo dirigido al Estudiante'
+                          : 'Modalidad Regular / Escolar: Correo dirigido al Coordinador de la Escuela'}
+                      </span>
+                    </div>
+                    <div className="text-xs space-y-0.5 mt-2">
+                      <p><strong>Destinatario:</strong> {selectedCriticalItemForPreview.recipientName} ({selectedCriticalItemForPreview.recipientEmail || 'Sin correo registrado'})</p>
+                      <p><strong>Alumno:</strong> {selectedCriticalItemForPreview.studentName} • <strong>Modalidad:</strong> {selectedCriticalItemForPreview.modality}</p>
+                      <p><strong>Institución:</strong> {selectedCriticalItemForPreview.institutionName} • <strong>Materia:</strong> {selectedCriticalItemForPreview.className}</p>
+                      <p><strong>Fecha Límite:</strong> {selectedCriticalItemForPreview.effectiveExpDate} ({selectedCriticalItemForPreview.diffDays <= 0 ? '¡Vence hoy!' : `Quedan ${selectedCriticalItemForPreview.diffDays} días`})</p>
+                    </div>
+                  </div>
+
+                  {/* Subject */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Asunto
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={selectedCriticalItemForPreview.subject}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-900 outline-none"
+                    />
+                  </div>
+
+                  {/* Body textarea */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Contenido del Mensaje
+                    </label>
+                    <textarea
+                      rows={10}
+                      readOnly
+                      value={selectedCriticalItemForPreview.body}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono text-slate-800 outline-none leading-relaxed"
+                    />
+                  </div>
+
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-[11px] text-slate-600 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span>
+                      Este correo quedará registrado en el historial de actividades y se marcará como notificado para esta clase (<strong>1 sola vez por clase</strong>).
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                /* Full list view */
+                <div className="space-y-4">
+                  {/* Summary badges */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-center">
+                      <span className="text-[10px] font-black uppercase text-rose-600 tracking-wider">Total por Enviar</span>
+                      <p className="text-xl font-black text-rose-900 font-mono mt-0.5">{pendingCriticalList.length}</p>
+                      <span className="text-[10px] text-rose-600 font-medium">Clases en estado crítico (≤ 15 días)</span>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-center">
+                      <span className="text-[10px] font-black uppercase text-amber-700 tracking-wider">A Coordinadores de Escuela</span>
+                      <p className="text-xl font-black text-amber-900 font-mono mt-0.5">
+                        {pendingCriticalList.filter(e => (e.student.modality || '').trim().toLowerCase() !== 'homeschool').length}
+                      </p>
+                      <span className="text-[10px] text-amber-700 font-medium">Modalidad distinta a Homeschool</span>
+                    </div>
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-center">
+                      <span className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">A Alumnos Homeschool</span>
+                      <p className="text-xl font-black text-indigo-900 font-mono mt-0.5">
+                        {pendingCriticalList.filter(e => (e.student.modality || '').trim().toLowerCase() === 'homeschool').length}
+                      </p>
+                      <span className="text-[10px] text-indigo-700 font-medium">Modalidad Homeschool</span>
+                    </div>
+                  </div>
+
+                  {pendingCriticalList.length === 0 ? (
+                    <div className="py-12 text-center">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-2" />
+                      <h4 className="text-sm font-bold text-slate-800">¡No hay correos críticos por enviar!</h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Todas las materias críticas ya recibieron su notificación única o no hay materias venciendo en ≤ 15 días.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase text-slate-500">
+                          <tr>
+                            <th className="py-2.5 px-3">Alumno & Modalidad</th>
+                            <th className="py-2.5 px-3">Destinatario Asignado</th>
+                            <th className="py-2.5 px-3">Materia & Institución</th>
+                            <th className="py-2.5 px-3 text-center">Días Restantes</th>
+                            <th className="py-2.5 px-3 text-right">Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {pendingCriticalList.map(item => {
+                            const isHome = (item.student.modality || '').trim().toLowerCase() === 'homeschool';
+                            const payload = buildCriticalEmailPayload(item);
+                            return (
+                              <tr key={item.enrollment.id} className="hover:bg-slate-50/80">
+                                <td className="py-2.5 px-3">
+                                  <p className="font-bold text-slate-900">{item.student.name} {item.student.lastName || ''}</p>
+                                  <span className={`inline-block text-[9px] font-extrabold px-1.5 py-0.2 rounded ${
+                                    isHome ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-700'
+                                  }`}>
+                                    {isHome ? 'Homeschool' : (item.student.modality || 'Escolar')}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <div className="flex items-center gap-1 font-semibold text-slate-800">
+                                    <span>{isHome ? '🎓' : '🏫'}</span>
+                                    <span className="truncate max-w-[140px]">{payload.recipientName}</span>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 block truncate max-w-[140px]">
+                                    {payload.recipientEmail || 'Sin correo'}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <p className="font-bold text-slate-800 truncate max-w-[150px]">{item.cls?.name || 'Materia'}</p>
+                                  <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{item.institution?.name || 'Escuela'}</p>
+                                </td>
+                                <td className="py-2.5 px-3 text-center">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                    {item.diffDays <= 0 ? 'Vence hoy' : `${item.diffDays}d`}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedCriticalItemForPreview(payload)}
+                                    className="px-2 py-1 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 rounded-md text-[11px] font-bold border border-slate-200 cursor-pointer"
+                                  >
+                                    Ver correo
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+              {selectedCriticalItemForPreview ? (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCriticalItemForPreview(null)}
+                  className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  ← Volver a la lista
+                </button>
+              ) : (
+                <div className="text-xs text-slate-500 font-medium">
+                  {pendingCriticalList.length} correos pendientes para envío único
+                </div>
+              )}
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCriticalEmailModalOpen(false);
+                    setSelectedCriticalItemForPreview(null);
+                  }}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cerrar
+                </button>
+                {selectedCriticalItemForPreview ? (
+                  <button
+                    type="button"
+                    disabled={isDispatchingCritical}
+                    onClick={() => {
+                      const itemToDispatch = pendingCriticalList.find(e => e.enrollment.id === selectedCriticalItemForPreview.enrollmentId);
+                      if (itemToDispatch) {
+                        handleExecuteDispatchCriticalEmails([itemToDispatch]);
+                      }
+                    }}
+                    className="flex items-center gap-2 px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-md disabled:opacity-50 cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{isDispatchingCritical ? "Despachando..." : "Despachar este Correo Ahora"}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isDispatchingCritical || pendingCriticalList.length === 0}
+                    onClick={() => handleExecuteDispatchCriticalEmails(pendingCriticalList)}
+                    className="flex items-center gap-2 px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-md disabled:opacity-50 cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>
+                      {isDispatchingCritical 
+                        ? "Despachando correos..." 
+                        : `Despachar los ${pendingCriticalList.length} Correos Ahora`}
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
 

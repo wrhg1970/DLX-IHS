@@ -251,9 +251,9 @@ export function Alumnos() {
       "Email Padre/Tutor",
       "Teléfono Padre/Tutor",
       "Parentesco",
-      "ID Estudiante Personalizado",
+      "ID/Username",
       "Institución Origen",
-      "Año Escolar",
+      "Grado Escolar",
       "Status"
     ];
 
@@ -431,7 +431,7 @@ export function Alumnos() {
               </select>
             </div>
 
-            {/* Año Escolar */}
+            {/* Grado Escolar */}
             <div className="bg-white/85 p-2.5 rounded-lg border border-indigo-50/50 shadow-sm flex flex-col justify-between hover:border-indigo-100 transition">
               <label className="flex items-center space-x-2 mb-2 cursor-pointer select-none">
                 <input 
@@ -440,7 +440,7 @@ export function Alumnos() {
                   onChange={(e) => setBulkEnable(prev => ({ ...prev, schoolYear: e.target.checked }))}
                   className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
                 />
-                <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Año Escolar</span>
+                <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Grado Escolar</span>
               </label>
               <input 
                 type="text"
@@ -670,8 +670,8 @@ export function Alumnos() {
                     )}
                   </div>
                 </th>
-                <th className="px-6 py-3">ID Estudiante</th>
-                <th className="px-6 py-3">Año Escolar</th>
+                <th className="px-6 py-3">ID/Username</th>
+                <th className="px-6 py-3">Grado Escolar</th>
                 <th className="px-6 py-3">Institución Origen</th>
                 <th className="px-6 py-3 text-center">Status</th>
                 <th className="px-6 py-3 text-right">Acciones</th>
@@ -817,7 +817,7 @@ export function Alumnos() {
                 let displayKey = key;
                 let displayVal = String(value);
                 if (key === 'modality') displayKey = 'Modalidad';
-                if (key === 'schoolYear') displayKey = 'Año Escolar';
+                if (key === 'schoolYear') displayKey = 'Grado Escolar';
                 if (key === 'gender') displayKey = 'Sexo';
                 if (key === 'state') displayKey = 'Estado';
                 if (key === 'country') displayKey = 'País';

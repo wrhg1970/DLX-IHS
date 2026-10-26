@@ -776,9 +776,9 @@ export function Instituciones() {
                           </span>
                           {stats.numActiveEnrollments > 0 ? (
                             <div className="flex items-center gap-1 text-[10px] font-semibold whitespace-nowrap leading-none mt-0.5">
-                              <span className="text-emerald-700 font-bold" title="Materias con Crédito Completo (Full Credit)">{stats.numActiveFullCredits} Full</span>
+                              <span className="text-emerald-700 font-bold" title="Materias con Full Credit">{stats.numActiveFullCredits} Full</span>
                               <span className="text-slate-300">•</span>
-                              <span className="text-amber-700 font-bold" title="Materias con Medio Crédito (Half Credit)">{stats.numActiveHalfCredits} Half</span>
+                              <span className="text-amber-700 font-bold" title="Materias con Half Credit">{stats.numActiveHalfCredits} Half</span>
                             </div>
                           ) : (
                             <span className="text-[9px] text-slate-400 font-medium">0 Full • 0 Half</span>

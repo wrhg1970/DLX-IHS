@@ -24,6 +24,7 @@ import { AlumnoDetail } from "./pages/AlumnoDetail";
 import { Clases } from "./pages/Clases";
 import { ClaseDetail } from "./pages/ClaseDetail";
 import { Administracion } from "./pages/Administracion";
+import { Auditoria } from "./pages/Auditoria";
 import { Proveedores } from "./pages/Proveedores";
 import { ProveedorDetail } from "./pages/ProveedorDetail";
 import { ServiciosExtras } from "./pages/ServiciosExtras";
@@ -35,6 +36,7 @@ import { Perfil } from "./pages/Perfil";
 import { Finanzas } from "./pages/Finanzas";
 import { Agentes } from "./pages/Agentes";
 import { CRM } from "./pages/CRM";
+import { DashboardAlertas } from "./components/dashboard/DashboardAlertas";
 import { PermissionMenu, hasPermission, Permission } from "./utils/permissionCheck";
 import { AccessDenied } from "./components/ui/AccessDenied";
 
@@ -181,6 +183,16 @@ export default function App() {
             element={
               <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
                 <Inicio />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="alertas" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute}>
+                <div className="space-y-6 flex-1 flex flex-col min-h-0 animate-in fade-in duration-300">
+                  <DashboardAlertas />
+                </div>
               </RoleGuard>
             } 
           />
@@ -341,6 +353,14 @@ export default function App() {
             element={
               <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Administración">
                 <Administracion />
+              </RoleGuard>
+            } 
+          />
+          <Route 
+            path="auditoria" 
+            element={
+              <RoleGuard allowedRoles={allRolesExceptStudentAndCoordinator} fallbackTo={fallbackRoute} permission="Auditoría">
+                <Auditoria />
               </RoleGuard>
             } 
           />

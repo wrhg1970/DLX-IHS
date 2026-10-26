@@ -27,19 +27,21 @@ import {
   Mail,
   FolderOpen,
   CheckSquare,
-  Clock
+  Clock,
+  AlertCircle,
+  ShieldCheck
 } from "lucide-react";
 
 export function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentUser, setCurrentUser, students } = useAppContext();
+  const { currentUser, setCurrentUser, students, companyInfo } = useAppContext();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   const [openSubmenus, setOpenSubmenus] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     const path = location.pathname;
-    if (path.startsWith("/administracion") || path.startsWith("/finanzas") || path.startsWith("/reportes")) {
+    if (path.startsWith("/administracion") || path.startsWith("/finanzas") || path.startsWith("/reportes") || path.startsWith("/auditoria")) {
       initial["Administración"] = true;
     }
     if (path.startsWith("/proveedores") || path.startsWith("/clases")) {
@@ -92,7 +94,8 @@ export function Sidebar() {
     { name: "Extensión", href: "/alumnos/extension", icon: Clock }
   ] : [
     { name: "Inicio", href: "/", icon: Home },
-    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "Dashboard" as const },
+    { name: "Dashboard de Alertas", href: "/alertas", icon: AlertCircle },
+    { name: "Dashboard General", href: "/dashboard", icon: LayoutDashboard, permission: "Dashboard" as const },
     { name: "Agenda", href: "/agenda", icon: CalendarDays, permission: "Agenda" as const },
     {
       name: "CRM",
@@ -100,7 +103,7 @@ export function Sidebar() {
       permission: "CRM" as const,
       children: [
         { name: "Dashboard de CRM", href: "/crm/dashboard", icon: LayoutDashboard, permission: "CRM - Dashboard" as const },
-        { name: "Instituciones Prospecto", href: "/crm", icon: Briefcase, permission: "CRM - Prospectos" as const },
+        { name: "Prospectos", href: "/crm", icon: Briefcase, permission: "CRM - Prospectos" as const },
         { name: "Campañas", href: "/crm/campanas", icon: Megaphone, permission: "CRM - Campañas" as const },
         { name: "Reportes", href: "/crm/reportes", icon: BarChart, permission: "CRM - Reportes" as const },
         { name: "Correos", href: "/crm/correos", icon: Mail, permission: "CRM - Correos" as const },
@@ -148,6 +151,7 @@ export function Sidebar() {
         { name: "Administración", href: "/administracion", icon: DollarSign, permission: "Administración" as const },
         { name: "Finanzas", href: "/finanzas", icon: Landmark, permission: "Finanzas" as const },
         { name: "Reportes", href: "/reportes", icon: BarChart, permission: "Reportes" as const },
+        { name: "Bitácora de Auditoría", href: "/auditoria", icon: ShieldCheck, permission: "Auditoría" as const },
       ]
     },
     { name: "Catálogos", href: "/catalogos", icon: List, permission: "Catálogos" as const },
@@ -173,8 +177,18 @@ export function Sidebar() {
     <nav className="w-64 flex-shrink-0 bg-[#000000] flex flex-col border-r border-[#1a1a1a]">
       <div className="p-6">
         <div className="flex items-center space-x-3 mb-10">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shadow-[0_0_15px_rgba(99,102,241,0.65)] animate-pulse border border-indigo-400/30">IHS</div>
-          <span className="text-white font-semibold text-sm tracking-widest uppercase">DLX System</span>
+          {companyInfo?.logoUrl ? (
+            <div className="w-8 h-8 rounded-lg bg-white p-0.5 flex items-center justify-center overflow-hidden border border-white/20 shrink-0">
+              <img src={companyInfo.logoUrl} alt="Logo" className="w-full h-full object-contain" />
+            </div>
+          ) : (
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-xs shadow-[0_0_15px_rgba(99,102,241,0.65)] animate-pulse border border-indigo-400/30 shrink-0">
+              {companyInfo?.commercialName ? companyInfo.commercialName.substring(0, 3).toUpperCase() : 'IHS'}
+            </div>
+          )}
+          <span className="text-white font-semibold text-sm tracking-widest uppercase truncate max-w-[150px]">
+            {companyInfo?.commercialName || 'DLX System'}
+          </span>
         </div>
         
         <div className="space-y-1.5">

@@ -4,6 +4,7 @@ import { useAppContext } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
 import { useNavigate } from "react-router-dom";
 import { hasPermission } from "../utils/permissionCheck";
+import { formatCreditType, CreditType } from "../utils/creditType";
 
 export function Clases() {
   const { classes, addClass, updateClass, deleteClass, clearAllClasses, providers, enrollments, providerProductServices, currentUser } = useAppContext();
@@ -50,7 +51,7 @@ export function Clases() {
   const [formData, setFormData] = useState({
     name: '',
     code: '',
-    creditType: 'Crédito completo' as 'Crédito completo' | 'Medio Crédito' | 'Crédito completo AP' | 'Medio Crédito AP',
+    creditType: 'Full Credit' as CreditType,
     syllabus: '',
     validity: '',
     providerId: '' as string | number,
@@ -62,7 +63,7 @@ export function Clases() {
     changeProvider: false,
     providerId: '' as string | number,
     changeCreditType: false,
-    creditType: 'Crédito completo' as 'Crédito completo' | 'Medio Crédito' | 'Crédito completo AP' | 'Medio Crédito AP',
+    creditType: 'Full Credit' as CreditType,
     changeArchiveStatus: false,
     isArchived: false,
   });
@@ -79,7 +80,7 @@ export function Clases() {
     setFormData({
       name: '',
       code: '',
-      creditType: 'Crédito completo',
+      creditType: 'Full Credit',
       syllabus: '',
       validity: '',
       providerId: ''
@@ -105,16 +106,16 @@ export function Clases() {
       const mappedRates = serviceClass.countryPrices.map(cp => {
         let price = '0';
         let cost = '0';
-        if (formData.creditType === 'Crédito completo') {
+        if (formData.creditType === 'Full Credit' || formData.creditType === 'Crédito completo') {
           price = cp.priceFullCredit;
           cost = cp.costFullCredit;
-        } else if (formData.creditType === 'Medio Crédito') {
+        } else if (formData.creditType === 'Half Credit' || formData.creditType === 'Medio Crédito') {
           price = cp.priceHalfCredit;
           cost = cp.costHalfCredit;
-        } else if (formData.creditType === 'Crédito completo AP') {
+        } else if (formData.creditType === 'Full Credit AP' || formData.creditType === 'Crédito completo AP') {
           price = cp.priceFullApCredit;
           cost = cp.costFullApCredit;
-        } else if (formData.creditType === 'Medio Crédito AP') {
+        } else if (formData.creditType === 'Half Credit AP' || formData.creditType === 'Medio Crédito AP') {
           price = cp.priceHalfApCredit;
           cost = cp.costHalfApCredit;
         }
@@ -154,7 +155,7 @@ export function Clases() {
     setFormData({
       name: '',
       code: '',
-      creditType: 'Crédito completo',
+      creditType: 'Full Credit',
       syllabus: '',
       validity: '',
       providerId: ''
@@ -200,7 +201,7 @@ export function Clases() {
       changeProvider: false,
       providerId: '',
       changeCreditType: false,
-      creditType: 'Crédito completo',
+      creditType: 'Full Credit',
       changeArchiveStatus: false,
       isArchived: false,
     });
@@ -238,7 +239,7 @@ export function Clases() {
 
     // 3. Credit Type Filter
     if (filterCreditType !== 'all') {
-      if (curso.creditType !== filterCreditType) return false;
+      if (formatCreditType(curso.creditType) !== formatCreditType(filterCreditType)) return false;
     }
 
     // 4. Validity Status Filter
@@ -458,10 +459,10 @@ export function Clases() {
               className="w-full text-xs font-semibold border border-slate-200 rounded-lg p-2 bg-slate-50/50 hover:bg-slate-50 transition focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 outline-none"
             >
               <option value="all">Todos los Créditos</option>
-              <option value="Crédito completo">Crédito completo</option>
-              <option value="Medio Crédito">Medio Crédito</option>
-              <option value="Crédito completo AP">Crédito completo AP</option>
-              <option value="Medio Crédito AP">Medio Crédito AP</option>
+              <option value="Full Credit">Full Credit</option>
+              <option value="Half Credit">Half Credit</option>
+              <option value="Full Credit AP">Full Credit AP</option>
+              <option value="Half Credit AP">Half Credit AP</option>
             </select>
           </div>
 
@@ -718,7 +719,7 @@ export function Clases() {
                         </td>
                         <td className="px-6 py-3">
                           <span className="inline-flex bg-indigo-50 text-indigo-700 border border-indigo-100 rounded px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase whitespace-nowrap">
-                            {curso.creditType || 'Crédito completo'}
+                            {formatCreditType(curso.creditType)}
                           </span>
                         </td>
                         <td className="px-6 py-3 text-slate-600 font-semibold font-sans">
@@ -831,7 +832,7 @@ export function Clases() {
                         )}
                       </div>
                       <span className="inline-flex bg-indigo-50 text-indigo-700 border border-indigo-100 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-widest shrink-0 uppercase whitespace-nowrap">
-                        {curso.creditType || 'Crédito completo'}
+                        {formatCreditType(curso.creditType)}
                       </span>
                     </div>
                   </div>
@@ -1190,10 +1191,10 @@ export function Clases() {
                 onChange={e => setFormData({...formData, creditType: e.target.value as any})}
                 className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-semibold text-slate-850"
               >
-                <option value="Crédito completo">Crédito completo</option>
-                <option value="Medio Crédito">Medio Crédito</option>
-                <option value="Crédito completo AP">Crédito completo AP</option>
-                <option value="Medio Crédito AP">Medio Crédito AP</option>
+                <option value="Full Credit">Full Credit</option>
+                <option value="Half Credit">Half Credit</option>
+                <option value="Full Credit AP">Full Credit AP</option>
+                <option value="Half Credit AP">Half Credit AP</option>
               </select>
             </div>
 
@@ -1296,10 +1297,10 @@ export function Clases() {
                       onChange={(e) => setBulkFormData({...bulkFormData, creditType: e.target.value as any})}
                       className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-semibold text-slate-850"
                     >
-                      <option value="Crédito completo">Crédito completo</option>
-                      <option value="Medio Crédito">Medio Crédito</option>
-                      <option value="Crédito completo AP">Crédito completo AP</option>
-                      <option value="Medio Crédito AP">Medio Crédito AP</option>
+                      <option value="Full Credit">Full Credit</option>
+                      <option value="Half Credit">Half Credit</option>
+                      <option value="Full Credit AP">Full Credit AP</option>
+                      <option value="Half Credit AP">Half Credit AP</option>
                     </select>
                   </div>
                 )}

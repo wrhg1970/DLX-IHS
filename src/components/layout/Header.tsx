@@ -1,6 +1,6 @@
-import { Search, User, Landmark, BookOpen, X, Bell, DollarSign, Sparkles, CheckCheck, Trash2, Clock } from "lucide-react";
+import { Search, User, Landmark, BookOpen, X, Bell, DollarSign, Sparkles, CheckCheck, Trash2, Clock, AlertCircle, AlertTriangle } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAppContext } from "../../context/AppContext";
 import { 
   getStoredNotifications, 
@@ -9,11 +9,15 @@ import {
   clearAllNotifications, 
   RealtimeNotification 
 } from "../../utils/realtimeNotifications";
+import { 
+  getPendingCriticalEnrollmentCount, 
+  notifyPendingCriticalEmails 
+} from "../../utils/extensionCriticalEmails";
 
 export function Header() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { students, institutions, classes } = useAppContext();
+  const { students, institutions, classes, enrollments } = useAppContext();
   
   const [searchQuery, setSearchQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
@@ -22,9 +26,20 @@ export function Header() {
   // Real-time notifications state
   const [notifications, setNotifications] = useState<RealtimeNotification[]>(() => getStoredNotifications());
   const [isNotifOpen, setIsNotifOpen] = useState(false);
-  const [notifFilter, setNotifFilter] = useState<'all' | 'finance' | 'sales'>('all');
+  const [notifFilter, setNotifFilter] = useState<'all' | 'finance' | 'sales' | 'task'>('all');
   const notifRef = useRef<HTMLDivElement>(null);
   const [activeToast, setActiveToast] = useState<RealtimeNotification | null>(null);
+
+  // Pending critical emails calculation (<= 15 days, 1 time per class)
+  const pendingCriticalCount = useMemo(() => {
+    return getPendingCriticalEnrollmentCount(enrollments || [], students || []);
+  }, [enrollments, students]);
+
+  useEffect(() => {
+    if (pendingCriticalCount > 0) {
+      notifyPendingCriticalEmails(pendingCriticalCount);
+    }
+  }, [pendingCriticalCount]);
 
   // Sync notifications on mount and via custom event
   useEffect(() => {
@@ -55,10 +70,12 @@ export function Header() {
   }, []);
 
   const unreadCount = notifications.filter(n => !n.read).length;
+  const totalAlertCount = unreadCount + (pendingCriticalCount > 0 ? 1 : 0);
 
   const filteredNotifications = notifications.filter(n => {
     if (notifFilter === 'finance') return n.type === 'finance';
     if (notifFilter === 'sales') return n.type === 'sales';
+    if (notifFilter === 'task') return n.type === 'task';
     return true;
   });
 
@@ -286,6 +303,17 @@ export function Header() {
           </div>
         )}
 
+        {/* Quick Link to Dashboard de Alertas */}
+        <button
+          type="button"
+          onClick={() => navigate('/alertas')}
+          className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100/90 text-rose-700 border border-rose-200/90 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs active:scale-95"
+          title="Ver Dashboard de Alertas"
+        >
+          <AlertCircle className="w-4 h-4 text-rose-600 animate-pulse" />
+          <span>Dashboard Alertas</span>
+        </button>
+
         {/* Real-time Notification Center Bell */}
         <div className="relative" ref={notifRef} id="notification-center-container">
           <button 
@@ -296,9 +324,9 @@ export function Header() {
             title="Centro de Notificaciones en Tiempo Real"
           >
             <Bell className="h-5 w-5" />
-            {unreadCount > 0 && (
+            {totalAlertCount > 0 && (
               <span className="absolute top-1 right-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full bg-rose-500 text-[9px] font-black text-white shadow-xs animate-pulse">
-                {unreadCount > 9 ? '9+' : unreadCount}
+                {totalAlertCount > 9 ? '9+' : totalAlertCount}
               </span>
             )}
           </button>
@@ -316,6 +344,11 @@ export function Header() {
                   {unreadCount > 0 && (
                     <span className="bg-rose-100 text-rose-700 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
                       {unreadCount} nuevas
+                    </span>
+                  )}
+                  {pendingCriticalCount > 0 && (
+                    <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Clock className="w-2.5 h-2.5" /> {pendingCriticalCount} correos
                     </span>
                   )}
                 </div>
@@ -350,12 +383,40 @@ export function Header() {
                 </div>
               </div>
 
+              {/* High Priority Critical Emails Banner */}
+              {pendingCriticalCount > 0 && (
+                <div 
+                  onClick={() => {
+                    navigate('/alumnos/extension');
+                    setIsNotifOpen(false);
+                  }}
+                  className="p-3 bg-gradient-to-r from-rose-600 to-amber-600 text-white flex items-center justify-between cursor-pointer hover:opacity-95 transition-all shadow-inner border-b border-rose-700"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                    <div className="p-1.5 bg-white/20 rounded-lg shrink-0">
+                      <Clock className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-black leading-tight uppercase tracking-wide">
+                        {pendingCriticalCount} {pendingCriticalCount === 1 ? 'Correo por enviar' : 'Correos por enviar'}
+                      </p>
+                      <p className="text-[10.5px] text-rose-100 truncate">
+                        Estado crítico (≤ 15 días). Clic para enviar.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-black bg-white text-rose-700 px-2 py-1 rounded-lg shrink-0 shadow-2xs">
+                    Abrir Extensión
+                  </span>
+                </div>
+              )}
+
               {/* Filter Tabs */}
-              <div className="flex items-center px-3 py-1.5 bg-slate-100/60 border-b border-slate-150 text-[10.5px] font-bold gap-1">
+              <div className="flex items-center px-3 py-1.5 bg-slate-100/60 border-b border-slate-150 text-[10.5px] font-bold gap-1 overflow-x-auto hide-scrollbar">
                 <button
                   type="button"
                   onClick={() => setNotifFilter('all')}
-                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer shrink-0 ${
                     notifFilter === 'all' ? 'bg-white text-slate-900 shadow-2xs font-extrabold' : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
@@ -363,8 +424,18 @@ export function Header() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setNotifFilter('task')}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer shrink-0 flex items-center gap-1 ${
+                    notifFilter === 'task' ? 'bg-white text-rose-700 shadow-2xs font-extrabold' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <Clock className="w-3 h-3 text-rose-600" />
+                  <span>Extensión ({notifications.filter(n => n.type === 'task').length})</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setNotifFilter('finance')}
-                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer shrink-0 flex items-center gap-1 ${
                     notifFilter === 'finance' ? 'bg-white text-emerald-700 shadow-2xs font-extrabold' : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
@@ -374,7 +445,7 @@ export function Header() {
                 <button
                   type="button"
                   onClick={() => setNotifFilter('sales')}
-                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer shrink-0 flex items-center gap-1 ${
                     notifFilter === 'sales' ? 'bg-white text-indigo-700 shadow-2xs font-extrabold' : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
@@ -449,6 +520,21 @@ export function Header() {
                     </div>
                   ))
                 )}
+              </div>
+
+              {/* Bottom footer button to full Dashboard de Alertas */}
+              <div className="p-2.5 bg-slate-50 border-t border-slate-100 text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsNotifOpen(false);
+                    navigate('/alertas');
+                  }}
+                  className="w-full py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/70 text-xs font-black uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <AlertCircle className="w-4 h-4 text-rose-600 animate-pulse" />
+                  <span>Ver Dashboard de Alertas Completo</span>
+                </button>
               </div>
             </div>
           )}

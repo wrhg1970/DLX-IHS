@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppContext, generateUniqueId } from '../context/AppContext';
 import { auth, db } from '../lib/firebase';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
@@ -17,6 +17,7 @@ import {
   HelpCircle,
   Inbox
 } from 'lucide-react';
+import { safeParseJsonResponse } from '../utils/notifications';
 
 export function Login() {
   const { users, students, contacts, providers, firebaseSyncCompleted, companyInfo, setCurrentUser, updateUser } = useAppContext();
@@ -58,6 +59,13 @@ export function Login() {
     code: string;
     show: boolean;
   } | null>(null);
+
+  // Sync title with company commercial name
+  useEffect(() => {
+    if (companyInfo?.commercialName) {
+      document.title = `${companyInfo.commercialName} - Iniciar Sesión`;
+    }
+  }, [companyInfo?.commercialName]);
 
   // Helper to find a user matching the target email address in our system rosters
   const findSystemUser = async (targetEmail: string) => {
@@ -221,15 +229,15 @@ export function Login() {
               smtpFromEmail: smtpConfig.fromEmail,
               smtpFromName: smtpConfig.fromName,
               to: emailTrimmed,
-              subject: "Código de Acceso Unico - IHS",
-              body: `Tu código de acceso único (OTP) para ingresar al sistema de IHS es: ${generatedCode}. \n\nEste código tiene una validez de 5 minutos y es para un único uso.`
+              subject: `Código de Acceso Unico - ${companyInfo?.commercialName || 'IHS'}`,
+              body: `Tu código de acceso único (OTP) para ingresar al sistema de ${companyInfo?.commercialName || 'IHS'} es: ${generatedCode}. \n\nEste código tiene una validez de 5 minutos y es para un único uso.`
             })
           });
-          const data = await res.json();
-          if (res.ok && data.success) {
+          const { isJson, data } = await safeParseJsonResponse(res);
+          if (res.ok && isJson && data?.success) {
             sentRealEmail = true;
           } else {
-            emailErrorDetails = data.error || 'Error desconocido del servidor de correo';
+            emailErrorDetails = (isJson && data?.error) || 'Error desconocido del servidor de correo';
           }
         } catch (smtpErr: any) {
           emailErrorDetails = smtpErr.message || 'Error de conexión con el servidor SMTP';
@@ -296,12 +304,12 @@ export function Login() {
               smtpFromEmail: smtpConfig.fromEmail,
               smtpFromName: smtpConfig.fromName,
               to: userObj.email,
-              subject: "Confirmación de Correo Electrónico - IHS",
-              body: `Tu código de confirmación para activar tu acceso en IHS es: ${verificationCode}.\n\nPor favor, ingrésalo en la pantalla de verificación para completar tu ingreso.`
+              subject: `Confirmación de Correo Electrónico - ${companyInfo?.commercialName || 'IHS'}`,
+              body: `Tu código de confirmación para activar tu acceso en ${companyInfo?.commercialName || 'IHS'} es: ${verificationCode}.\n\nPor favor, ingrésalo en la pantalla de verificación para completar tu ingreso.`
             })
           });
-          const data = await res.json();
-          if (res.ok && data.success) {
+          const { isJson, data } = await safeParseJsonResponse(res);
+          if (res.ok && isJson && data?.success) {
             sentReal = true;
           }
         } catch (e) {
@@ -629,15 +637,25 @@ export function Login() {
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="flex justify-center">
-          <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-indigo-600/30">
-            <Building2 className="w-8 h-8" />
-          </div>
+          {companyInfo?.logoUrl ? (
+            <div className="p-3 bg-white rounded-2xl shadow-xl shadow-slate-200/60 border border-slate-100 max-w-[240px] max-h-24 flex items-center justify-center">
+              <img 
+                src={companyInfo.logoUrl} 
+                alt={companyInfo.commercialName || "Logo"} 
+                className="max-h-16 w-auto max-w-full object-contain"
+              />
+            </div>
+          ) : (
+            <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-indigo-600/30">
+              <Building2 className="w-8 h-8" />
+            </div>
+          )}
         </div>
         <h2 className="mt-6 text-center text-3xl font-extrabold text-slate-900 tracking-tight text-balance">
-          {companyInfo?.commercialName || 'IHS'}
+          {companyInfo?.commercialName || 'Portal de Acceso'}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-600">
-          Ingreso Seguro al Portal de Administración
+          Ingreso Seguro al Portal de {companyInfo?.commercialName || 'Administración'}
         </p>
       </div>
 
@@ -886,7 +904,7 @@ export function Login() {
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             className="appearance-none block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all text-slate-800"
-                            placeholder="Ej. admin@ihs.com o tu alumno/coordinador correo"
+                            placeholder={companyInfo?.contactEmail ? `Ej. ${companyInfo.contactEmail} o tu usuario registrado` : "correo@ejemplo.com"}
                           />
                         </div>
                         <p className="mt-2 text-xs text-slate-500 leading-relaxed font-sans">

@@ -9,6 +9,13 @@ import {
   TaskNotificationResult
 } from "../utils/notifications";
 import { calculateEnrollmentStatus, EnrollmentStatus } from "../utils/enrollmentStatus";
+import { CreditType } from "../utils/creditType";
+import {
+  BackupScheduleConfig,
+  DEFAULT_BACKUP_SCHEDULE,
+  uploadBackupToGoogleDrive,
+  isGoogleDriveTokenAvailable
+} from "../utils/googleDriveBackup";
 
 let lastId = Date.now();
 export const generateUniqueId = (): number => {
@@ -118,7 +125,8 @@ export interface Campus {
   phone: string;
 }
 
-export type InstitutionDocumentCategory = 'Legal' | 'Académico' | 'Administrativo';
+export type InstitutionDocumentArea = 'Académico' | 'Administrativo' | 'Legal' | 'General';
+export type InstitutionDocumentCategory = InstitutionDocumentArea;
 
 export interface InstitutionDocument {
   id: string;
@@ -127,6 +135,7 @@ export interface InstitutionDocument {
   fileSize: string;
   uploadDate: string;
   fileData?: string;
+  area?: InstitutionDocumentArea;
   category?: InstitutionDocumentCategory;
   hasExpiration?: boolean;
   expirationDate?: string;
@@ -342,13 +351,16 @@ export interface Student {
   scholarshipType?: 'Monto' | 'Porcentaje';
   scholarshipValue?: number;
   scholarshipTarget?: 'Estudiante' | 'Escuela';
+  attendanceRate?: number;
+  absencesCount?: number;
+  attendanceNotes?: string;
 }
 
 export interface ClassItem {
   id: number;
   name: string;
   code?: string;
-  creditType: 'Crédito completo' | 'Medio Crédito' | 'Crédito completo AP' | 'Medio Crédito AP';
+  creditType: CreditType;
   syllabus?: string;
   validity?: string;
   providerId?: number;
@@ -566,15 +578,25 @@ export interface AuditFieldChange {
   newValue: string;
 }
 
+export type AuditActionType = 'create' | 'update' | 'delete' | 'settings_change' | 'restore' | 'auth' | 'backup';
+export type AuditSeverity = 'baja' | 'media' | 'alta' | 'critica';
+
 export interface AuditLog {
   id: string;
-  entityType: 'payment' | 'financialTransaction' | 'provider' | 'providerProductService';
+  entityType: 'institution' | 'student' | 'class' | 'payment' | 'financialTransaction' | 'provider' | 'providerProductService' | 'user' | 'role' | 'company' | 'backup' | 'system' | string;
   entityId: string | number;
   entityName: string;
   date: string;
   description: string;
+  userId?: string | number;
   userName: string;
+  userEmail?: string;
+  userRole?: string;
+  actionType?: AuditActionType;
+  severity?: AuditSeverity;
   fieldsChanged?: AuditFieldChange[];
+  ipAddress?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface CompanyInfo {
@@ -647,6 +669,19 @@ export interface CatalogItem {
   notes?: string;
   providerIds?: number[];
   slaDays?: number | null;
+  priority?: 'alta' | 'media' | 'baja' | string;
+  responsibleRole?: string;
+  actionOnAlert?: string;
+  module?: 'crm' | 'instituciones' | 'alumnos' | string;
+  isActive?: boolean;
+  emailTemplateId?: string;
+  emailTemplateTitle?: string;
+  targetStage?: string;
+  hasSecondaryAction?: boolean;
+  secondaryAction?: string;
+  secondaryEmailTemplateId?: string;
+  secondaryEmailTemplateTitle?: string;
+  secondaryTargetStage?: string;
 }
 
 export type CatalogTypes = 
@@ -758,7 +793,9 @@ interface AppContextType {
   enrollments: Enrollment[];
   payments: Payment[];
   auditLogs: AuditLog[];
-  addAuditLog: (log: Omit<AuditLog, "id" | "date" | "userName">) => void;
+  addAuditLog: (log: Omit<AuditLog, "id" | "date" | "userName"> & { userName?: string; date?: string; userId?: string | number; userEmail?: string }) => void;
+  clearAuditLogs: () => void;
+  deleteAuditLog: (id: string) => void;
   bankAccounts: BankAccount[];
   contacts: Contact[];
   tasks: Task[];
@@ -808,6 +845,8 @@ interface AppContextType {
   deleteUser: (id: number) => void;
   addInstitution: (inst: Omit<Institution, "id"> & { id?: number }) => number;
   updateInstitution: (id: number, data: Partial<Institution>) => void;
+  addInstitutionDocuments: (institutionId: number, newDocs: InstitutionDocument[]) => void;
+  deleteInstitutionDocument: (institutionId: number, documentId: string) => Promise<void>;
   deleteInstitution: (id: number) => void;
   clearAllInstitutions: () => void;
   clearAllClasses: () => void;
@@ -846,7 +885,10 @@ interface AppContextType {
   slaSummary: { total: number; enTiempo: number; porVencer: number; vencidos: number; alerts: InstitutionSLAInfo[] };
   getLeadSlaInfo: (lead: { status?: string; createdAt?: string; lastInteractionDate?: string; name?: string; id?: string | number }) => InstitutionSLAInfo;
   backups: any[];
-  triggerFullBackup: (type: 'Automático' | 'Manual') => Promise<any>;
+  triggerFullBackup: (type?: 'Automático' | 'Manual', forceDriveUpload?: boolean) => Promise<any>;
+  triggerGoogleDriveBackup: (type?: 'Automático' | 'Manual') => Promise<any>;
+  backupSchedule: BackupScheduleConfig;
+  updateBackupSchedule: (config: Partial<BackupScheduleConfig>) => Promise<void>;
   restoreBackup: (backup: any) => boolean;
   deleteBackup: (id: string) => void;
   systemRoles: Role[];
@@ -1123,18 +1165,18 @@ export function calculateInstitutionFinancials(
           const cType = cl.creditType;
           let valStr = "";
           // 1. First check manual override in institution
-          if (cType === 'Medio Crédito') valStr = institution.priceHalfCredit || "";
-          else if (cType === 'Crédito completo AP') valStr = institution.priceFullApCredit || "";
-          else if (cType === 'Medio Crédito AP') valStr = institution.priceHalfApCredit || "";
-          else if (cType === 'Crédito completo') valStr = institution.priceFullCredit || "";
+          if (cType === 'Half Credit' || cType === 'Medio Crédito') valStr = institution.priceHalfCredit || "";
+          else if (cType === 'Full Credit AP' || cType === 'Crédito completo AP') valStr = institution.priceFullApCredit || "";
+          else if (cType === 'Half Credit AP' || cType === 'Medio Crédito AP') valStr = institution.priceHalfApCredit || "";
+          else if (cType === 'Full Credit' || cType === 'Crédito completo') valStr = institution.priceFullCredit || "";
 
           // 2. If not manual override, resolve from catalogs / tariff / provider
           if (!valStr) {
             const resolvedPrices = resolveCreditPrices(institution.tarifasId, catalogs, institution.mainProviderId, providerProductServices);
-            if (cType === 'Medio Crédito') valStr = resolvedPrices.priceHalfCredit || "";
-            else if (cType === 'Crédito completo AP') valStr = resolvedPrices.priceFullApCredit || "";
-            else if (cType === 'Medio Crédito AP') valStr = resolvedPrices.priceHalfApCredit || "";
-            else if (cType === 'Crédito completo') valStr = resolvedPrices.priceFullCredit || "";
+            if (cType === 'Half Credit' || cType === 'Medio Crédito') valStr = resolvedPrices.priceHalfCredit || "";
+            else if (cType === 'Full Credit AP' || cType === 'Crédito completo AP') valStr = resolvedPrices.priceFullApCredit || "";
+            else if (cType === 'Half Credit AP' || cType === 'Medio Crédito AP') valStr = resolvedPrices.priceHalfApCredit || "";
+            else if (cType === 'Full Credit' || cType === 'Crédito completo') valStr = resolvedPrices.priceFullCredit || "";
           }
 
           // 3. Fallback to countryRates on class
@@ -1151,9 +1193,9 @@ export function calculateInstitutionFinancials(
           if (valStr) {
             cp = parseFloat(String(valStr).replace(/[^0-9.-]+/g, "") || "0");
           } else {
-            if (cType === 'Medio Crédito') cp = 250;
-            else if (cType === 'Crédito completo AP') cp = 600;
-            else if (cType === 'Medio Crédito AP') cp = 300;
+            if (cType === 'Half Credit' || cType === 'Medio Crédito') cp = 250;
+            else if (cType === 'Full Credit AP' || cType === 'Crédito completo AP') cp = 600;
+            else if (cType === 'Half Credit AP' || cType === 'Medio Crédito AP') cp = 300;
             else cp = 500;
           }
         } else {
@@ -1433,6 +1475,18 @@ export function cleanForFirestore(obj: any): any {
   for (const key of Object.keys(obj)) {
     const val = obj[key];
     if (val !== undefined) {
+      // Strip oversized base64 strings so Firestore documents never exceed the 1MB limit
+      if (
+        (key === 'fileData' || key === 'attachmentData' || key === 'base64' || key === 'fileContent' || key === 'dataUrl') &&
+        typeof val === 'string' && (val.length > 500 || val.startsWith('data:'))
+      ) {
+        cleaned[key] = '';
+        continue;
+      }
+      if (typeof val === 'string' && val.length > 2000 && val.startsWith('data:')) {
+        cleaned[key] = '';
+        continue;
+      }
       cleaned[key] = cleanForFirestore(val);
     }
   }
@@ -1546,8 +1600,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('currentUser');
-    if (saved) return JSON.parse(saved);
-    return null; // Start at the improved login screen for a professional experience
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error("Error parsing currentUser", e);
+      }
+    }
+    // Default to Superadministrador (Admin Principal) for seamless access in preview
+    return { id: 1, name: 'Admin Principal', role: 'Superadministrador', email: 'admin@ihs.com', password: 'admin', teamId: 1 };
   });
 
   const [catalogs, setCatalogs] = useState<Record<CatalogTypes, CatalogItem[]>>(() => {
@@ -1668,20 +1729,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
         { id: 'prod_8', name: 'iivvo', providerIds: [6] }
       ],
       'Fases y Alertas de Inactividad (SLA)': [
-        { id: 'sla_1', name: 'Captación (Inicio)', description: 'Prospecto frío recién identificado - Etapa de Inicio (SLA 3 días)', slaDays: 3 },
-        { id: 'sla_2', name: 'Prospecto', description: 'Colegio que cumple perfil para el programa dual', slaDays: 5 },
-        { id: 'sla_3', name: 'Primer contacto', description: 'Contacto inicial por correo, teléfono o LinkedIn', slaDays: 3 },
-        { id: 'sla_4', name: 'Contacto establecido', description: 'Interés confirmado por el colegio, se solicita cita', slaDays: 4 },
-        { id: 'sla_5', name: 'Reunión agendada', description: 'Cita programada en Google Calendar con directivos', slaDays: 5 },
-        { id: 'sla_6', name: 'Presentación realizada', description: 'Demostración del programa académico y plan dual', slaDays: 3 },
-        { id: 'sla_7', name: 'Propuesta enviada', description: 'Cotización formal y propuesta académica enviada', slaDays: 10 },
-        { id: 'sla_8', name: 'Seguimiento', description: 'Llamadas periódicas para atender dudas de directores', slaDays: 7 },
-        { id: 'sla_9', name: 'Negociación', description: 'Ajustes de convenio y revisión legal de contratos', slaDays: 15 },
-        { id: 'sla_10', name: 'Convenio firmado', description: 'Convenio de Bachillerato Dual firmado oficialmente', slaDays: null },
-        { id: 'sla_11', name: 'Implementación', description: 'Capacitación docente e inducción a alumnos', slaDays: 30 },
-        { id: 'sla_12', name: 'Cliente activo', description: 'Colegio operando de forma regular el plan dual', slaDays: null },
-        { id: 'sla_13', name: 'Perdido', description: 'Colegio descarta el programa o contrata competidor', slaDays: null },
-        { id: 'sla_14', name: 'Derivado a otra oficina', description: 'Colegio derivado o remitido a otra oficina regional', slaDays: null }
+        // CRM y Prospectos
+        { id: 'sla_1', name: 'Captación (Inicio)', description: 'Prospecto recién identificado - Etapa de Inicio (SLA 3 días)', slaDays: 3, module: 'crm', priority: 'alta', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard y Correo al Ejecutivo', isActive: true },
+        { id: 'sla_2', name: 'Prospecto Calificado', description: 'Colegio que cumple perfil para el programa dual', slaDays: 5, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_3', name: 'Primer contacto', description: 'Contacto inicial por correo, teléfono o LinkedIn', slaDays: 3, module: 'crm', priority: 'alta', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard y Correo', isActive: true },
+        { id: 'sla_4', name: 'Contacto establecido', description: 'Interés confirmado por el colegio, se solicita cita', slaDays: 4, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_5', name: 'Reunión agendada', description: 'Cita programada en Google Calendar con directivos', slaDays: 5, module: 'crm', priority: 'alta', responsibleRole: 'Dirección Comercial', actionOnAlert: 'Notificación de Calendario y Alerta', isActive: true },
+        { id: 'sla_6', name: 'Presentación realizada', description: 'Demostración del programa académico y plan dual', slaDays: 3, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_7', name: 'Propuesta enviada', description: 'Cotización formal y propuesta académica enviada', slaDays: 10, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard y Recordatorio', isActive: true },
+        { id: 'sla_8', name: 'Seguimiento', description: 'Llamadas periódicas para atender dudas de directores', slaDays: 7, module: 'crm', priority: 'media', responsibleRole: 'Ventas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_9', name: 'Negociación', description: 'Ajustes de convenio y revisión legal de contratos', slaDays: 15, module: 'crm', priority: 'alta', responsibleRole: 'Dirección / Legal', actionOnAlert: 'Alerta Crítica y Notificación a Dirección', isActive: true },
+        { id: 'sla_10', name: 'Convenio firmado', description: 'Convenio de Bachillerato Dual firmado oficialmente', slaDays: 5, module: 'crm', priority: 'alta', responsibleRole: 'Dirección General', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_11', name: 'Implementación', description: 'Capacitación docente e inducción a alumnos', slaDays: 30, module: 'crm', priority: 'media', responsibleRole: 'Operaciones', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_12', name: 'Cliente activo', description: 'Colegio operando de forma regular el plan dual', slaDays: null, module: 'crm', priority: 'baja', responsibleRole: 'Coordinación', actionOnAlert: 'Monitoreo Periódico', isActive: true },
+        { id: 'sla_13', name: 'Perdido', description: 'Colegio descarta el programa o contrata competidor', slaDays: null, module: 'crm', priority: 'baja', responsibleRole: 'Ventas', actionOnAlert: 'Registro Histórico', isActive: true },
+        { id: 'sla_14', name: 'Derivado a otra oficina', description: 'Colegio derivado o remitido a otra oficina regional', slaDays: null, module: 'crm', priority: 'baja', responsibleRole: 'Ventas', actionOnAlert: 'Transferencia Registrada', isActive: true },
+        { id: 'sla_crm_inbound', name: 'Lead Inbound / Redes Sociales', description: 'Primer mensaje o formulario web de contacto recibido', slaDays: 1, module: 'crm', priority: 'alta', responsibleRole: 'Marketing / Ventas', actionOnAlert: 'Alerta Inmediata y Notificación WhatsApp', isActive: true },
+
+        // Instituciones Socias
+        { id: 'sla_inst_1', name: 'Validación Documentos Legales y Fiscales', description: 'Revisión y cotejo de Acta Constitutiva, CIF y Poder Notarial', slaDays: 5, module: 'instituciones', priority: 'media', responsibleRole: 'Administración / Legal', actionOnAlert: 'Alerta en Dashboard y Correo a Sede', isActive: true },
+        { id: 'sla_inst_2', name: 'Revisión y Firma de Convenio Marco', description: 'Validación de firmas y envío de contraparte legal firmada', slaDays: 10, module: 'instituciones', priority: 'alta', responsibleRole: 'Dirección General', actionOnAlert: 'Alerta Crítica a Dirección', isActive: true },
+        { id: 'sla_inst_3', name: 'Configuración de Campus y Sede Dual', description: 'Creación de campus en sistema, asignación de claves y accesos', slaDays: 4, module: 'instituciones', priority: 'media', responsibleRole: 'Soporte de Sistemas', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_inst_4', name: 'Capacitación a Coordinadores de Sede', description: 'Sesión de onboarding y capacitación para el portal de sede', slaDays: 5, module: 'instituciones', priority: 'media', responsibleRole: 'Coordinación Académica', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_inst_5', name: 'Atención a Tickets y Consultas de Sede', description: 'Resolución de solicitudes técnicas, administrativas o de soporte', slaDays: 2, module: 'instituciones', priority: 'alta', responsibleRole: 'Atención a Sedes', actionOnAlert: 'Alerta Urgente por Correo y Dashboard', isActive: true },
+        { id: 'sla_inst_6', name: 'Emisión y Cobro de Póliza Inicial / Factura', description: 'Generación de factura mensual o anual y envío de datos fiscales', slaDays: 3, module: 'instituciones', priority: 'alta', responsibleRole: 'Finanzas y Facturación', actionOnAlert: 'Alerta a Finanzas y Correo a Escuela', isActive: true },
+        { id: 'sla_inst_7', name: 'Auditoría y Renovación Anual de Membresía', description: 'Revisión de metas de alumnos, renovación de licencia y actualización', slaDays: 15, module: 'instituciones', priority: 'media', responsibleRole: 'Dirección Comercial', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+
+        // Alumnos y Procesos Académicos
+        { id: 'sla_alum_1', name: 'Inscripción y Alta en Plataforma', description: 'Registro completo de alumno, matrícula institucional y usuario', slaDays: 2, module: 'alumnos', priority: 'alta', responsibleRole: 'Admisiones', actionOnAlert: 'Alerta en Dashboard y Correo al Alumno', isActive: true },
+        { id: 'sla_alum_2', name: 'Validación de Expediente y Kárdex', description: 'Cotejo de boletas previas, CURP/DNI y comprobante académico', slaDays: 4, module: 'alumnos', priority: 'media', responsibleRole: 'Control Escolar', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_alum_3', name: 'Aplicación y Calificación de Examen de Inglés', description: 'Evaluación diagnóstica de nivel de idioma y entrega de resultado', slaDays: 3, module: 'alumnos', priority: 'alta', responsibleRole: 'Departamento de Idiomas', actionOnAlert: 'Notificación de Calificación Lista', isActive: true },
+        { id: 'sla_alum_4', name: 'Asignación de Grupo y Horario Académico', description: 'Asignación de grupo de Bachillerato Dual o programa Homeschool', slaDays: 3, module: 'alumnos', priority: 'media', responsibleRole: 'Coordinación Académica', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_alum_5', name: 'University Admission / Carta de Aceptación', description: 'Gestión de credenciales y carta oficial de admisión con universidad asociada', slaDays: 7, module: 'alumnos', priority: 'alta', responsibleRole: 'Consejería Universitaria', actionOnAlert: 'Alerta y Notificación a Padres/Alumno', isActive: true },
+        { id: 'sla_alum_6', name: 'Emisión de Certificado Dual Americano', description: 'Revisión de créditos completos, validación con USA y emisión oficial', slaDays: 15, module: 'alumnos', priority: 'alta', responsibleRole: 'Registro y Certificaciones', actionOnAlert: 'Alerta de Estatus de Titulación', isActive: true },
+        { id: 'sla_alum_7', name: 'Tramitación de Bajas o Cambios de Asignatura', description: 'Procesamiento de cambio de materia, horario o baja justificada', slaDays: 3, module: 'alumnos', priority: 'media', responsibleRole: 'Control Escolar', actionOnAlert: 'Alerta en Dashboard', isActive: true },
+        { id: 'sla_alum_8', name: 'Entrega de Reporte Bimestral de Calificaciones', description: 'Cierre de ciclo, subida de notas y entrega de boleta bimestral', slaDays: 5, module: 'alumnos', priority: 'media', responsibleRole: 'Dirección Académica', actionOnAlert: 'Alerta a Coordinadores', isActive: true }
       ],
       'Categorías de Documentos': [
         { id: 'cat_doc_1', name: 'Contratos y Convenios', description: 'Contratos comerciales, convenios institucionales y acuerdos de confidencialidad' },
@@ -1719,20 +1801,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
       saved['Fases y Alertas de Inactividad (SLA)'] = fallback['Fases y Alertas de Inactividad (SLA)'];
     } else {
       const slaList = saved['Fases y Alertas de Inactividad (SLA)'];
+      // Ensure all existing items have a module assigned if missing
+      slaList.forEach((s: any) => {
+        if (!s.module) {
+          const sName = (s.name || '').toLowerCase();
+          if (sName.includes('convenio') || sName.includes('campus') || sName.includes('colegio') || sName.includes('sede') || sName.includes('factura') || sName.includes('instituc')) {
+            s.module = 'instituciones';
+          } else if (sName.includes('alumno') || sName.includes('inscrip') || sName.includes('inglés') || sName.includes('ingles') || sName.includes('kárdex') || sName.includes('kardex') || sName.includes('admision') || sName.includes('admisión')) {
+            s.module = 'alumnos';
+          } else {
+            s.module = 'crm';
+          }
+        }
+        if (!s.priority) s.priority = (s.slaDays && s.slaDays <= 3) ? 'alta' : 'media';
+        if (s.isActive === undefined) s.isActive = true;
+      });
+
       const hasInicio = slaList.some((s: any) => s.name.toLowerCase().includes('inicio') || s.name.toLowerCase().includes('captació'));
       if (!hasInicio) {
         if (slaList.length > 0 && (slaList[0].name === 'Lead' || slaList[0].id === 'sla_1')) {
           slaList[0].name = 'Captación (Inicio)';
-          slaList[0].description = 'Prospecto frío recién identificado - Etapa de Inicio (SLA 3 días)';
+          slaList[0].description = 'Prospecto recién identificado - Etapa de Inicio (SLA 3 días)';
+          slaList[0].module = 'crm';
+          slaList[0].priority = 'alta';
         } else {
           slaList.unshift({
             id: 'sla_1',
             name: 'Captación (Inicio)',
-            description: 'Prospecto frío recién identificado - Etapa de Inicio (SLA 3 días)',
-            slaDays: 3
+            description: 'Prospecto recién identificado - Etapa de Inicio (SLA 3 días)',
+            slaDays: 3,
+            module: 'crm',
+            priority: 'alta',
+            responsibleRole: 'Ventas',
+            actionOnAlert: 'Alerta en Dashboard y Correo al Ejecutivo',
+            isActive: true
           });
         }
       }
+
+      // Merge missing Instituciones and Alumnos defaults if not present
+      const fallbackList = fallback['Fases y Alertas de Inactividad (SLA)'];
+      fallbackList.forEach((fbItem: any) => {
+        const exists = slaList.some((s: any) => s.id === fbItem.id || s.name.toLowerCase() === fbItem.name.toLowerCase());
+        if (!exists) {
+          slaList.push(fbItem);
+        }
+      });
     }
     if (!saved['Tarifas Países'] || saved['Tarifas Países'].length === 0) {
       saved['Tarifas Países'] = fallback['Tarifas Países'];
@@ -1787,6 +1901,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(() => loadSaved('companyInfo', {
     commercialName: 'Mi Empresa S.A.',
     legalName: 'Mi Empresa S.A. de C.V.',
+    logoUrl: '',
     rfc: 'AAA010101AAA',
     baseCurrency: 'USD',
     timezone: 'America/Mexico_City',
@@ -2135,7 +2250,102 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
     });
   });
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => loadSaved('auditLogs', []));
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
+    const loaded = loadSaved<AuditLog[]>('auditLogs', []);
+    if (loaded && loaded.length > 0) return loaded;
+    const now = new Date();
+    const d1 = new Date(now.getTime() - 25 * 60 * 1000).toISOString();
+    const d2 = new Date(now.getTime() - 2 * 3600 * 1000).toISOString();
+    const d3 = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
+    const d4 = new Date(now.getTime() - 48 * 3600 * 1000).toISOString();
+    const d5 = new Date(now.getTime() - 72 * 3600 * 1000).toISOString();
+
+    return [
+      {
+        id: "log-audit-01",
+        date: d1,
+        userId: "admin-1",
+        userName: "Administrador del Sistema",
+        userEmail: "wrhg1970@gmail.com",
+        userRole: "Superadministrador",
+        actionType: "settings_change",
+        severity: "alta",
+        entityType: "institution",
+        entityId: 1,
+        entityName: "Colegio Internacional de México",
+        description: "Modificación de parámetros institucionales: Habilitación de cobro de IVA al 16% y actualización de moneda preferente a USD.",
+        fieldsChanged: [
+          { fieldName: "Cobro con IVA (payWithIva)", oldValue: "Inactivo (false)", newValue: "Activo (true)" },
+          { fieldName: "Moneda de Cobro", oldValue: "MXN", newValue: "USD" }
+        ],
+        ipAddress: "189.204.112.44"
+      },
+      {
+        id: "log-audit-02",
+        date: d2,
+        userId: "admin-1",
+        userName: "William Herrera",
+        userEmail: "wrhg1970@gmail.com",
+        userRole: "Superadministrador",
+        actionType: "delete",
+        severity: "critica",
+        entityType: "student",
+        entityId: 994,
+        entityName: "Rodrigo Morales Garza",
+        description: "Eliminación permanente de expediente del alumno: \"Rodrigo Morales Garza\" (Matrícula: LAT-2025-098) por solicitud administrativa de baja definitiva.",
+        ipAddress: "189.204.112.44"
+      },
+      {
+        id: "log-audit-03",
+        date: d3,
+        userId: "usr-4",
+        userName: "Mariana Silva",
+        userEmail: "mariana.silva@sistema.com",
+        userRole: "Finanzas",
+        actionType: "update",
+        severity: "media",
+        entityType: "payment",
+        entityId: "pay-1044",
+        entityName: "Pago #1044 - Colegio Británico",
+        description: "Modificación de registro de pago ID: pay-1044. Monto actualizado y conciliado contra comprobante bancario SPEI.",
+        fieldsChanged: [
+          { fieldName: "Monto", oldValue: "$35,000.00 MXN", newValue: "$38,500.00 MXN" },
+          { fieldName: "Estatus Conciliación", oldValue: "Pendiente", newValue: "Conciliado" }
+        ],
+        ipAddress: "201.168.45.12"
+      },
+      {
+        id: "log-audit-04",
+        date: d4,
+        userId: "admin-1",
+        userName: "Administrador del Sistema",
+        userEmail: "wrhg1970@gmail.com",
+        userRole: "Superadministrador",
+        actionType: "backup",
+        severity: "baja",
+        entityType: "backup",
+        entityId: "backup-drive-cfg",
+        entityName: "Google Drive Cloud Backup",
+        description: "Configuración y programación de respaldo automático semanal a Google Drive activada con éxito.",
+        ipAddress: "189.204.112.44"
+      },
+      {
+        id: "log-audit-05",
+        date: d5,
+        userId: "admin-1",
+        userName: "William Herrera",
+        userEmail: "wrhg1970@gmail.com",
+        userRole: "Superadministrador",
+        actionType: "settings_change",
+        severity: "alta",
+        entityType: "role",
+        entityId: "roles-matrix",
+        entityName: "Matriz de Permisos del Sistema",
+        description: "Actualización de permisos del rol 'Finanzas' para permitir acceso a conciliación y bitácoras de auditoría.",
+        ipAddress: "189.204.112.44"
+      }
+    ];
+  });
   const [backups, setBackups] = useState<any[]>(() => loadSaved('app_backups', []));
   const [systemRoles, setSystemRoles] = useState<Role[]>(() => getSystemRoles());
 
@@ -2232,9 +2442,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return checkDate;
   };
 
-  // Execute full backup of all core records
-  const triggerFullBackup = async (type: 'Automático' | 'Manual') => {
+  // Backup Scheduling State & Configuration
+  const [backupSchedule, setBackupSchedule] = useState<BackupScheduleConfig>(() => {
     try {
+      const saved = localStorage.getItem('system_backup_schedule_v2');
+      if (saved) return { ...DEFAULT_BACKUP_SCHEDULE, ...JSON.parse(saved) };
+      const rawEnabled = localStorage.getItem('auto_backup_enabled');
+      const rawDay = localStorage.getItem('auto_backup_day');
+      const rawTime = localStorage.getItem('auto_backup_time');
+      if (rawEnabled !== null || rawDay !== null || rawTime !== null) {
+        return {
+          ...DEFAULT_BACKUP_SCHEDULE,
+          enabled: rawEnabled !== null ? rawEnabled === 'true' : true,
+          dayOfWeek: rawDay || 'Domingo',
+          timeOfDay: rawTime || '23:00'
+        };
+      }
+    } catch {}
+    return DEFAULT_BACKUP_SCHEDULE;
+  });
+
+  const updateBackupSchedule = async (newConfig: Partial<BackupScheduleConfig>) => {
+    let mergedConfig: BackupScheduleConfig = { ...backupSchedule, ...newConfig };
+    setBackupSchedule(prev => {
+      mergedConfig = { ...prev, ...newConfig };
+      try {
+        localStorage.setItem('system_backup_schedule_v2', JSON.stringify(mergedConfig));
+        localStorage.setItem('auto_backup_enabled', String(mergedConfig.enabled));
+        localStorage.setItem('auto_backup_day', mergedConfig.dayOfWeek);
+        localStorage.setItem('auto_backup_time', mergedConfig.timeOfDay);
+      } catch {}
+      return mergedConfig;
+    });
+
+    try {
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(doc(db, 'systemConfig', 'backup_schedule'), {
+        ...mergedConfig,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (err) {
+      console.warn("Could not sync backup schedule to Firestore:", err);
+    }
+  };
+
+  // Execute full backup of all core records
+  const triggerFullBackup = async (type: 'Automático' | 'Manual' = 'Manual', forceDriveUpload = false) => {
+    try {
+      let crmLeads: any[] = [];
+      try {
+        const savedLeads = localStorage.getItem('crm_leads_v1');
+        if (savedLeads) crmLeads = JSON.parse(savedLeads);
+      } catch {}
+
       const dataPayload = {
         users,
         institutions,
@@ -2257,58 +2517,112 @@ export function AppProvider({ children }: { children: ReactNode }) {
         statementTransactions,
         companyInfo,
         catalogs,
-        systemRoles
+        systemRoles,
+        crmLeads,
+        backupMetadata: {
+          version: "2.0",
+          generatedAt: new Date().toISOString(),
+          type,
+          destination: forceDriveUpload ? "Google Drive" : (backupSchedule.destination || "Local / Nube")
+        }
       };
 
       const backupId = 'backup_' + Date.now();
       const backupDate = new Date().toISOString();
-      const payloadString = JSON.stringify(dataPayload);
+      const payloadString = JSON.stringify(dataPayload, null, 2);
       const sizeBytes = new Blob([payloadString]).size;
-      const sizeReadable = (sizeBytes / 1024).toFixed(1) + " KB";
+      const sizeReadable = sizeBytes > 1024 * 1024
+        ? (sizeBytes / (1024 * 1024)).toFixed(2) + " MB"
+        : (sizeBytes / 1024).toFixed(1) + " KB";
       
       let totalRecords = 0;
-      Object.values(dataPayload).forEach(arr => {
-        if (Array.isArray(arr)) {
-          totalRecords += arr.length;
-        } else if (arr && typeof arr === 'object') {
-          totalRecords += Object.keys(arr).length * 4; // approximate catalogs weight
+      Object.entries(dataPayload).forEach(([key, val]) => {
+        if (key === 'backupMetadata') return;
+        if (Array.isArray(val)) {
+          totalRecords += val.length;
+        } else if (val && typeof val === 'object') {
+          totalRecords += Object.keys(val).length * 4;
         }
       });
 
-      // Automatically download the file to the browser
-      try {
-        const blob = new Blob([payloadString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `respaldo_sistema_${type.toLowerCase()}_${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        console.error("Browser download failed, falling back", e);
+      let driveResult: any = null;
+      let driveError: string | null = null;
+
+      // Handle upload to Google Drive if requested or if configured as destination and token available
+      const shouldUploadDrive = forceDriveUpload || (backupSchedule.enabled && backupSchedule.destination !== 'local_only' && isGoogleDriveTokenAvailable());
+
+      if (shouldUploadDrive) {
+        try {
+          driveResult = await uploadBackupToGoogleDrive(dataPayload, {
+            type,
+            filename: `respaldo_ihs_${type.toLowerCase()}_${new Date().toISOString().split('T')[0]}_${Date.now().toString().slice(-4)}.json`
+          });
+          
+          await updateBackupSchedule({
+            lastBackupDate: backupDate,
+            lastBackupStatus: 'success',
+            lastBackupError: undefined,
+            lastBackupFileName: driveResult.name,
+            lastBackupSize: driveResult.size,
+            lastBackupDriveLink: driveResult.webViewLink
+          });
+        } catch (err: any) {
+          driveError = err.message || "Error al subir a Google Drive";
+          console.error("Google Drive upload error:", err);
+          await updateBackupSchedule({
+            lastBackupDate: backupDate,
+            lastBackupStatus: 'failed',
+            lastBackupError: driveError
+          });
+          if (forceDriveUpload) {
+            throw err;
+          }
+        }
       }
 
-      const newBackup = {
+      // Automatically download file to browser if manual without drive or if local is requested
+      const shouldDownloadLocal = (type === 'Manual' && !forceDriveUpload) || backupSchedule.destination === 'local_only' || backupSchedule.destination === 'cloud_and_local';
+
+      if (shouldDownloadLocal) {
+        try {
+          const blob = new Blob([payloadString], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `respaldo_sistema_${type.toLowerCase()}_${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        } catch (e) {
+          console.error("Browser download failed, falling back", e);
+        }
+      }
+
+      const newBackup: any = {
         id: backupId,
         date: backupDate,
-        type,
-        size: sizeReadable,
-        records: totalRecords
+        type: driveResult ? `${type} (Google Drive)` : type,
+        size: driveResult?.size || sizeReadable,
+        records: totalRecords,
+        driveFileId: driveResult?.id,
+        driveLink: driveResult?.webViewLink,
+        status: driveError ? 'Parcial' : 'Exitoso'
       };
 
-      setBackups(prev => [newBackup, ...prev]);
+      setBackups(prev => {
+        const updated = [newBackup, ...prev];
+        const maxRetained = backupSchedule.retentionCount || 10;
+        return updated.slice(0, maxRetained);
+      });
       
-      if (type === 'Automático') {
-        localStorage.setItem('last_auto_backup_time', backupDate);
-      }
+      localStorage.setItem('last_auto_backup_time', backupDate);
       
       addAuditLog({
         entityType: 'providerProductService',
         entityId: backupId,
         entityName: `Respaldo_Seguridad_${type}`,
-        description: `Creado respaldo de seguridad (${type}) exitoso. ID: ${backupId}, tamaño: ${sizeReadable}, registros: ${totalRecords}`
+        description: `Creado respaldo de seguridad (${type}) exitoso. ID: ${backupId}, tamaño: ${newBackup.size}, registros: ${totalRecords}.${driveResult ? ` Subido a Google Drive exitosamente.` : ''}`
       });
 
       return newBackup;
@@ -2316,6 +2630,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.error("Error creating full backup:", e);
       throw e;
     }
+  };
+
+  const triggerGoogleDriveBackup = async (type: 'Automático' | 'Manual' = 'Manual') => {
+    return await triggerFullBackup(type, true);
   };
 
   // Restore core database state from a backup payload
@@ -2348,6 +2666,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (Array.isArray(d.financeCategories)) setFinanceCategories(d.financeCategories);
       if (Array.isArray(d.accountStatements)) setAccountStatements(d.accountStatements);
       if (Array.isArray(d.statementTransactions)) setStatementTransactions(d.statementTransactions);
+      if (Array.isArray(d.crmLeads)) {
+        try {
+          safeLocalStorageSet('crm_leads_v1', d.crmLeads);
+        } catch {}
+      }
       if (d.companyInfo) setCompanyInfo(d.companyInfo);
       if (d.catalogs) setCatalogs(d.catalogs);
       if (Array.isArray(d.systemRoles)) {
@@ -2373,35 +2696,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setBackups(prev => prev.filter(b => b.id !== id));
   };
 
-  // Checks for automatic weekly backup (Sunday 11:00 PM is selected by default) on system startup
+  // Programmable background backup scheduler (Daily, Weekly, Biweekly, Monthly)
   useEffect(() => {
     if (!firebaseSyncCompleted) return;
 
     const runAutoBackupCheck = async () => {
-      const rawEnabled = localStorage.getItem('auto_backup_enabled');
-      const isEnabled = rawEnabled === null ? true : rawEnabled === 'true';
-      if (!isEnabled) return;
+      if (!backupSchedule.enabled) return;
 
-      const scheduleDayIndex = localStorage.getItem('auto_backup_day') || "Domingo";
-      const scheduleTimeStr = localStorage.getItem('auto_backup_time') || "23:00";
+      const now = new Date();
+      const lastBackupStr = backupSchedule.lastBackupDate || localStorage.getItem('last_auto_backup_time');
+      const lastBackupTime = lastBackupStr ? new Date(lastBackupStr).getTime() : 0;
+      const hoursSinceLast = (now.getTime() - lastBackupTime) / (1000 * 60 * 60);
 
-      const mostRecentScheduledSlot = getMostRecentPastScheduledDate(scheduleDayIndex, scheduleTimeStr);
-      const lastBackupStr = localStorage.getItem('last_auto_backup_time');
-      
-      const shouldBackup = !lastBackupStr || new Date(lastBackupStr) < mostRecentScheduledSlot;
+      let isDue = false;
 
-      if (shouldBackup) {
-        console.log(`[AutoBackup] Running weekly automatic backup for scheduled slot: ${mostRecentScheduledSlot.toISOString()}`);
-        await triggerFullBackup('Automático');
+      if (backupSchedule.frequency === 'daily') {
+        const [schedHour] = (backupSchedule.timeOfDay || "02:00").split(':').map(Number);
+        if (hoursSinceLast >= 20 && now.getHours() >= (schedHour || 0)) {
+          isDue = true;
+        }
+      } else if (backupSchedule.frequency === 'weekly') {
+        const mostRecentScheduledSlot = getMostRecentPastScheduledDate(backupSchedule.dayOfWeek || "Domingo", backupSchedule.timeOfDay || "23:00");
+        if (!lastBackupStr || new Date(lastBackupStr) < mostRecentScheduledSlot) {
+          isDue = true;
+        }
+      } else if (backupSchedule.frequency === 'biweekly') {
+        if (hoursSinceLast >= (14 * 24 - 4)) {
+          isDue = true;
+        }
+      } else if (backupSchedule.frequency === 'monthly') {
+        if (hoursSinceLast >= (28 * 24)) {
+          isDue = true;
+        }
+      }
+
+      if (isDue) {
+        console.log(`[AutoBackup] Ejecutando respaldo automático programado (${backupSchedule.frequency})`);
+        try {
+          const driveReady = isGoogleDriveTokenAvailable();
+          await triggerFullBackup('Automático', driveReady && backupSchedule.destination !== 'local_only');
+        } catch (err) {
+          console.error("Error en respaldo automático programado:", err);
+        }
       }
     };
 
     const timeoutId = setTimeout(() => {
-      runAutoBackupCheck().catch(err => console.error("Error in automatic backup check:", err));
-    }, 5000);
+      runAutoBackupCheck().catch(err => console.error("Error en verificación de respaldo automático:", err));
+    }, 4000);
 
     return () => clearTimeout(timeoutId);
-  }, [firebaseSyncCompleted, backups]);
+  }, [firebaseSyncCompleted, backupSchedule]);
 
   // Initial Sync from Firestore with migration fallback to recover previous simulation data
   useEffect(() => {
@@ -3233,12 +3578,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateCompanyInfo = (data: Partial<CompanyInfo>) => {
-    setCompanyInfo(prev => ({
-      ...prev,
-      ...data,
-      address: { ...prev.address, ...data.address },
-      socialLinks: { ...prev.socialLinks, ...data.socialLinks }
-    }));
+    setCompanyInfo(prev => {
+      const fieldsChanged: AuditFieldChange[] = [];
+      if (data.commercialName !== undefined && data.commercialName !== prev.commercialName) {
+        fieldsChanged.push({ fieldName: 'Nombre Comercial', oldValue: prev.commercialName || '', newValue: data.commercialName });
+      }
+      if (data.legalName !== undefined && data.legalName !== prev.legalName) {
+        fieldsChanged.push({ fieldName: 'Razón Social', oldValue: prev.legalName || '', newValue: data.legalName });
+      }
+      if (data.rfc !== undefined && data.rfc !== prev.rfc) {
+        fieldsChanged.push({ fieldName: 'RFC / Identificación Fiscal', oldValue: prev.rfc || '', newValue: data.rfc });
+      }
+      if (data.baseCurrency !== undefined && data.baseCurrency !== prev.baseCurrency) {
+        fieldsChanged.push({ fieldName: 'Moneda Base', oldValue: prev.baseCurrency || 'MXN', newValue: data.baseCurrency });
+      }
+      if (data.timezone !== undefined && data.timezone !== prev.timezone) {
+        fieldsChanged.push({ fieldName: 'Zona Horaria', oldValue: prev.timezone || '', newValue: data.timezone });
+      }
+
+      if (fieldsChanged.length > 0) {
+        addAuditLog({
+          actionType: 'settings_change',
+          severity: 'alta',
+          entityType: 'company',
+          entityId: 'company-info',
+          entityName: prev.commercialName || 'Configuración General',
+          description: `Modificación de parámetros generales de la institución/empresa: ` + fieldsChanged.map(f => `${f.fieldName} de "${f.oldValue}" a "${f.newValue}"`).join('; '),
+          fieldsChanged
+        });
+      }
+
+      return {
+        ...prev,
+        ...data,
+        address: { ...prev.address, ...data.address },
+        socialLinks: { ...prev.socialLinks, ...data.socialLinks }
+      };
+    });
   };
 
   const addCompanyDocument = (doc: Omit<CompanyDocument, "id" | "uploadedAt">) => {
@@ -3512,7 +3888,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteFinancialTransaction = (id: string) => {
+    const tx = financialTransactions.find(t => String(t.id) === String(id));
     setFinancialTransactions(prev => prev.filter(t => String(t.id) !== String(id)));
+
+    if (tx) {
+      addAuditLog({
+        actionType: 'delete',
+        severity: 'alta',
+        entityType: 'financialTransaction',
+        entityId: id,
+        entityName: tx.description || `Transacción #${id}`,
+        description: `Eliminación permanente de transacción financiera #${id} (${tx.type === 'income' ? 'Ingreso' : 'Egreso'}) por monto de $${tx.amount} ${tx.currency}.`
+      });
+    }
   };
 
   const addAccountStatement = (statement: Omit<AccountStatement, "id" | "uploadDate">, transactions: Omit<StatementTransaction, "id" | "statementId" | "saved" | "reconciled">[]) => {
@@ -3591,7 +3979,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteUser = (id: number) => {
-    setUsers(prev => prev.filter(u => u.id !== id));
+    const u = users.find(usr => usr.id === id);
+    const uName = u ? `${u.name} (${u.email})` : `Usuario #${id}`;
+    setUsers(prev => prev.filter(usr => usr.id !== id));
+
+    addAuditLog({
+      actionType: 'delete',
+      severity: 'critica',
+      entityType: 'user',
+      entityId: id,
+      entityName: uName,
+      description: `Eliminación permanente de cuenta de usuario "${uName}" con rol "${u?.role || 'Desconocido'}".`
+    });
   };
 
   const addInstitution = (inst: Omit<Institution, "id"> & { id?: number }) => {
@@ -3614,6 +4013,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     addActivity({ institutionId: newInst.id, date: new Date().toISOString(), description: "Institución registrada." });
     return newInstId;
+  };
+
+  const addAuditLog = (log: Omit<AuditLog, "id" | "date" | "userName"> & { userName?: string; date?: string; userId?: string | number; userEmail?: string }) => {
+    const rawDesc = log.description || '';
+    const isDelete = log.actionType === 'delete' || rawDesc.toLowerCase().includes('elimin') || rawDesc.toLowerCase().includes('borr');
+    const isSettings = log.actionType === 'settings_change' || rawDesc.toLowerCase().includes('configur') || rawDesc.toLowerCase().includes('iva') || rawDesc.toLowerCase().includes('parámetro');
+    const isCreate = log.actionType === 'create' || rawDesc.toLowerCase().includes('crea') || rawDesc.toLowerCase().includes('registr');
+
+    const computedAction: AuditActionType = log.actionType || (isDelete ? 'delete' : isSettings ? 'settings_change' : isCreate ? 'create' : 'update');
+    const computedSeverity: AuditSeverity = log.severity || (isDelete ? 'critica' : isSettings ? 'alta' : 'media');
+
+    const newLog: AuditLog = {
+      ...log,
+      id: "log-" + generateUniqueId().toString() + "-" + Math.random().toString(36).substring(2, 7),
+      date: log.date || new Date().toISOString(),
+      userId: log.userId !== undefined ? log.userId : (currentUser?.id || 'admin-1'),
+      userName: log.userName || currentUser?.name || currentUser?.email || 'Administrador',
+      userEmail: log.userEmail || currentUser?.email || 'admin@sistema.com',
+      userRole: log.userRole || currentUser?.role || 'Superadministrador',
+      actionType: computedAction,
+      severity: computedSeverity
+    };
+    setAuditLogs(prev => [newLog, ...prev]);
+  };
+
+  const clearAuditLogs = () => {
+    setAuditLogs([]);
+  };
+
+  const deleteAuditLog = (id: string) => {
+    setAuditLogs(prev => prev.filter(l => l.id !== id));
   };
 
   const updateInstitution = (id: number, data: Partial<Institution>) => {
@@ -3639,25 +4069,154 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }));
       }
 
+      // Track critical institution settings changes in Audit Log
+      if (oldInst) {
+        const fieldsChanged: AuditFieldChange[] = [];
+        if (data.name !== undefined && data.name !== oldInst.name) {
+          fieldsChanged.push({ fieldName: 'Razón Social', oldValue: oldInst.name || '', newValue: data.name });
+        }
+        if (data.tradeName !== undefined && data.tradeName !== oldInst.tradeName) {
+          fieldsChanged.push({ fieldName: 'Nombre Comercial', oldValue: oldInst.tradeName || '', newValue: data.tradeName });
+        }
+        if (data.payWithIva !== undefined && data.payWithIva !== oldInst.payWithIva) {
+          fieldsChanged.push({
+            fieldName: 'Cobro con IVA',
+            oldValue: oldInst.payWithIva ? 'Activo (16%)' : 'Inactivo (0%)',
+            newValue: data.payWithIva ? 'Activo (16%)' : 'Inactivo (0%)'
+          });
+        }
+        if (data.paymentCurrency !== undefined && data.paymentCurrency !== oldInst.paymentCurrency) {
+          fieldsChanged.push({ fieldName: 'Moneda de Cobro', oldValue: oldInst.paymentCurrency || 'USD', newValue: data.paymentCurrency });
+        }
+        if (data.membershipType !== undefined && data.membershipType !== oldInst.membershipType) {
+          fieldsChanged.push({ fieldName: 'Membresía', oldValue: oldInst.membershipType || 'Ninguna', newValue: data.membershipType });
+        }
+        if (data.status !== undefined && data.status !== oldInst.status) {
+          fieldsChanged.push({ fieldName: 'Estatus', oldValue: oldInst.status || '', newValue: data.status });
+        }
+        if (data.country !== undefined && data.country !== oldInst.country) {
+          fieldsChanged.push({ fieldName: 'País', oldValue: oldInst.country || '', newValue: data.country });
+        }
+        if (data.retentionRate !== undefined && data.retentionRate !== oldInst.retentionRate) {
+          fieldsChanged.push({ fieldName: 'Retención Fiscal', oldValue: `${oldInst.retentionRate || 0}%`, newValue: `${data.retentionRate}%` });
+        }
+
+        if (fieldsChanged.length > 0) {
+          const instLabel = oldInst.tradeName || oldInst.name || `Institución #${id}`;
+          const isConfigChange = fieldsChanged.some(f => ['Cobro con IVA', 'Moneda de Cobro', 'Membresía', 'Retención Fiscal'].includes(f.fieldName));
+          addAuditLog({
+            actionType: isConfigChange ? 'settings_change' : 'update',
+            severity: isConfigChange ? 'alta' : 'media',
+            entityType: 'institution',
+            entityId: id,
+            entityName: instLabel,
+            description: `Modificación de configuración en institución "${instLabel}": ` + fieldsChanged.map(f => `${f.fieldName} de "${f.oldValue}" a "${f.newValue}"`).join('; '),
+            fieldsChanged
+          });
+        }
+      }
+
       return prev.map(i => i.id === id ? { ...i, ...data } : i);
     });
     addActivity({ institutionId: id, date: new Date().toISOString(), description: "Información de la institución actualizada." });
   };
 
-  const deleteInstitution = (id: number) => {
+  const addInstitutionDocuments = (institutionId: number, newDocs: InstitutionDocument[]) => {
+    if (!newDocs || newDocs.length === 0) return;
+    setInstitutions(prev => prev.map(inst => {
+      if (inst.id !== institutionId) return inst;
+      const existing = inst.documentsList || [];
+      const existingIds = new Set(existing.map(d => d.id));
+      const filtered = newDocs.filter(d => !existingIds.has(d.id));
+      return {
+        ...inst,
+        documentsList: [...existing, ...filtered]
+      };
+    }));
+    addActivity({
+      institutionId,
+      date: new Date().toISOString(),
+      description: `Documentos: Se agregaron ${newDocs.length} archivo(s) al repositorio institucional.`
+    });
+  };
+
+  const deleteInstitutionDocument = async (institutionId: number, documentId: string) => {
+    try {
+      const { deleteFileFromIndexedDB } = await import('../utils/fileStorage');
+      await deleteFileFromIndexedDB('inst_doc_' + documentId);
+    } catch (e) {
+      console.warn("Error deleting file from IndexedDB:", e);
+    }
+    setInstitutions(prev => prev.map(inst => {
+      if (inst.id !== institutionId) return inst;
+      return {
+        ...inst,
+        documentsList: (inst.documentsList || []).filter(d => d.id !== documentId)
+      };
+    }));
+    addActivity({
+      institutionId,
+      date: new Date().toISOString(),
+      description: `Documento eliminado permanentemente del repositorio institucional.`
+    });
+  };
+
+  const deleteInstitution = async (id: number) => {
+    const inst = institutions.find(i => i.id === id);
+    const instName = inst?.tradeName || inst?.name || `Institución #${id}`;
+    if (inst?.documentsList && inst.documentsList.length > 0) {
+      try {
+        const { deleteFileFromIndexedDB } = await import('../utils/fileStorage');
+        for (const doc of inst.documentsList) {
+          await deleteFileFromIndexedDB('inst_doc_' + doc.id);
+        }
+      } catch (e) {
+        console.warn("Error cleaning up institution documents from IndexedDB:", e);
+      }
+    }
     setInstitutions(prev => prev.filter(i => i.id !== id));
     addActivity({ institutionId: 0, date: new Date().toISOString(), description: `Institución eliminada de la base de datos.` });
+    
+    // Critical Audit Log entry for institution deletion
+    addAuditLog({
+      actionType: 'delete',
+      severity: 'critica',
+      entityType: 'institution',
+      entityId: id,
+      entityName: instName,
+      description: `Eliminación permanente de la institución "${instName}" (ID: ${id}) junto con todos sus archivos y expedientes.`
+    });
   };
 
   const clearAllInstitutions = () => {
+    const count = institutions.length;
     setInstitutions([]);
     addActivity({ institutionId: 0, date: new Date().toISOString(), description: `Se eliminaron todas las instituciones de la base de datos.` });
+    
+    addAuditLog({
+      actionType: 'delete',
+      severity: 'critica',
+      entityType: 'institution',
+      entityId: 'all',
+      entityName: 'Todas las Instituciones',
+      description: `Vaciado masivo crítico: se eliminaron todas las instituciones registradas (${count} registros).`
+    });
   };
 
   const clearAllClasses = () => {
+    const count = classes.length;
     setClasses([]);
     setEnrollments([]);
     addActivity({ institutionId: 0, date: new Date().toISOString(), description: `Se eliminaron todas las clases y créditos académicos de la base de datos.` });
+
+    addAuditLog({
+      actionType: 'delete',
+      severity: 'critica',
+      entityType: 'class',
+      entityId: 'all',
+      entityName: 'Todas las Clases',
+      description: `Vaciado masivo crítico: se eliminaron todas las clases y créditos académicos (${count} registros).`
+    });
   };
 
   const addStudent = (student: Omit<Student, "id">) => {
@@ -3665,7 +4224,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteStudent = (id: number) => {
+    const st = students.find(s => s.id === id);
+    const stName = st ? `${st.name} ${st.lastName || ''}`.trim() : `Alumno #${id}`;
     setStudents(prev => prev.filter(s => s.id !== id));
+
+    // Critical Audit Log entry for student deletion
+    addAuditLog({
+      actionType: 'delete',
+      severity: 'alta',
+      entityType: 'student',
+      entityId: id,
+      entityName: stName,
+      description: `Eliminación de expediente del alumno "${stName}" (ID: ${id}, Matrícula: ${st?.enrollmentNumber || 'S/N'}).`
+    });
   };
 
   const addClass = (cls: Omit<ClassItem, "id">) => {
@@ -3677,17 +4248,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteClass = (id: number) => {
+    const cls = classes.find(c => c.id === id);
+    const clsName = cls?.name || `Clase #${id}`;
     setClasses(prev => prev.filter(c => c.id !== id));
-  };
 
-  const addAuditLog = (log: Omit<AuditLog, "id" | "date" | "userName">) => {
-    const newLog: AuditLog = {
-      ...log,
-      id: "log-" + generateUniqueId().toString() + "-" + Math.random().toString(36).substring(2, 5),
-      date: new Date().toISOString(),
-      userName: currentUser?.name || currentUser?.email || 'Sistema'
-    };
-    setAuditLogs(prev => [newLog, ...prev]);
+    // Audit Log entry for class deletion
+    addAuditLog({
+      actionType: 'delete',
+      severity: 'alta',
+      entityType: 'class',
+      entityId: id,
+      entityName: clsName,
+      description: `Eliminación de la clase/materia "${clsName}" (ID: ${id}, Código: ${cls?.code || 'S/C'}).`
+    });
   };
 
   const addProvider = (prov: Omit<Provider, "id">) => {
@@ -3806,7 +4379,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deletePayment = (id: number) => {
-    setPayments(prev => prev.filter(p => p.id !== id));
+    const p = payments.find(pay => pay.id === id);
+    setPayments(prev => prev.filter(pay => pay.id !== id));
+
+    addAuditLog({
+      actionType: 'delete',
+      severity: 'alta',
+      entityType: 'payment',
+      entityId: id,
+      entityName: `Pago #${id}`,
+      description: `Eliminación permanente de registro de pago #${id} por monto de $${p?.amount ?? '0'} (Fecha: ${p?.date ?? 'N/A'}).`
+    });
   };
 
   const syncEnrollmentStatuses = useCallback((): number => {
@@ -4517,28 +5100,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (oldCp) {
               if (newCp.priceFullCredit !== oldCp.priceFullCredit) {
                 fieldsChanged.push({
-                  fieldName: `Precio Crédito Completo (${newCp.country})`,
+                  fieldName: `Precio Full Credit (${newCp.country})`,
                   oldValue: oldCp.priceFullCredit,
                   newValue: newCp.priceFullCredit
                 });
               }
               if (newCp.costFullCredit !== oldCp.costFullCredit) {
                 fieldsChanged.push({
-                  fieldName: `Costo Crédito Completo (${newCp.country})`,
+                  fieldName: `Costo Full Credit (${newCp.country})`,
                   oldValue: oldCp.costFullCredit,
                   newValue: newCp.costFullCredit
                 });
               }
               if (newCp.priceHalfCredit !== oldCp.priceHalfCredit) {
                 fieldsChanged.push({
-                  fieldName: `Precio Medio Crédito (${newCp.country})`,
+                  fieldName: `Precio Half Credit (${newCp.country})`,
                   oldValue: oldCp.priceHalfCredit,
                   newValue: newCp.priceHalfCredit
                 });
               }
               if (newCp.costHalfCredit !== oldCp.costHalfCredit) {
                 fieldsChanged.push({
-                  fieldName: `Costo Medio Crédito (${newCp.country})`,
+                  fieldName: `Costo Half Credit (${newCp.country})`,
                   oldValue: oldCp.costHalfCredit,
                   newValue: newCp.costHalfCredit
                 });
@@ -4592,11 +5175,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateSystemRoles = async (newRoles: Role[]) => {
     setSystemRoles(newRoles);
     setInMemorySystemRoles(newRoles);
+    addAuditLog({
+      actionType: 'settings_change',
+      severity: 'alta',
+      entityType: 'role',
+      entityId: 'system-roles',
+      entityName: 'Matriz de Permisos del Sistema',
+      description: `Actualización de matriz de seguridad: Modificación de permisos de acceso en roles de usuario.`
+    });
   };
 
   const restoreDefaultRoles = async () => {
     setSystemRoles(DEFAULT_ROLES);
     setInMemorySystemRoles(DEFAULT_ROLES);
+    addAuditLog({
+      actionType: 'settings_change',
+      severity: 'alta',
+      entityType: 'role',
+      entityId: 'system-roles',
+      entityName: 'Matriz de Permisos del Sistema',
+      description: `Restablecimiento de fábrica: Se restauraron los roles y permisos por defecto del sistema.`
+    });
   };
 
   const addSystemRole = async (roleData: Omit<Role, "id">) => {
@@ -4645,7 +5244,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     <AppContext.Provider value={{
       firebaseSyncCompleted,
       syncErrors,
-      institutions, students, classes, providers, bankAccounts, enrollments, payments, auditLogs, addAuditLog, contacts, tasks, activities, catalogs, users, currentUser, setCurrentUser,
+      institutions, students, classes, providers, bankAccounts, enrollments, payments, auditLogs, addAuditLog, clearAuditLogs, deleteAuditLog, contacts, tasks, activities, catalogs, users, currentUser, setCurrentUser,
       teams, addTeam, updateTeam, deleteTeam,
       providerProductServices, addProviderProductService, updateProviderProductService, deleteProviderProductService,
       providerSpecificProducts, addProviderSpecificProduct, updateProviderSpecificProduct, deleteProviderSpecificProduct,
@@ -4653,10 +5252,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       financeCategories, addFinanceCategory, updateFinanceCategory, deleteFinanceCategory,
       financialTransactions, addFinancialTransaction, updateFinancialTransaction, deleteFinancialTransaction,
       accountStatements, statementTransactions, addAccountStatement, deleteAccountStatement, updateStatementTransaction, deleteStatementTransaction,
-      addInstitution, updateInstitution, deleteInstitution, clearAllInstitutions, clearAllClasses, addStudent, updateStudent, deleteStudent, addClass, updateClass, deleteClass, addProvider, updateProvider, addBankAccount, updateBankAccount, addPayment, updatePayment, deletePayment, addEnrollment, updateEnrollment, deleteEnrollment, syncEnrollmentStatuses,
+      addInstitution, updateInstitution, addInstitutionDocuments, deleteInstitutionDocument, deleteInstitution, clearAllInstitutions, clearAllClasses, addStudent, updateStudent, deleteStudent, addClass, updateClass, deleteClass, addProvider, updateProvider, addBankAccount, updateBankAccount, addPayment, updatePayment, deletePayment, addEnrollment, updateEnrollment, deleteEnrollment, syncEnrollmentStatuses,
       addContact, updateContact, deleteContact, addTask, updateTask, deleteTask, notifyTaskAssignee, notifyTaskDeadline, triggerDeadlineScan, addActivity, addCatalogItem, updateCatalogItem, deleteCatalogItem, addUser, updateUser, deleteUser,
       getInstitutionSLA, updateInstitutionLastInteraction, slaSummary, getLeadSlaInfo,
       backups, triggerFullBackup, restoreBackup, deleteBackup,
+      backupSchedule, updateBackupSchedule, triggerGoogleDriveBackup,
       systemRoles, updateSystemRoles, restoreDefaultRoles, addSystemRole, deleteSystemRole,
       dbMetrics, resetDbMetrics
     }}>

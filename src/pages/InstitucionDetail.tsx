@@ -1,12 +1,14 @@
 import React, { useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Building2, MapPin, Users, Globe, Phone, FileText, Download, Briefcase, CreditCard, Mail, Video, Calendar, Sparkles, TrendingUp, DollarSign, Clock, GraduationCap, Trash2, Archive, AlertTriangle, CheckCircle, HelpCircle, Plus, Upload, Eye, Edit2, Check, CalendarRange, X, BookOpen, CheckCircle2, XCircle, Search, Filter, FileSpreadsheet, Printer, Award, BarChart2, ChevronDown, ChevronUp, SlidersHorizontal, CheckCheck, UserCheck, AlertCircle, Key, ExternalLink, Shield } from "lucide-react";
-import { useAppContext, TaskType, resolveCreditPrices, resolveMembershipPrice, calculateInstitutionFinancials, CourseGradeOutcome, isColombia, InstitutionDocument, InstitutionDocumentCategory } from "../context/AppContext";
+import { useAppContext, TaskType, resolveCreditPrices, resolveMembershipPrice, calculateInstitutionFinancials, CourseGradeOutcome, isColombia, InstitutionDocument, InstitutionDocumentCategory, InstitutionDocumentArea } from "../context/AppContext";
+import { saveFileToIndexedDB, getFileFromIndexedDB, deleteFileFromIndexedDB } from "../utils/fileStorage";
 import { Modal } from "../components/ui/Modal";
 import { hasPermission } from "../utils/permissionCheck";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
 import { PaymentAttachmentsManager, PaymentAttachmentsBadges, PaymentAttachmentsData } from "../components/PaymentAttachmentsManager";
 import { InstitutionFinancialReportModal } from "../components/InstitutionFinancialReportModal";
+import { formatCreditType } from "../utils/creditType";
 import { motion, AnimatePresence } from "motion/react";
 
 const normalizeCountryName = (c: string) => {
@@ -59,7 +61,7 @@ const resolveProviderClassCost = (
 export function InstitucionDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { institutions, students, financialTransactions, enrollments, classes, contacts, tasks, activities, addContact, updateContact, deleteContact, addTask, updateTask, users, catalogs, updateInstitution, deleteInstitution, providers, providerProductServices, currentUser, addFinancialTransaction, updateFinancialTransaction, deleteFinancialTransaction, updateEnrollment, companyInfo, addActivity, bankAccounts, getInstitutionSLA } = useAppContext();
+  const { institutions, students, financialTransactions, enrollments, classes, contacts, tasks, activities, addContact, updateContact, deleteContact, addTask, updateTask, users, catalogs, updateInstitution, addInstitutionDocuments, deleteInstitutionDocument, deleteInstitution, providers, providerProductServices, currentUser, addFinancialTransaction, updateFinancialTransaction, deleteFinancialTransaction, updateEnrollment, companyInfo, addActivity, bankAccounts, getInstitutionSLA } = useAppContext();
   
   const institutionRaw = institutions.find(i => i.id === Number(id));
   const isAuthorized = 
@@ -114,37 +116,59 @@ export function InstitucionDetail() {
   const [financialReportInitialType, setFinancialReportInitialType] = useState<'institucion' | 'interno'>('institucion');
   const [detailDocName, setDetailDocName] = useState('');
   const [detailDocDate, setDetailDocDate] = useState(new Date().toISOString().split('T')[0]);
-  const [detailDocCategory, setDetailDocCategory] = useState<InstitutionDocumentCategory>('Legal');
+  const [detailDocArea, setDetailDocArea] = useState<InstitutionDocumentArea>('Académico');
+  const [detailDocCategory, setDetailDocCategory] = useState<InstitutionDocumentCategory>('Académico');
   const [detailDocHasExpiration, setDetailDocHasExpiration] = useState(false);
   const [detailDocExpirationDate, setDetailDocExpirationDate] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isUploadingDocs, setIsUploadingDocs] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const [editingDoc, setEditingDoc] = useState<InstitutionDocument | null>(null);
   const [editingDocName, setEditingDocName] = useState('');
   const [editingDocDate, setEditingDocDate] = useState('');
-  const [editingDocCategory, setEditingDocCategory] = useState<InstitutionDocumentCategory>('Legal');
+  const [editingDocArea, setEditingDocArea] = useState<InstitutionDocumentArea>('Académico');
+  const [editingDocCategory, setEditingDocCategory] = useState<InstitutionDocumentCategory>('Académico');
   const [editingDocHasExpiration, setEditingDocHasExpiration] = useState(false);
   const [editingDocExpirationDate, setEditingDocExpirationDate] = useState('');
   const [isEditDocModalOpen, setIsEditDocModalOpen] = useState(false);
-  const [docCategoryFilter, setDocCategoryFilter] = useState<'Todos' | InstitutionDocumentCategory>('Todos');
+  const [docAreaFilter, setDocAreaFilter] = useState<'Todos' | InstitutionDocumentArea>('Todos');
+  const docCategoryFilter = docAreaFilter as any;
+  const setDocCategoryFilter = setDocAreaFilter as any;
 
   const [viewingDoc, setViewingDoc] = useState<any | null>(null);
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
+  const [viewingDocFileData, setViewingDocFileData] = useState<string | null>(null);
 
-  const handleOpenUploadDocModal = (file?: File) => {
-    if (file) {
-      setSelectedFile(file);
-      const nameWithExt = file.name;
-      const idx = nameWithExt.lastIndexOf('.');
-      const baseName = idx !== -1 ? nameWithExt.substring(0, idx) : nameWithExt;
-      setDetailDocName(baseName);
+  const handleOpenUploadDocModal = (fileOrFiles?: File | File[] | FileList) => {
+    if (fileOrFiles) {
+      let filesArr: File[] = [];
+      if (Array.isArray(fileOrFiles)) {
+        filesArr = fileOrFiles;
+      } else if (fileOrFiles instanceof FileList) {
+        filesArr = Array.from(fileOrFiles);
+      } else {
+        filesArr = [fileOrFiles];
+      }
+      setSelectedFiles(filesArr);
+      setSelectedFile(filesArr[0] || null);
+      if (filesArr.length === 1) {
+        const nameWithExt = filesArr[0].name;
+        const idx = nameWithExt.lastIndexOf('.');
+        const baseName = idx !== -1 ? nameWithExt.substring(0, idx) : nameWithExt;
+        setDetailDocName(baseName);
+      } else {
+        setDetailDocName('');
+      }
     } else {
+      setSelectedFiles([]);
       setSelectedFile(null);
       setDetailDocName('');
     }
     setDetailDocDate(new Date().toISOString().split('T')[0]);
-    setDetailDocCategory('Legal');
+    setDetailDocArea('Académico');
+    setDetailDocCategory('Académico');
     setDetailDocHasExpiration(false);
     setDetailDocExpirationDate('');
     setIsDetailDocModalOpen(true);
@@ -152,10 +176,12 @@ export function InstitucionDetail() {
 
   const handleCloseUploadDocModal = () => {
     setIsDetailDocModalOpen(false);
+    setSelectedFiles([]);
     setSelectedFile(null);
     setDetailDocName('');
     setDetailDocDate(new Date().toISOString().split('T')[0]);
-    setDetailDocCategory('Legal');
+    setDetailDocArea('Académico');
+    setDetailDocCategory('Académico');
     setDetailDocHasExpiration(false);
     setDetailDocExpirationDate('');
   };
@@ -209,56 +235,144 @@ export function InstitucionDetail() {
     );
   };
 
-  const getDocCategoryBadge = (category?: string) => {
-    const cat = category || 'Administrativo';
-    if (cat === 'Legal') {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
-          <Shield className="w-3 h-3 text-purple-500 shrink-0" />
-          Legal
-        </span>
-      );
+  const handleDownloadDoc = async (doc: InstitutionDocument) => {
+    let dataUrl = doc.fileData;
+    if (!dataUrl) {
+      dataUrl = await getFileFromIndexedDB('inst_doc_' + doc.id);
     }
-    if (cat === 'Académico') {
+
+    // Convert dataUrl to a Blob URL for reliable, quota-free download of any file size
+    if (dataUrl && dataUrl.startsWith('data:')) {
+      try {
+        const parts = dataUrl.split(',');
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : (doc.fileName?.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream');
+        const b64 = parts[1];
+        const byteChars = atob(b64);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) {
+          byteNumbers[i] = byteChars.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = doc.fileName || (doc.name.toLowerCase().endsWith('.pdf') ? doc.name : `${doc.name}.pdf`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+        return;
+      } catch (err) {
+        console.error("Error creating Blob URL for download:", err);
+      }
+    }
+
+    if (!dataUrl) {
+      const content = 'Contenido del documento: ' + doc.name + '\nCargado el: ' + doc.uploadDate + '\nÁrea: ' + (doc.area || doc.category || 'General');
+      const blob = new Blob([content], { type: 'text/plain' });
+      dataUrl = URL.createObjectURL(blob);
+    }
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = doc.fileName || (doc.name.toLowerCase().endsWith('.pdf') ? doc.name : doc.name + '.pdf');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const getDocAreaBadge = (area?: string) => {
+    const a = area || 'General';
+    if (a === 'Académico') {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-          <GraduationCap className="w-3 h-3 text-blue-500 shrink-0" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+          <GraduationCap className="w-3.5 h-3.5 text-blue-600 shrink-0" />
           Académico
         </span>
       );
     }
+    if (a === 'Administrativo') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+          <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          Administrativo
+        </span>
+      );
+    }
+    if (a === 'Legal') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+          <Shield className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+          Legal
+        </span>
+      );
+    }
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-        <FileSpreadsheet className="w-3 h-3 text-slate-500 shrink-0" />
-        Administrativo
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+        <FileText className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+        General
       </span>
     );
   };
+  const getDocCategoryBadge = getDocAreaBadge;
 
   React.useEffect(() => {
-    if (viewingDoc?.fileData?.startsWith('data:application/pdf')) {
-      try {
-        const parts = viewingDoc.fileData.split(',');
-        const byteString = atob(parts[1]);
-        const arrayBuffer = new ArrayBuffer(byteString.length);
-        const uint8Array = new Uint8Array(arrayBuffer);
-        for (let i = 0; i < byteString.length; i++) {
-          uint8Array[i] = byteString.charCodeAt(i);
-        }
-        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        setActivePdfUrl(url);
-        
-        return () => {
-          URL.revokeObjectURL(url);
-        };
-      } catch (e) {
-        console.error("Error creating PDF blob URL:", e);
-        setActivePdfUrl(viewingDoc.fileData);
+    let activeUrl: string | null = null;
+    let isCancelled = false;
+
+    async function resolvePdfUrl() {
+      if (!viewingDoc) {
+        setActivePdfUrl(null);
+        setViewingDocFileData(null);
+        return;
       }
-    } else {
-      setActivePdfUrl(null);
+
+      let data = viewingDoc.fileData;
+      if (!data) {
+        data = await getFileFromIndexedDB('inst_doc_' + viewingDoc.id);
+      }
+
+      if (isCancelled) return;
+      setViewingDocFileData(data || null);
+
+      const isPdfLike = 
+        data?.includes('application/pdf') || 
+        data?.includes('application/x-pdf') || 
+        viewingDoc.fileName?.toLowerCase().endsWith('.pdf') || 
+        viewingDoc.name?.toLowerCase().endsWith('.pdf');
+
+      if (data && isPdfLike && data.includes('base64,')) {
+        try {
+          const parts = data.split(',');
+          const byteString = atob(parts[1]);
+          const arrayBuffer = new ArrayBuffer(byteString.length);
+          const uint8Array = new Uint8Array(arrayBuffer);
+          for (let i = 0; i < byteString.length; i++) {
+            uint8Array[i] = byteString.charCodeAt(i);
+          }
+          const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+          activeUrl = URL.createObjectURL(blob);
+          setActivePdfUrl(activeUrl);
+        } catch (e) {
+          console.error("Error creating PDF blob URL:", e);
+          setActivePdfUrl(data);
+        }
+      } else if (data && isPdfLike) {
+        setActivePdfUrl(data);
+      } else {
+        setActivePdfUrl(null);
+      }
     }
+
+    resolvePdfUrl();
+
+    return () => {
+      isCancelled = true;
+      if (activeUrl) {
+        URL.revokeObjectURL(activeUrl);
+      }
+    };
   }, [viewingDoc]);
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
@@ -1972,7 +2086,7 @@ DLX - International High School`;
         `"${(s.curp || en.curp || '').replace(/"/g, '""')}"`,
         `"${cls.id || ''}"`,
         `"${(cls.name || '').replace(/"/g, '""')}"`,
-        `"${cls.creditType || (item.creditTypeCategory === 'Full' ? 'Crédito Completo' : 'Medio Crédito')}"`,
+        `"${formatCreditType(cls.creditType) || (item.creditTypeCategory === 'Full' ? 'Full Credit' : 'Half Credit')}"`,
         `"${((prov?.commercialName || prov?.legalName) || '').replace(/"/g, '""')}"`,
         `"${en.startDate || en.activationDate || ''}"`,
         `"${en.endDate || ''}"`,
@@ -2445,9 +2559,9 @@ DLX - International High School`;
                       {numActiveEnrollments.toLocaleString()}
                     </p>
                     <div className="flex items-center gap-1 text-[10px] font-semibold leading-none">
-                      <span className="text-emerald-700 font-bold" title="Materias con Crédito Completo">{numActiveFullCredits} Full</span>
+                      <span className="text-emerald-700 font-bold" title="Materias con Full Credit">{numActiveFullCredits} Full</span>
                       <span className="text-slate-300">•</span>
-                      <span className="text-amber-700 font-bold" title="Materias con Medio Crédito">{numActiveHalfCredits} Half</span>
+                      <span className="text-amber-700 font-bold" title="Materias con Half Credit">{numActiveHalfCredits} Half</span>
                     </div>
                     <p className="text-[9px] font-medium text-slate-400 leading-none">
                       {numActiveClasses} {numActiveClasses === 1 ? 'distinta' : 'distintas'}
@@ -2878,19 +2992,19 @@ DLX - International High School`;
                             <p className="text-sm font-extrabold text-slate-800">{resolvedMembCost}</p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Crédito Completo</p>
+                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Full Credit</p>
                             <p className="text-sm font-bold text-slate-800">{resolvedPrices.priceFullCredit}</p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Medio Crédito</p>
+                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Half Credit</p>
                             <p className="text-sm font-bold text-slate-800">{resolvedPrices.priceHalfCredit}</p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Crédito AP</p>
+                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Full Credit AP</p>
                             <p className="text-sm font-bold text-slate-800">{resolvedPrices.priceFullApCredit}</p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Medio Crédito AP</p>
+                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1.5">Precio Half Credit AP</p>
                             <p className="text-sm font-bold text-slate-800">{resolvedPrices.priceHalfApCredit}</p>
                           </div>
                           <div>
@@ -3047,26 +3161,27 @@ DLX - International High School`;
                       <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                         <div>
                           <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Repositorio de Documentos</h4>
-                          <p className="text-[11px] text-slate-500 mt-0.5">Gestor de convenios, acuerdos de confidencialidad y actas constitutivas.</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Gestor de convenios, acuerdos de confidencialidad, expedientes académicos y administrativos.</p>
                         </div>
                         <button 
                           onClick={() => handleOpenUploadDocModal()}
                           className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded uppercase hover:bg-indigo-100 transition flex items-center cursor-pointer font-sans"
                         >
                           <Plus className="w-3.5 h-3.5 mr-1" />
-                          Subir Documento
+                          Subir Documentos
                         </button>
                       </div>
 
-                      {/* Hidden File Input */}
+                      {/* Hidden File Input (supports multi-file) */}
                       <input 
                         type="file" 
                         accept=".pdf"
+                        multiple
                         ref={fileInputRef} 
                         onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            handleOpenUploadDocModal(file);
+                          const files = e.target.files;
+                          if (files && files.length > 0) {
+                            handleOpenUploadDocModal(files);
                           }
                         }} 
                         className="hidden" 
@@ -3080,8 +3195,12 @@ DLX - International High School`;
                           e.preventDefault();
                           const files = e.dataTransfer.files;
                           if (files && files.length > 0) {
-                            const droppedFile = files[0];
-                            handleOpenUploadDocModal(droppedFile);
+                            const pdfFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+                            if (pdfFiles.length === 0) {
+                              alert("Por favor, selecciona archivos en formato PDF.");
+                              return;
+                            }
+                            handleOpenUploadDocModal(pdfFiles);
                           }
                         }}
                         className="border-2 border-dashed border-slate-150 rounded-xl p-6 text-center flex flex-col items-center justify-center bg-slate-50/50 hover:bg-slate-50 transition cursor-pointer group"
@@ -3090,7 +3209,43 @@ DLX - International High School`;
                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                          </svg>
                          <p className="text-xs font-semibold text-slate-700">Arrastra archivos PDF aquí o haz clic para buscar</p>
-                         <p className="text-[10px] text-slate-400 mt-0.5">Soporta formato PDF oficial con categorización y vigencia</p>
+                         <p className="text-[10px] text-slate-400 mt-0.5">Soporta formato PDF oficial con clasificación por Área (Académico, Administrativo, Legal, General) y control de vigencia</p>
+                      </div>
+
+                      {/* Filter by Area Pills */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {(['Todos', 'Académico', 'Administrativo', 'Legal', 'General'] as const).map(area => {
+                            const isSelected = docAreaFilter === area;
+                            const count = area === 'Todos'
+                              ? (institution.documentsList || []).length
+                              : (institution.documentsList || []).filter(d => (d.area || d.category || 'General') === area).length;
+                            return (
+                              <button
+                                key={area}
+                                type="button"
+                                onClick={() => setDocAreaFilter(area)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                }`}
+                              >
+                                <span>{area}</span>
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
+                                  isSelected ? 'bg-indigo-800/60 text-white' : 'bg-slate-100 text-slate-500'
+                                }`}>
+                                  {count}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-medium">
+                          Mostrando {
+                            (institution.documentsList || []).filter(doc => docAreaFilter === 'Todos' || (doc.area || doc.category || 'General') === docAreaFilter).length
+                          } documentos
+                        </span>
                       </div>
 
                       <div className="border border-slate-200 rounded-xl overflow-hidden mt-2">
@@ -3098,7 +3253,7 @@ DLX - International High School`;
                           <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
                             <tr>
                               <th className="px-4 py-3 border-b border-slate-200">Nombre del Documento</th>
-                              <th className="px-4 py-3 border-b border-slate-200">Categoría</th>
+                              <th className="px-4 py-3 border-b border-slate-200">Área</th>
                               <th className="px-4 py-3 border-b border-slate-200">Vencimiento</th>
                               <th className="px-4 py-3 border-b border-slate-200">Archivo Adjunto</th>
                               <th className="px-4 py-3 border-b border-slate-200">Tamaño</th>
@@ -3112,97 +3267,108 @@ DLX - International High School`;
                                 <td colSpan={7} className="px-4 py-8 text-center text-slate-400">No hay documentos cargados en el expediente de esta institución.</td>
                               </tr>
                             ) : (
-                              institution.documentsList.map((doc) => (
-                                <tr key={doc.id} className="hover:bg-slate-50/50">
-                                  <td className="px-4 py-3 font-semibold text-slate-800">
-                                    <div className="flex items-center">
-                                      <FileText className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
-                                      {doc.name}
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    {getDocCategoryBadge(doc.category)}
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    {getDocExpirationBadge(doc)}
-                                  </td>
-                                  <td className="px-4 py-3 text-slate-500 italic max-w-[140px] truncate">
-                                    {doc.fileName || 'Carga Directa'}
-                                  </td>
-                                  <td className="px-4 py-3 text-slate-500 font-mono">{doc.fileSize}</td>
-                                  <td className="px-4 py-3 text-slate-500 font-mono">{doc.uploadDate}</td>
-                                  <td className="px-4 py-3 text-right">
-                                    <div className="flex justify-end items-center space-x-1.5">
-                                      <button 
-                                        onClick={() => setViewingDoc(doc)}
-                                        className="text-slate-500 hover:text-slate-800 p-1 hover:bg-slate-100 rounded transition"
-                                        title="Ver Documento"
-                                      >
-                                        <Eye className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button 
-                                        onClick={() => {
-                                          setEditingDoc(doc);
-                                          setEditingDocName(doc.name);
-                                          setEditingDocDate(doc.uploadDate || new Date().toISOString().split('T')[0]);
-                                          setEditingDocCategory(doc.category || 'Legal');
-                                          setEditingDocHasExpiration(!!doc.hasExpiration);
-                                          setEditingDocExpirationDate(doc.expirationDate || '');
-                                          setIsEditDocModalOpen(true);
-                                        }}
-                                        className="text-slate-500 hover:text-indigo-600 p-1 hover:bg-indigo-50 rounded transition"
-                                        title="Editar Documento"
-                                      >
-                                        <Edit2 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button 
-                                        onClick={() => {
-                                          const link = document.createElement('a');
-                                          let dataUrl = doc.fileData;
-                                          if (!dataUrl) {
-                                            const content = 'Contenido del documento: ' + doc.name + '\nCargado el: ' + doc.uploadDate;
-                                            const blob = new Blob([content], { type: 'text/plain' });
-                                            dataUrl = URL.createObjectURL(blob);
-                                          }
-                                          link.href = dataUrl;
-                                          link.download = doc.fileName || doc.name + '.txt';
-                                          document.body.appendChild(link);
-                                          link.click();
-                                          document.body.removeChild(link);
-                                        }}
-                                        className="text-slate-500 hover:text-emerald-600 p-1 hover:bg-emerald-50 rounded transition"
-                                        title="Descargar"
-                                      >
-                                        <Download className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button 
-                                        onClick={() => {
-                                          setDeleteConfirm({
-                                            title: "Eliminar Documento",
-                                            message: `¿Estás seguro de que deseas eliminar permanentemente el archivo "${doc.fileName || doc.name}"? Esta acción borrará el registro oficial de forma irreversible y purgará el archivo físico del almacenamiento digital.`,
-                                            onConfirm: () => {
-                                              if (doc.fileData && doc.fileData.startsWith('blob:')) {
-                                                try {
-                                                  URL.revokeObjectURL(doc.fileData);
-                                                } catch (e) {
-                                                  console.error("Error revoking Object URL:", e);
+                              (() => {
+                                const docs = (institution.documentsList || [])
+                                  .filter(doc => docAreaFilter === 'Todos' || (doc.area || doc.category || 'General') === docAreaFilter)
+                                  .sort((a, b) => b.uploadDate.localeCompare(a.uploadDate));
+
+                                if (docs.length === 0) {
+                                  return (
+                                    <tr>
+                                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400 font-medium">
+                                        No hay documentos bajo el área "{docAreaFilter}".
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+
+                                return docs.map((doc) => (
+                                  <tr key={doc.id} className="hover:bg-slate-50/50">
+                                    <td className="px-4 py-3 font-semibold text-slate-800">
+                                      <div className="flex items-center">
+                                        <FileText className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
+                                        {doc.name}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      {getDocAreaBadge(doc.area || doc.category)}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      {getDocExpirationBadge(doc)}
+                                    </td>
+                                    <td className="px-4 py-3 text-slate-500 max-w-[170px]">
+                                      <div className="flex flex-col">
+                                        <span className="truncate italic text-slate-700 font-medium">{doc.fileName || 'Carga Directa'}</span>
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 mt-0.5">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                          Resguardado permanente
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-slate-500 font-mono">{doc.fileSize}</td>
+                                    <td className="px-4 py-3 text-slate-500 font-mono">{doc.uploadDate}</td>
+                                    <td className="px-4 py-3 text-right">
+                                      <div className="flex justify-end items-center space-x-1.5">
+                                        <button 
+                                          onClick={() => setViewingDoc(doc)}
+                                          className="text-slate-500 hover:text-slate-800 p-1 hover:bg-slate-100 rounded transition"
+                                          title="Ver Documento"
+                                        >
+                                          <Eye className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button 
+                                          onClick={() => {
+                                            setEditingDoc(doc);
+                                            setEditingDocName(doc.name);
+                                            setEditingDocDate(doc.uploadDate || new Date().toISOString().split('T')[0]);
+                                            setEditingDocArea(doc.area || doc.category || 'Académico');
+                                            setEditingDocCategory(doc.area || doc.category || 'Académico');
+                                            setEditingDocHasExpiration(!!doc.hasExpiration);
+                                            setEditingDocExpirationDate(doc.expirationDate || '');
+                                            setIsEditDocModalOpen(true);
+                                          }}
+                                          className="text-slate-500 hover:text-indigo-600 p-1 hover:bg-indigo-50 rounded transition"
+                                          title="Editar Documento"
+                                        >
+                                          <Edit2 className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button 
+                                          onClick={() => handleDownloadDoc(doc)}
+                                          className="text-slate-500 hover:text-emerald-600 p-1 hover:bg-emerald-50 rounded transition"
+                                          title="Descargar"
+                                        >
+                                          <Download className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button 
+                                          onClick={() => {
+                                            setDeleteConfirm({
+                                              title: "Eliminar Documento",
+                                              message: `¿Estás seguro de que deseas eliminar permanentemente el archivo "${doc.fileName || doc.name}"? Esta acción borrará el registro oficial de forma irreversible y purgará el archivo físico del almacenamiento digital.`,
+                                              onConfirm: async () => {
+                                                if (doc.fileData && doc.fileData.startsWith('blob:')) {
+                                                  try {
+                                                    URL.revokeObjectURL(doc.fileData);
+                                                  } catch (e) {
+                                                    console.error("Error revoking Object URL:", e);
+                                                  }
                                                 }
+                                                await deleteFileFromIndexedDB('inst_doc_' + doc.id);
+                                                const fresh = (institution.documentsList || []).filter(d => d.id !== doc.id);
+                                                updateInstitution(institution.id, { documentsList: fresh });
+                                                console.log(`Documento institucional ID ${doc.id} purgado con éxito de la base de almacenamiento.`);
                                               }
-                                              const fresh = (institution.documentsList || []).filter(d => d.id !== doc.id);
-                                              updateInstitution(institution.id, { documentsList: fresh });
-                                              console.log(`Documento institucional ID ${doc.id} purgado con éxito de la base de almacenamiento.`);
-                                            }
-                                          });
-                                        }}
-                                        className="text-slate-400 hover:text-red-600 p-1 hover:bg-red-50 rounded transition cursor-pointer"
-                                        title="Borrar"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))
+                                            });
+                                          }}
+                                          className="text-slate-400 hover:text-red-600 p-1 hover:bg-red-50 rounded transition cursor-pointer"
+                                          title="Borrar"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ));
+                              })()
                             )}
                           </tbody>
                         </table>
@@ -4986,23 +5152,20 @@ DLX - International High School`;
                       className="text-xs font-bold text-white bg-indigo-600 px-4 py-2.5 rounded-xl uppercase hover:bg-indigo-700 transition flex items-center cursor-pointer font-sans shadow-sm border-0 self-start sm:self-center"
                     >
                       <Plus className="w-3.5 h-3.5 mr-1" />
-                      Subir Documento (PDF)
+                      Subir Documentos (PDF)
                     </button>
                   </div>
 
-                  {/* Hidden File Input */}
+                  {/* Hidden File Input (supports multi-file) */}
                   <input 
                     type="file" 
                     accept=".pdf"
+                    multiple
                     id="main-tab-file-input"
                     onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        if (!file.name.toLowerCase().endsWith('.pdf')) {
-                          alert("Por favor, selecciona un archivo en formato PDF.");
-                          return;
-                        }
-                        handleOpenUploadDocModal(file);
+                      const files = e.target.files;
+                      if (files && files.length > 0) {
+                        handleOpenUploadDocModal(files);
                       }
                     }} 
                     className="hidden" 
@@ -5019,41 +5182,41 @@ DLX - International High School`;
                       e.preventDefault();
                       const files = e.dataTransfer.files;
                       if (files && files.length > 0) {
-                        const droppedFile = files[0];
-                        if (!droppedFile.name.toLowerCase().endsWith('.pdf')) {
-                          alert("Por favor, arrastra un archivo en formato PDF.");
+                        const pdfFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+                        if (pdfFiles.length === 0) {
+                          alert("Por favor, arrastra archivos en formato PDF.");
                           return;
                         }
-                        handleOpenUploadDocModal(droppedFile);
+                        handleOpenUploadDocModal(pdfFiles);
                       }
                     }}
                     className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center flex flex-col items-center justify-center bg-slate-50/50 hover:bg-slate-50 transition cursor-pointer group"
                   >
                      <Upload className="w-8 h-8 text-indigo-500 mb-2 group-hover:scale-110 transition-transform" />
                      <p className="text-xs font-bold text-slate-700">Arrastra archivos PDF aquí o haz clic para buscar</p>
-                     <p className="text-[10px] text-slate-400 mt-1">Soporta formato PDF oficial con categorización (Legal, Académico, Administrativo) y control de vigencia</p>
+                     <p className="text-[10px] text-slate-400 mt-1">Soporta formato PDF oficial con clasificación por Área (Académico, Administrativo, Legal, General) y control de vigencia</p>
                   </div>
 
-                  {/* Category Filter Pills */}
+                  {/* Area Filter Pills */}
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      {(['Todos', 'Legal', 'Académico', 'Administrativo'] as const).map(cat => {
-                        const isSelected = docCategoryFilter === cat;
-                        const count = cat === 'Todos' 
+                      {(['Todos', 'Académico', 'Administrativo', 'Legal', 'General'] as const).map(area => {
+                        const isSelected = docAreaFilter === area;
+                        const count = area === 'Todos' 
                           ? (institution.documentsList || []).length 
-                          : (institution.documentsList || []).filter(d => (d.category || 'Administrativo') === cat).length;
+                          : (institution.documentsList || []).filter(d => (d.area || d.category || 'General') === area).length;
                         return (
                           <button
-                            key={cat}
+                            key={area}
                             type="button"
-                            onClick={() => setDocCategoryFilter(cat)}
+                            onClick={() => setDocAreaFilter(area)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
                               isSelected
                                 ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                             }`}
                           >
-                            <span>{cat}</span>
+                            <span>{area}</span>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
                               isSelected ? 'bg-indigo-800/60 text-white' : 'bg-slate-100 text-slate-500'
                             }`}>
@@ -5065,7 +5228,7 @@ DLX - International High School`;
                     </div>
                     <span className="text-[11px] text-slate-400 font-medium">
                       Mostrando {
-                        [...(institution.documentsList || [])].filter(doc => docCategoryFilter === 'Todos' || (doc.category || 'Administrativo') === docCategoryFilter).length
+                        [...(institution.documentsList || [])].filter(doc => docAreaFilter === 'Todos' || (doc.area || doc.category || 'General') === docAreaFilter).length
                       } documentos
                     </span>
                   </div>
@@ -5076,7 +5239,7 @@ DLX - International High School`;
                         <tr>
                           <th className="px-4 py-3 border-b border-slate-200">Fecha de Carga</th>
                           <th className="px-4 py-3 border-b border-slate-200">Nombre del Documento</th>
-                          <th className="px-4 py-3 border-b border-slate-200">Categoría</th>
+                          <th className="px-4 py-3 border-b border-slate-200">Área</th>
                           <th className="px-4 py-3 border-b border-slate-200">Vencimiento</th>
                           <th className="px-4 py-3 border-b border-slate-200">Archivo Adjunto</th>
                           <th className="px-4 py-3 border-b border-slate-200">Tamaño</th>
@@ -5091,14 +5254,14 @@ DLX - International High School`;
                         ) : (
                           (() => {
                             const docs = [...(institution.documentsList || [])]
-                              .filter(doc => docCategoryFilter === 'Todos' || (doc.category || 'Administrativo') === docCategoryFilter)
+                              .filter(doc => docAreaFilter === 'Todos' || (doc.area || doc.category || 'General') === docAreaFilter)
                               .sort((a,b) => b.uploadDate.localeCompare(a.uploadDate));
                             
                             if (docs.length === 0) {
                               return (
                                 <tr>
                                   <td colSpan={7} className="px-4 py-10 text-center text-slate-400 font-medium">
-                                    No hay documentos bajo la categoría "{docCategoryFilter}".
+                                    No hay documentos bajo el área "{docAreaFilter}".
                                   </td>
                                 </tr>
                               );
@@ -5116,13 +5279,19 @@ DLX - International High School`;
                                   </div>
                                 </td>
                                 <td className="px-4 py-3">
-                                  {getDocCategoryBadge(doc.category)}
+                                  {getDocAreaBadge(doc.area || doc.category)}
                                 </td>
                                 <td className="px-4 py-3">
                                   {getDocExpirationBadge(doc)}
                                 </td>
-                                <td className="px-4 py-3 text-slate-500 italic max-w-[140px] truncate">
-                                  {doc.fileName || 'Carga Directa'}
+                                <td className="px-4 py-3 text-slate-500 max-w-[170px]">
+                                  <div className="flex flex-col">
+                                    <span className="truncate italic text-slate-700 font-medium">{doc.fileName || 'Carga Directa'}</span>
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 mt-0.5">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                      Resguardado permanente
+                                    </span>
+                                  </div>
                                 </td>
                                 <td className="px-4 py-3 text-slate-550 font-mono">{doc.fileSize}</td>
                                 <td className="px-4 py-3 text-right">
@@ -5139,7 +5308,8 @@ DLX - International High School`;
                                         setEditingDoc(doc);
                                         setEditingDocName(doc.name);
                                         setEditingDocDate(doc.uploadDate || new Date().toISOString().split('T')[0]);
-                                        setEditingDocCategory(doc.category || 'Legal');
+                                        setEditingDocArea(doc.area || doc.category || 'Académico');
+                                        setEditingDocCategory(doc.area || doc.category || 'Académico');
                                         setEditingDocHasExpiration(!!doc.hasExpiration);
                                         setEditingDocExpirationDate(doc.expirationDate || '');
                                         setIsEditDocModalOpen(true);
@@ -5150,20 +5320,7 @@ DLX - International High School`;
                                       <Edit2 className="w-4 h-4" />
                                     </button>
                                     <button 
-                                      onClick={() => {
-                                        const link = document.createElement('a');
-                                        let dataUrl = doc.fileData;
-                                        if (!dataUrl) {
-                                          const content = 'Contenido del documento: ' + doc.name + '\nCargado el: ' + doc.uploadDate;
-                                          const blob = new Blob([content], { type: 'text/plain' });
-                                          dataUrl = URL.createObjectURL(blob);
-                                        }
-                                        link.href = dataUrl;
-                                        link.download = doc.fileName || doc.name + '.txt';
-                                        document.body.appendChild(link);
-                                        link.click();
-                                        document.body.removeChild(link);
-                                      }}
+                                      onClick={() => handleDownloadDoc(doc)}
                                       className="text-slate-500 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded-lg transition-colors border-0 bg-transparent cursor-pointer"
                                       title="Descargar"
                                     >
@@ -5174,7 +5331,7 @@ DLX - International High School`;
                                         setDeleteConfirm({
                                           title: "Eliminar Documento",
                                           message: `¿Estás seguro de que deseas eliminar permanentemente el archivo "${doc.fileName || doc.name}" del perfil de esta institución? Esta acción borrará el registro oficial de forma irreversible y purgará el archivo físico del almacenamiento digital.`,
-                                          onConfirm: () => {
+                                          onConfirm: async () => {
                                             if (doc.fileData && doc.fileData.startsWith('blob:')) {
                                               try {
                                                 URL.revokeObjectURL(doc.fileData);
@@ -5182,6 +5339,7 @@ DLX - International High School`;
                                                 console.error("Error revoking Object URL:", e);
                                               }
                                             }
+                                            await deleteFileFromIndexedDB('inst_doc_' + doc.id);
                                             const fresh = (institution.documentsList || []).filter(d => d.id !== doc.id);
                                             updateInstitution(institution.id, { documentsList: fresh });
                                             console.log(`Documento institucional ID ${doc.id} purgado con éxito de la base de almacenamiento.`);
@@ -6104,58 +6262,85 @@ DLX - International High School`;
         </form>
       </Modal>
 
-      <Modal isOpen={isDetailDocModalOpen} onClose={handleCloseUploadDocModal} title="Cargar Convenio / Documento (PDF)">
-        <form onSubmit={(e) => {
+      <Modal isOpen={isDetailDocModalOpen} onClose={handleCloseUploadDocModal} title={selectedFiles.length > 1 ? `Cargar Documentos en Lote (${selectedFiles.length} archivos)` : "Cargar Convenio / Documento (PDF)"}>
+        <form onSubmit={async (e) => {
           e.preventDefault();
-          if (!detailDocName.trim()) return;
+          if (selectedFiles.length === 0 && !detailDocName.trim()) return;
           
-          const processAndSave = (base64Data?: string) => {
-            const fresh: InstitutionDocument[] = [
-              ...(institution.documentsList || []),
-              {
-                id: Math.random().toString(36).substr(2, 9),
-                name: detailDocName,
-                fileName: selectedFile ? selectedFile.name : 'Convenio_Carga_Manual.pdf',
-                fileSize: selectedFile 
-                  ? (selectedFile.size / (1024 * 1024)).toFixed(2) + " MB" 
-                  : (Math.random() * (4.5 - 0.5) + 0.5).toFixed(1) + " MB",
+          setIsUploadingDocs(true);
+          try {
+            const filesToProcess: (File | null)[] = selectedFiles.length > 0 ? selectedFiles : [null];
+            const newDocs: InstitutionDocument[] = [];
+
+            for (const file of filesToProcess) {
+              const docId = Math.random().toString(36).substr(2, 9);
+              let base64Data: string | undefined = undefined;
+              let docName = detailDocName.trim();
+              let fileName = 'Convenio_Carga_Manual.pdf';
+              let fileSize = (Math.random() * (4.5 - 0.5) + 0.5).toFixed(1) + " MB";
+
+              if (file) {
+                fileName = file.name;
+                fileSize = (file.size / (1024 * 1024)).toFixed(2) + " MB";
+                if (!docName || selectedFiles.length > 1) {
+                  const idx = file.name.lastIndexOf('.');
+                  docName = idx !== -1 ? file.name.substring(0, idx) : file.name;
+                }
+
+                base64Data = await new Promise<string>((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = (evt) => resolve(evt.target?.result as string);
+                  reader.onerror = reject;
+                  reader.readAsDataURL(file);
+                });
+
+                // Store in IndexedDB for reliable persistent storage
+                await saveFileToIndexedDB('inst_doc_' + docId, base64Data);
+              }
+
+              newDocs.push({
+                id: docId,
+                name: docName || 'Documento Oficial',
+                fileName,
+                fileSize,
                 uploadDate: detailDocDate || new Date().toISOString().split('T')[0],
                 fileData: base64Data,
-                category: detailDocCategory,
+                area: detailDocArea,
+                category: detailDocArea,
                 hasExpiration: detailDocHasExpiration,
                 expirationDate: detailDocHasExpiration ? detailDocExpirationDate : undefined
-              }
-            ];
-            updateInstitution(institution.id, { documentsList: fresh });
-            handleCloseUploadDocModal();
-          };
+              });
+            }
 
-          if (selectedFile) {
-            const reader = new FileReader();
-            reader.onload = (evt) => {
-              processAndSave(evt.target?.result as string);
-            };
-            reader.readAsDataURL(selectedFile);
-          } else {
-            processAndSave();
+            addInstitutionDocuments(institution.id, newDocs);
+            handleCloseUploadDocModal();
+          } catch (err) {
+            console.error("Error al procesar archivos de documento:", err);
+            alert("Ocurrió un error al procesar los archivos. Por favor intenta de nuevo.");
+          } finally {
+            setIsUploadingDocs(false);
           }
         }} className="space-y-4 font-sans text-left">
-          {/* Categoría */}
+          {/* Campo Área */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Categoría</label>
-            <div className="grid grid-cols-3 gap-2">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Área</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[
-                { id: 'Legal' as const, label: 'Legal', icon: Shield, desc: 'Convenios, actas' },
-                { id: 'Académico' as const, label: 'Académico', icon: GraduationCap, desc: 'Acreditaciones, planes' },
-                { id: 'Administrativo' as const, label: 'Administrativo', icon: FileSpreadsheet, desc: 'Oficios, facturas' },
+                { id: 'Académico' as const, label: 'Académico', icon: GraduationCap, desc: 'Acreditaciones y planes' },
+                { id: 'Administrativo' as const, label: 'Administrativo', icon: FileSpreadsheet, desc: 'Oficios y actas' },
+                { id: 'Legal' as const, label: 'Legal', icon: Shield, desc: 'Convenios y contratos' },
+                { id: 'General' as const, label: 'General', icon: FileText, desc: 'Expedientes varios' },
               ].map((cat) => {
                 const Icon = cat.icon;
-                const isSelected = detailDocCategory === cat.id;
+                const isSelected = detailDocArea === cat.id;
                 return (
                   <button
                     key={cat.id}
                     type="button"
-                    onClick={() => setDetailDocCategory(cat.id)}
+                    onClick={() => {
+                      setDetailDocArea(cat.id);
+                      setDetailDocCategory(cat.id);
+                    }}
                     className={`p-2.5 rounded-xl border text-left transition flex flex-col items-start cursor-pointer ${
                       isSelected
                         ? 'bg-indigo-50/80 border-indigo-500 text-indigo-900 ring-2 ring-indigo-500/20 shadow-xs'
@@ -6173,17 +6358,19 @@ DLX - International High School`;
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Nombre Descriptivo del Documento</label>
-            <input 
-              type="text" 
-              required 
-              value={detailDocName} 
-              onChange={e => setDetailDocName(e.target.value)} 
-              className="w-full border border-slate-200 bg-white rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
-              placeholder="Ej. Convenio Marco de Cooperación 2025" 
-            />
-          </div>
+          {selectedFiles.length <= 1 && (
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Nombre Descriptivo del Documento</label>
+              <input 
+                type="text" 
+                required={selectedFiles.length === 0}
+                value={detailDocName} 
+                onChange={e => setDetailDocName(e.target.value)} 
+                className="w-full border border-slate-200 bg-white rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                placeholder="Ej. Convenio Marco de Cooperación 2025" 
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Fecha del Documento</label>
@@ -6250,41 +6437,82 @@ DLX - International High School`;
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Archivo Adjunto (Solo PDF)</label>
-            {selectedFile ? (
-              <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-3 flex items-center justify-between">
-                <div className="flex items-center space-x-2.5 min-w-0">
-                  <div className="p-2 bg-indigo-100/60 text-indigo-700 rounded-lg shrink-0">
-                    <FileText className="w-5 h-5" />
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                {selectedFiles.length > 1 ? `Archivos Adjuntos (${selectedFiles.length} seleccionados)` : 'Archivo Adjunto (Solo PDF)'}
+              </label>
+              {selectedFiles.length > 0 && (
+                <label className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 cursor-pointer">
+                  + Agregar más
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const additionalFiles = e.target.files;
+                      if (additionalFiles && additionalFiles.length > 0) {
+                        const validPdfs = Array.from(additionalFiles).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+                        if (validPdfs.length > 0) {
+                          setSelectedFiles(prev => [...prev, ...validPdfs]);
+                        }
+                      }
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+
+            {selectedFiles.length > 0 ? (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {selectedFiles.map((file, idx) => (
+                  <div key={idx} className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-2.5 flex items-center justify-between">
+                    <div className="flex items-center space-x-2.5 min-w-0">
+                      <div className="p-1.5 bg-indigo-100/60 text-indigo-700 rounded-lg shrink-0">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-800 truncate">{file.name}</p>
+                        <p className="text-[10px] text-slate-500 font-bold font-mono mt-0.5">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = selectedFiles.filter((_, i) => i !== idx);
+                        setSelectedFiles(updated);
+                        if (updated.length === 1) {
+                          const idxDot = updated[0].name.lastIndexOf('.');
+                          setDetailDocName(idxDot !== -1 ? updated[0].name.substring(0, idxDot) : updated[0].name);
+                        } else if (updated.length === 0) {
+                          setDetailDocName('');
+                        }
+                      }}
+                      className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase bg-red-50 hover:bg-red-100 border border-red-100 rounded px-2 py-1 transition ml-3 shrink-0"
+                    >
+                      Quitar
+                    </button>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-slate-800 truncate">{selectedFile.name}</p>
-                    <p className="text-[10px] text-slate-500 font-bold font-mono mt-0.5">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedFile(null)}
-                  className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase bg-red-50 hover:bg-red-100 border border-red-100 rounded px-2.5 py-1.5 transition ml-3 shrink-0"
-                >
-                  Cambiar
-                </button>
+                ))}
               </div>
             ) : (
               <input 
                 type="file" 
                 accept=".pdf"
+                multiple
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    if (!file.name.toLowerCase().endsWith('.pdf')) {
-                      alert("Por favor, selecciona un archivo en formato PDF.");
+                  const files = e.target.files;
+                  if (files && files.length > 0) {
+                    const validPdfs = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+                    if (validPdfs.length === 0) {
+                      alert("Por favor, selecciona archivos en formato PDF.");
                       return;
                     }
-                    setSelectedFile(file);
-                    if (!detailDocName) {
-                      const idx = file.name.lastIndexOf('.');
-                      const baseName = idx !== -1 ? file.name.substring(0, idx) : file.name;
+                    setSelectedFiles(validPdfs);
+                    setSelectedFile(validPdfs[0]);
+                    if (validPdfs.length === 1 && !detailDocName) {
+                      const idx = validPdfs[0].name.lastIndexOf('.');
+                      const baseName = idx !== -1 ? validPdfs[0].name.substring(0, idx) : validPdfs[0].name;
                       setDetailDocName(baseName);
                     }
                   }
@@ -6295,7 +6523,16 @@ DLX - International High School`;
           </div>
           <div className="pt-4 flex justify-end space-x-2 border-t border-slate-100">
             <button type="button" onClick={handleCloseUploadDocModal} className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 uppercase tracking-wider transition">Cancelar</button>
-            <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-bold transition uppercase tracking-wider shadow-sm cursor-pointer border-0">Subir Documento</button>
+            <button 
+              type="submit" 
+              disabled={isUploadingDocs}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-bold transition uppercase tracking-wider shadow-sm cursor-pointer border-0 disabled:opacity-50"
+            >
+              {isUploadingDocs 
+                ? "Procesando y Subiendo..." 
+                : (selectedFiles.length > 1 ? `Subir ${selectedFiles.length} Documentos` : "Subir Documento")
+              }
+            </button>
           </div>
         </form>
       </Modal>
@@ -6311,7 +6548,8 @@ DLX - International High School`;
                 ...d, 
                 name: editingDocName, 
                 uploadDate: editingDocDate,
-                category: editingDocCategory,
+                area: editingDocArea,
+                category: editingDocArea,
                 hasExpiration: editingDocHasExpiration,
                 expirationDate: editingDocHasExpiration ? editingDocExpirationDate : undefined
               };
@@ -6322,22 +6560,26 @@ DLX - International High School`;
           setIsEditDocModalOpen(false);
           setEditingDoc(null);
         }} className="space-y-4 font-sans text-left">
-          {/* Categoría */}
+          {/* Campo Área */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Categoría</label>
-            <div className="grid grid-cols-3 gap-2">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Área</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[
-                { id: 'Legal' as const, label: 'Legal', icon: Shield, desc: 'Convenios, actas' },
-                { id: 'Académico' as const, label: 'Académico', icon: GraduationCap, desc: 'Acreditaciones, planes' },
-                { id: 'Administrativo' as const, label: 'Administrativo', icon: FileSpreadsheet, desc: 'Oficios, facturas' },
+                { id: 'Académico' as const, label: 'Académico', icon: GraduationCap, desc: 'Acreditaciones y planes' },
+                { id: 'Administrativo' as const, label: 'Administrativo', icon: FileSpreadsheet, desc: 'Oficios y actas' },
+                { id: 'Legal' as const, label: 'Legal', icon: Shield, desc: 'Convenios y contratos' },
+                { id: 'General' as const, label: 'General', icon: FileText, desc: 'Expedientes varios' },
               ].map((cat) => {
                 const Icon = cat.icon;
-                const isSelected = editingDocCategory === cat.id;
+                const isSelected = editingDocArea === cat.id;
                 return (
                   <button
                     key={cat.id}
                     type="button"
-                    onClick={() => setEditingDocCategory(cat.id)}
+                    onClick={() => {
+                      setEditingDocArea(cat.id);
+                      setEditingDocCategory(cat.id);
+                    }}
                     className={`p-2.5 rounded-xl border text-left transition flex flex-col items-start cursor-pointer ${
                       isSelected
                         ? 'bg-indigo-50/80 border-indigo-500 text-indigo-900 ring-2 ring-indigo-500/20 shadow-xs'
@@ -6440,16 +6682,16 @@ DLX - International High School`;
               <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-2.5 text-[10px] text-slate-500 font-semibold uppercase tracking-wider items-center">
                 <span>Fecha: <strong className="text-slate-700">{viewingDoc?.uploadDate}</strong></span>
                 <span>Tamaño: <strong className="text-slate-700">{viewingDoc?.fileSize}</strong></span>
-                <span className="flex items-center gap-1">Categoría: {getDocCategoryBadge(viewingDoc?.category)}</span>
+                <span className="flex items-center gap-1">Área: {getDocAreaBadge(viewingDoc?.area || viewingDoc?.category)}</span>
                 <span className="flex items-center gap-1">Vigencia: {viewingDoc ? getDocExpirationBadge(viewingDoc) : '—'}</span>
               </div>
             </div>
           </div>
           
           <div className="border border-slate-200 rounded-lg p-2 bg-slate-50/50 text-center text-slate-400 text-xs flex flex-col items-center justify-center min-h-[300px]">
-            {viewingDoc?.fileData?.startsWith('data:image/') ? (
-              <img src={viewingDoc.fileData} alt={viewingDoc.name} className="max-h-[350px] object-contain rounded hover:scale-101 transition p-2" referrerPolicy="no-referrer" />
-            ) : (viewingDoc?.fileData?.startsWith('data:application/pdf') || viewingDoc?.fileName?.toLowerCase().endsWith('.pdf')) ? (() => {
+            {(viewingDocFileData?.startsWith('data:image/') || viewingDoc?.fileData?.startsWith('data:image/')) ? (
+              <img src={viewingDocFileData || viewingDoc.fileData} alt={viewingDoc.name} className="max-h-[350px] object-contain rounded hover:scale-101 transition p-2" referrerPolicy="no-referrer" />
+            ) : (activePdfUrl || viewingDoc?.fileData?.startsWith('data:application/pdf') || viewingDoc?.fileName?.toLowerCase().endsWith('.pdf')) ? (() => {
               const rTitle = viewingDoc.name || "Documento Administrativo";
               const rFileName = viewingDoc.fileName || `${rTitle.replace(/\s+/g, '_')}.pdf`;
               const rDate = viewingDoc.uploadDate || new Date().toISOString().split('T')[0];
@@ -6775,21 +7017,10 @@ DLX - International High School`;
               type="button" 
               onClick={() => {
                 if (viewingDoc) {
-                  const link = document.createElement('a');
-                  let dataUrl = viewingDoc.fileData;
-                  if (!dataUrl) {
-                    const content = 'Contenido del documento: ' + viewingDoc.name + '\nCargado el: ' + viewingDoc.uploadDate;
-                    const blob = new Blob([content], { type: 'text/plain' });
-                    dataUrl = URL.createObjectURL(blob);
-                  }
-                  link.href = dataUrl;
-                  link.download = viewingDoc.fileName || viewingDoc.name + '.pdf';
-                  document.body.appendChild(link);
-                  link.click();
-                  document.body.removeChild(link);
+                  handleDownloadDoc(viewingDoc);
                 }
               }} 
-              className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded text-xs font-bold uppercase transition flex items-center shrink-0 border border-emerald-200 border-0 cursor-pointer"
+              className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded text-xs font-bold uppercase transition flex items-center shrink-0 border border-emerald-200 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5 mr-1" />
               Descargar Archivo

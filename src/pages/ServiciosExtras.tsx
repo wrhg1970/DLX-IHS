@@ -199,7 +199,7 @@ export function ServiciosExtras() {
     addClass({
       name: className,
       code: `EXT-${service.name.toUpperCase().replace(/[^A-Z]/g, "").substring(0, 8)}`,
-      creditType: "Crédito completo",
+      creditType: "Full Credit",
       syllabus: `Syllabus automático para el Servicio Extra: ${service.name}`,
       validity: "2030-12-31",
       providerId: providerId

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { 
   Clock, 
@@ -74,6 +74,13 @@ export function Inicio() {
   const [filterStatus, setFilterStatus] = useState<string>("Todas"); // "Todas", "Pendientes", "Completadas"
   const [filterDesde, setFilterDesde] = useState<string>("");
   const [filterHasta, setFilterHasta] = useState<string>("");
+
+  // Redirect to Dashboard de Alertas if hash is present
+  useEffect(() => {
+    if (window.location.hash === '#alertas' || window.location.hash === '#dashboard-alertas') {
+      navigate('/alertas');
+    }
+  }, [navigate]);
 
   // Expiring contracts list modal state
   const [isExpiringModalOpen, setIsExpiringModalOpen] = useState(false);
@@ -468,9 +475,19 @@ export function Inicio() {
               Bienvenido a tu panel de control de <strong className="text-white font-bold leading-none">IHS Manager</strong>. 
               Todo lo que necesitas está a un click de distancia.
             </p>
-            <div className="inline-flex items-center space-x-2 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 px-4 py-2 rounded-xl text-xs font-bold text-sky-300 transition-colors cursor-pointer mt-2 shadow-sm select-none">
-              <Calendar className="w-4 h-4 text-sky-400" />
-              <span>{formattedToday}</span>
+            <div className="flex flex-wrap items-center gap-3 mt-2">
+              <div className="inline-flex items-center space-x-2 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 px-4 py-2 rounded-xl text-xs font-bold text-sky-300 transition-colors cursor-pointer shadow-sm select-none">
+                <Calendar className="w-4 h-4 text-sky-400" />
+                <span>{formattedToday}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/alertas')}
+                className="inline-flex items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white font-black px-4 py-2.5 rounded-xl text-xs tracking-wider uppercase transition-all shadow-lg shadow-rose-600/30 hover:scale-105 active:scale-95 cursor-pointer select-none"
+              >
+                <AlertCircle className="w-4 h-4 animate-pulse text-white" />
+                <span>Dashboard de Alertas</span>
+              </button>
             </div>
           </div>
 
@@ -1280,7 +1297,7 @@ export function Inicio() {
 
               <div className="space-y-1">
                 <span className="block text-2xl font-light tracking-tight text-white font-mono shrink-0">
-                  {students.reduce((acc, inst) => acc + (inst.students || 0), 0).toLocaleString()}
+                  {(students.length || institutions.reduce((acc, inst) => acc + (inst.students || 0), 0)).toLocaleString()}
                 </span>
                 <span className="block text-[10px] text-slate-400 font-semibold leading-none">
                   Alumnos en seguimiento activo

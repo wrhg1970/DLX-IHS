@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Save, Plus, Trash2, Mail, Phone, MapPin, FileText, Upload } from "lucide-react";
-import { useAppContext, isColombia } from "../context/AppContext";
+import { ArrowLeft, Save, Plus, Trash2, Mail, Phone, MapPin, FileText, Upload, GraduationCap, FileSpreadsheet, Shield } from "lucide-react";
+import { useAppContext, isColombia, InstitutionDocumentArea } from "../context/AppContext";
 import { hasPermission } from "../utils/permissionCheck";
+import { saveFileToIndexedDB, deleteFileFromIndexedDB } from "../utils/fileStorage";
 
 const tabs = [
   "Información General",
@@ -79,7 +80,7 @@ export function FormInstitucion() {
   // Local Lists for Unsaved Entity
   const [localContacts, setLocalContacts] = useState<{ name: string; lastName: string; position: string; area: string; email: string; phone: string }[]>([]);
   const [localCampus, setLocalCampus] = useState<{ id: string; name: string; cityCountry: string; contact: string; phone: string }[]>([]);
-  const [localDocuments, setLocalDocuments] = useState<{ id: string; name: string; fileSize: string; uploadDate: string }[]>([]);
+  const [localDocuments, setLocalDocuments] = useState<{ id: string; name: string; fileSize: string; uploadDate: string; area?: InstitutionDocumentArea; category?: InstitutionDocumentArea }[]>([]);
 
   // Sub-forms Modal States
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
@@ -90,6 +91,9 @@ export function FormInstitucion() {
 
   const [isDocModalOpen, setIsDocModalOpen] = useState(false);
   const [docName, setDocName] = useState("");
+  const [docArea, setDocArea] = useState<InstitutionDocumentArea>("Académico");
+  const [docAreaFilter, setDocAreaFilter] = useState<'Todos' | InstitutionDocumentArea>('Todos');
+  const formFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const handleSave = () => {
     // 1. Create main institution
@@ -176,23 +180,46 @@ export function FormInstitucion() {
       id: Math.random().toString(36).substr(2, 9),
       name: docName,
       fileSize: (Math.random() * (4.5 - 0.5) + 0.5).toFixed(1) + " MB",
-      uploadDate: new Date().toISOString().split('T')[0]
+      uploadDate: new Date().toISOString().split('T')[0],
+      area: docArea,
+      category: docArea
     }]);
     setDocName("");
     setIsDocModalOpen(false);
+  };
+
+  const processAndAddFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    for (const file of fileArray) {
+      const docId = Math.random().toString(36).substr(2, 9);
+      try {
+        const base64Data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (evt) => resolve(evt.target?.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        await saveFileToIndexedDB('inst_doc_' + docId, base64Data);
+      } catch (err) {
+        console.warn("Error reading/saving file to IndexedDB:", err);
+      }
+
+      setLocalDocuments(prev => [...prev, {
+        id: docId,
+        name: file.name,
+        fileSize: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+        uploadDate: new Date().toISOString().split('T')[0],
+        area: docArea,
+        category: docArea
+      }]);
+    }
   };
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      const droppedFile = files[0];
-      setLocalDocuments(prev => [...prev, {
-        id: Math.random().toString(36).substr(2, 9),
-        name: droppedFile.name,
-        fileSize: (droppedFile.size / (1024 * 1024)).toFixed(2) + " MB",
-        uploadDate: new Date().toISOString().split('T')[0]
-      }]);
+      processAndAddFiles(files);
     }
   };
 
@@ -825,47 +852,120 @@ export function FormInstitucion() {
                 </button>
               </div>
 
+              {/* Hidden file input for batch selection */}
+              <input
+                type="file"
+                multiple
+                ref={formFileInputRef}
+                className="hidden"
+                onChange={(e) => {
+                  const files = e.target.files;
+                  if (files && files.length > 0) {
+                    processAndAddFiles(files);
+                  }
+                }}
+              />
+
               {/* Drag and Drop Container */}
               <div 
+                onClick={() => formFileInputRef.current?.click()}
                 onDragOver={e => e.preventDefault()}
                 onDrop={handleFileDrop}
-                className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100/50 transition cursor-pointer"
+                className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100/50 transition cursor-pointer group"
               >
-                 <div className="w-10 h-10 bg-white text-slate-400 rounded-full flex items-center justify-center shadow-xs border border-slate-100 mb-2">
+                 <div className="w-10 h-10 bg-white text-slate-400 rounded-full flex items-center justify-center shadow-xs border border-slate-100 mb-2 group-hover:scale-105 transition-transform">
                    <Upload className="w-5 h-5 text-indigo-500" />
                  </div>
-                 <p className="text-sm font-medium text-slate-700">Arrastra archivos aquí o haz clic en "Subir Documento"</p>
-                 <p className="text-[11px] text-slate-400 mt-0.5">Soporta PDF, JPG, PNG o DOCX hasta 10MB</p>
+                 <p className="text-sm font-medium text-slate-700">Arrastra archivos aquí o haz clic para examinar</p>
+                 <p className="text-[11px] text-slate-400 mt-0.5">Soporta múltiples archivos PDF, JPG, PNG o DOCX (clasificación por Área)</p>
               </div>
 
-              <div className="border border-slate-200 rounded-lg overflow-hidden mt-4">
+              {/* Area Filter Pills */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(['Todos', 'Académico', 'Administrativo', 'Legal', 'General'] as const).map(area => {
+                    const isSelected = docAreaFilter === area;
+                    const count = area === 'Todos'
+                      ? localDocuments.length
+                      : localDocuments.filter(d => (d.area || 'Académico') === area).length;
+                    return (
+                      <button
+                        key={area}
+                        type="button"
+                        onClick={() => setDocAreaFilter(area)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span>{area}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
+                          isSelected ? 'bg-indigo-800/60 text-white' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  Mostrando {
+                    localDocuments.filter(doc => docAreaFilter === 'Todos' || (doc.area || 'Académico') === docAreaFilter).length
+                  } documentos
+                </span>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg overflow-hidden mt-2">
                 <table className="w-full text-left font-sans">
                   <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500">
                     <tr>
                       <th className="px-4 py-3 border-b border-slate-200">Nombre del Archivo</th>
+                      <th className="px-4 py-3 border-b border-slate-200">Área</th>
                       <th className="px-4 py-3 border-b border-slate-200">Tamaño</th>
                       <th className="px-4 py-3 border-b border-slate-200">Fecha de Carga</th>
                       <th className="px-4 py-3 border-b border-slate-200 text-right">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {localDocuments.length === 0 ? (
+                    {localDocuments.filter(doc => docAreaFilter === 'Todos' || (doc.area || 'Académico') === docAreaFilter).length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-slate-400">No hay documentos de la institución registrados aún en esta carga.</td>
+                        <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                          {localDocuments.length === 0 
+                            ? "No hay documentos de la institución registrados aún en esta carga."
+                            : `No hay documentos bajo el área "${docAreaFilter}".`}
+                        </td>
                       </tr>
                     ) : (
-                      localDocuments.map((doc, idx) => (
+                      localDocuments
+                        .filter(doc => docAreaFilter === 'Todos' || (doc.area || 'Académico') === docAreaFilter)
+                        .map((doc) => (
                         <tr key={doc.id} className="hover:bg-slate-50">
                           <td className="px-4 py-3 font-semibold text-slate-700 flex items-center">
                             <FileText className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
                             {doc.name}
                           </td>
-                          <td className="px-4 py-3 text-slate-605 font-mono">{doc.fileSize}</td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              (doc.area || 'Académico') === 'Académico' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                              (doc.area || 'Académico') === 'Administrativo' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                              (doc.area || 'Académico') === 'Legal' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
+                              'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}>
+                              {doc.area || 'Académico'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-600 font-mono">{doc.fileSize}</td>
                           <td className="px-4 py-3 text-slate-500 font-mono">{doc.uploadDate}</td>
                           <td className="px-4 py-3 text-right">
                             <button 
-                              onClick={() => setLocalDocuments(prev => prev.filter(d => d.id !== doc.id))} 
-                              className="text-red-500 hover:text-red-700 p-1"
+                              type="button"
+                              onClick={async () => {
+                                await deleteFileFromIndexedDB('inst_doc_' + doc.id);
+                                setLocalDocuments(prev => prev.filter(d => d.id !== doc.id));
+                              }} 
+                              className="text-red-500 hover:text-red-700 p-1 cursor-pointer"
+                              title="Eliminar documento del repositorio"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -976,6 +1076,29 @@ export function FormInstitucion() {
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-xl border border-slate-100">
             <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800 mb-4 pb-2 border-b border-slate-100">Subir Documento</h3>
             <form onSubmit={handleAddDoc} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">Área</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['Académico', 'Administrativo', 'Legal', 'General'] as const).map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      onClick={() => setDocArea(opt)}
+                      className={`p-2 rounded-lg border text-left text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        docArea === opt
+                          ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-1 ring-indigo-500'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {opt === 'Académico' && <GraduationCap className="w-3.5 h-3.5 text-blue-500" />}
+                      {opt === 'Administrativo' && <FileSpreadsheet className="w-3.5 h-3.5 text-amber-500" />}
+                      {opt === 'Legal' && <Shield className="w-3.5 h-3.5 text-purple-500" />}
+                      {opt === 'General' && <FileText className="w-3.5 h-3.5 text-slate-500" />}
+                      <span>{opt}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">Nombre Técnico de Acuerdo / Archivo</label>
                 <input type="text" required value={docName} onChange={e => setDocName(e.target.value)} className="w-full border border-slate-200 rounded p-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Ej. NDA_Universidad_Firmado.pdf" />

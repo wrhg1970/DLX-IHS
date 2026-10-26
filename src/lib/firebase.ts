@@ -1,21 +1,29 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDocFromServer } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  memoryLocalCache, 
+  memoryLruGarbageCollector, 
+  doc, 
+  getDocFromServer 
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+// Initialize Firebase safely
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// Initialize Firestore with Database ID and multi-tab persistent local cache
-// This dramatically reduces server read operations by utilizing local IndexedDB caching
+// Initialize Firestore with Database ID and memory-based local cache.
+// Using memoryLocalCache completely eliminates "IndexedDbTransactionError: QuotaExceededError"
+// and avoids partitioned iframe storage quota limitations, while providing instantaneous
+// real-time sync with Google Cloud Firestore.
 export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
+  localCache: memoryLocalCache({
+    garbageCollector: memoryLruGarbageCollector()
   })
-}, firebaseConfig.firestoreDatabaseId);
+}, (firebaseConfig as any).firestoreDatabaseId || '(default)');
 
 // Initialize Authentication
-export const auth = getAuth();
+export const auth = getAuth(app);
 
 // Quick connection test/validation function as requested by the Firebase skill
 export async function testFirebaseConnection() {
@@ -37,10 +45,8 @@ export async function testFirebaseConnection() {
         window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
       }
       console.warn("Firestore Quota Handshake notice: Quota limit exceeded.");
-    }
-
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration or network status.");
+    } else if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn("Firebase client is currently offline or connecting to Firestore. Local cache and storage will be used seamlessly.");
     } else {
       console.log("Firebase connection handshake completed.");
     }

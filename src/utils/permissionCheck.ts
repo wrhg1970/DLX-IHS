@@ -19,7 +19,8 @@ export type PermissionMenu =
   | "Finanzas" 
   | "Reportes" 
   | "Catálogos" 
-  | "Configuración";
+  | "Configuración"
+  | "Auditoría";
 
 export interface Permission {
   view: boolean;
@@ -58,7 +59,8 @@ export const DEFAULT_MENUS: PermissionMenu[] = [
   "Finanzas",
   "Reportes",
   "Catálogos",
-  "Configuración"
+  "Configuración",
+  "Auditoría"
 ];
 
 export const DEFAULT_ROLES: Role[] = [
@@ -72,7 +74,7 @@ export const DEFAULT_ROLES: Role[] = [
     name: 'Finanzas', 
     permissions: Object.fromEntries(DEFAULT_MENUS.map(m => {
       if (m === "Dashboard") return [m, { view: true, create: false, edit: false, delete: false }];
-      if (["Administración", "Finanzas", "Reportes"].includes(m)) return [m, { ...DEFAULT_PERMS }];
+      if (["Administración", "Finanzas", "Reportes", "Auditoría"].includes(m)) return [m, { ...DEFAULT_PERMS }];
       if (["Instituciones", "Instituciones - Notificaciones", "Alumnos", "Proveedores", "Catálogos"].includes(m)) return [m, { view: true, create: false, edit: true, delete: false }];
       return [m, { ...NO_PERMS }];
     })) as Record<PermissionMenu, Permission>
@@ -82,7 +84,7 @@ export const DEFAULT_ROLES: Role[] = [
     name: 'Administrativo', 
     permissions: Object.fromEntries(DEFAULT_MENUS.map(m => {
       if (m === "Dashboard") return [m, { view: true, create: false, edit: false, delete: false }];
-      if (["Administración", "Finanzas", "Reportes"].includes(m)) return [m, { ...DEFAULT_PERMS }];
+      if (["Administración", "Finanzas", "Reportes", "Auditoría"].includes(m)) return [m, { ...DEFAULT_PERMS }];
       if (["Instituciones", "Instituciones - Notificaciones", "Alumnos", "Proveedores", "Catálogos"].includes(m)) return [m, { view: true, create: false, edit: true, delete: false }];
       return [m, { ...NO_PERMS }];
     })) as Record<PermissionMenu, Permission>

@@ -6,6 +6,7 @@ import { Modal } from "../components/ui/Modal";
 import { hasPermission } from "../utils/permissionCheck";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
 import { getEnrollmentStatusBadge } from "../utils/enrollmentStatus";
+import { formatCreditType } from "../utils/creditType";
 
 const academicSubcats = [
   "Syllabus Académico",
@@ -76,43 +77,23 @@ export function ProveedorDetail() {
       .trim();
   };
 
-  // Dynamic product type defaults from catalogs list
-  const catalogProductTypes = (catalogs['Tipo de Producto'] || [])
-    .filter(item => !item.providerIds || item.providerIds.length === 0 || item.providerIds.map(String).includes(String(id)))
-    .map(item => item.name);
+  // Only display products present in catalogs['Tipo de Producto'] that are assigned to this provider
+  const catalogProductItems = catalogs['Tipo de Producto'] || [];
 
-  // Unify and deduplicate list of product types to display, merging catalog assignments and any already configured rates
-  const seenNormalized = new Set<string>();
-  const productTypesToDisplay: string[] = [];
+  const finalProductTypesList: string[] = [];
+  const seenCatalogNames = new Set<string>();
 
-  for (const type of catalogProductTypes) {
-    const norm = normalizeProductType(type);
-    if (norm && !seenNormalized.has(norm)) {
-      seenNormalized.add(norm);
-      productTypesToDisplay.push(type);
+  for (const item of catalogProductItems) {
+    const itemProviderIds = (item.providerIds || []).map(String);
+    if (itemProviderIds.includes(String(id))) {
+      const trimmedName = item.name?.trim();
+      const norm = normalizeProductType(trimmedName);
+      if (norm && !seenCatalogNames.has(norm)) {
+        seenCatalogNames.add(norm);
+        finalProductTypesList.push(trimmedName);
+      }
     }
   }
-
-  const configuredServiceTypes = (providerProductServices || [])
-    .filter(ps => ps.providerId === Number(id) && ps.countryPrices && ps.countryPrices.length > 0)
-    .map(ps => ps.productType);
-
-  for (const type of configuredServiceTypes) {
-    const norm = normalizeProductType(type);
-    if (norm && !seenNormalized.has(norm)) {
-      seenNormalized.add(norm);
-      productTypesToDisplay.push(type);
-    }
-  }
-
-  // Final list of types to display with safe fallback
-  const finalProductTypesList = productTypesToDisplay.length > 0 
-    ? productTypesToDisplay 
-    : ["Clases", "Plataforma", "Examen", "Certificación"];
-
-  const defaultProductType = catalogProductTypes.includes('Syllabus Académico') 
-    ? 'Syllabus Académico' 
-    : (catalogProductTypes[0] || 'Syllabus Académico');
 
   // Rate configurations for Product Types
   const [isCountryModalOpen, setIsCountryModalOpen] = useState(false);
@@ -880,163 +861,184 @@ export function ProveedorDetail() {
                   <p className="text-xs text-slate-500 mt-1">Configura los precios de venta (ingresos) y costos de adquisición (egresos) de este proveedor por tarifa para cada tipo general de producto.</p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {finalProductTypesList.map((type) => {
-                    const typeConfig = providerProductServices.find(
-                      ps => ps.providerId === provider.id && normalizeProductType(ps.productType) === normalizeProductType(type)
-                    );
-                    const hasRates = typeConfig && typeConfig.countryPrices && typeConfig.countryPrices.length > 0;
+                {finalProductTypesList.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {finalProductTypesList.map((type) => {
+                      const typeConfig = providerProductServices.find(
+                        ps => ps.providerId === provider.id && normalizeProductType(ps.productType) === normalizeProductType(type)
+                      );
+                      const hasRates = typeConfig && typeConfig.countryPrices && typeConfig.countryPrices.length > 0;
 
-                    return (
-                      <div key={type} className="bg-slate-50/60 border border-slate-200/80 rounded-2xl p-5 hover:bg-white hover:border-[#e47352]/40 hover:shadow-md transition-all duration-200 flex flex-col justify-between">
-                        <div>
-                          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                            <span className={cn(
-                              "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
-                              (type === 'Clase' || type === 'Syllabus Académico') && "bg-blue-50 text-blue-700 border border-blue-200",
-                              (type === 'Plataforma' || type === 'Curso de Idiomas') && "bg-purple-50 text-purple-700 border border-purple-200",
-                              (type === 'Examen' || type === 'Certificación AP') && "bg-orange-50 text-orange-700 border border-orange-200",
-                              !['Clase', 'Plataforma', 'Examen', 'Syllabus Académico', 'Curso de Idiomas', 'Certificación AP'].includes(type) && "bg-teal-50 text-teal-700 border border-teal-200",
-                            )}>
-                              {type}
-                            </span>
-                            
-                            <button
-                              onClick={() => {
-                                setSelectedProductTypeForCountry(type);
-                                setCountryForm({
-                                  country: '',
-                                  startDate: '',
-                                  endDate: '',
-                                  priceFullCredit: '',
-                                  priceHalfCredit: '',
-                                  priceFullApCredit: '',
-                                  priceHalfApCredit: '',
-                                  costFullCredit: '',
-                                  costHalfCredit: '',
-                                  costFullApCredit: '',
-                                  costHalfApCredit: '',
-                                });
-                                setIsCountryModalOpen(true);
-                              }}
-                              className="text-[10px] font-black text-[#e47352] bg-orange-50 border border-orange-200/50 hover:bg-orange-100 hover:text-orange-700 px-3 py-1.5 rounded-xl transition cursor-pointer"
-                            >
-                              {hasRates ? "Configurar Tarifas" : "+ Añadir Tarifa"}
-                            </button>
-                          </div>
+                      return (
+                        <div key={type} className="bg-slate-50/60 border border-slate-200/80 rounded-2xl p-5 hover:bg-white hover:border-[#e47352]/40 hover:shadow-md transition-all duration-200 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                              <span className={cn(
+                                "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
+                                type.toLowerCase().includes('clase') && "bg-blue-50 text-blue-700 border border-blue-200",
+                                type.toLowerCase().includes('idioma') && "bg-purple-50 text-purple-700 border border-purple-200",
+                                (type.toLowerCase().includes('examen') || type.toLowerCase().includes('certificacion') || type.toLowerCase().includes('certificación')) && "bg-amber-50 text-amber-700 border border-amber-200",
+                                type.toLowerCase().includes('admission') && "bg-emerald-50 text-emerald-700 border border-emerald-200",
+                                !type.toLowerCase().includes('clase') && !type.toLowerCase().includes('idioma') && !type.toLowerCase().includes('examen') && !type.toLowerCase().includes('certificacion') && !type.toLowerCase().includes('certificación') && !type.toLowerCase().includes('admission') && "bg-indigo-50 text-indigo-700 border border-indigo-200",
+                              )}>
+                                {type}
+                              </span>
+                              
+                              <button
+                                onClick={() => {
+                                  setSelectedProductTypeForCountry(type);
+                                  setCountryForm({
+                                    country: '',
+                                    startDate: '',
+                                    endDate: '',
+                                    priceFullCredit: '',
+                                    priceHalfCredit: '',
+                                    priceFullApCredit: '',
+                                    priceHalfApCredit: '',
+                                    costFullCredit: '',
+                                    costHalfCredit: '',
+                                    costFullApCredit: '',
+                                    costHalfApCredit: '',
+                                  });
+                                  setIsCountryModalOpen(true);
+                                }}
+                                className="text-[10px] font-black text-[#e47352] bg-orange-50 border border-orange-200/50 hover:bg-orange-100 hover:text-orange-700 px-3 py-1.5 rounded-xl transition cursor-pointer"
+                              >
+                                {hasRates ? "Configurar Tarifas" : "+ Añadir Tarifa"}
+                              </button>
+                            </div>
 
-                          {/* List of Country rates for this type */}
-                          <div className="mt-4 space-y-2">
-                            {hasRates ? (
-                              <div className="space-y-3 overflow-y-auto max-h-48 pr-1 custom-scrollbar">
-                                {typeConfig.countryPrices.map((cp, cpIdx) => (
-                                  <div key={cpIdx} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col hover:border-indigo-150 transition-colors">
-                                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                                      <div className="flex flex-col">
-                                        <span className="text-xs font-bold text-slate-800 flex items-center">
-                                          🌍 {cp.country}
-                                        </span>
-                                        {(cp.startDate || cp.endDate) && (
-                                          <span className="text-[9px] text-[#4f46e5] font-bold mt-0.5">
-                                            {cp.startDate ? `Vigencia: ${cp.startDate}` : 'Vigencia: indefinido'} {cp.endDate ? `al ${cp.endDate}` : ''}
+                            {/* List of Country rates for this type */}
+                            <div className="mt-4 space-y-2">
+                              {hasRates ? (
+                                <div className="space-y-3 overflow-y-auto max-h-48 pr-1 custom-scrollbar">
+                                  {typeConfig.countryPrices.map((cp, cpIdx) => (
+                                    <div key={cpIdx} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col hover:border-indigo-150 transition-colors">
+                                      <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                                        <div className="flex flex-col">
+                                          <span className="text-xs font-bold text-slate-800 flex items-center">
+                                            🌍 {cp.country}
                                           </span>
+                                          {(cp.startDate || cp.endDate) && (
+                                            <span className="text-[9px] text-[#4f46e5] font-bold mt-0.5">
+                                              {cp.startDate ? `Vigencia: ${cp.startDate}` : 'Vigencia: indefinido'} {cp.endDate ? `al ${cp.endDate}` : ''}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center space-x-1 font-mono text-[9px]">
+                                          <button
+                                            onClick={() => {
+                                              setCountryForm({
+                                                ...cp,
+                                                country: '', // Clear the country so they can pick a new target tariff country
+                                                startDate: cp.startDate || '',
+                                                endDate: cp.endDate || '',
+                                              });
+                                              setSelectedProductTypeForCountry(type);
+                                              setIsCountryModalOpen(true);
+                                            }}
+                                            className="text-emerald-600 hover:text-emerald-800 font-bold px-1 py-0.5 rounded hover:bg-emerald-50 cursor-pointer"
+                                            title="Duplicar tarifa"
+                                          >
+                                            Duplicar
+                                          </button>
+                                          <span className="text-slate-300">|</span>
+                                          <button
+                                            onClick={() => {
+                                              setCountryForm({
+                                                ...cp,
+                                                startDate: cp.startDate || '',
+                                                endDate: cp.endDate || '',
+                                              });
+                                              setSelectedProductTypeForCountry(type);
+                                              setIsCountryModalOpen(true);
+                                            }}
+                                            className="text-indigo-600 hover:text-indigo-850 font-bold px-1 py-0.5 rounded hover:bg-indigo-50 cursor-pointer"
+                                            title="Editar tarifa"
+                                          >
+                                            Editar
+                                          </button>
+                                          <span className="text-slate-300">|</span>
+                                          <button
+                                            onClick={() => {
+                                              if (confirm(`¿Eliminar las tarifas de ${cp.country} para ${type}?`)) {
+                                                handleDeleteCountryRate(type, cp.country);
+                                              }
+                                            }}
+                                            className="text-rose-500 hover:text-rose-700 font-bold px-1 py-0.5 rounded hover:bg-rose-50 cursor-pointer"
+                                            title="Eliminar tarifa"
+                                          >
+                                            Eliminar
+                                          </button>
+                                        </div>
+                                      </div>
+                                      
+                                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-650">
+                                        {['clase', 'clases'].includes(type.toLowerCase()) ? (
+                                          <>
+                                            <div>
+                                              <span className="font-bold text-slate-400 text-[8px] uppercase">Ventas (Comp/Med/AP):</span>
+                                              <div className="font-mono text-slate-800 font-bold mt-0.5">
+                                                ${cp.priceFullCredit || "0"} / ${cp.priceHalfCredit || "0"} / AP: ${cp.priceFullApCredit || "0"}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <span className="font-bold text-slate-400 text-[8px] uppercase">Costos (Comp/Med/AP):</span>
+                                              <div className="font-mono text-rose-650 font-bold mt-0.5">
+                                                ${cp.costFullCredit || "0"} / ${cp.costHalfCredit || "0"} / AP: ${cp.costFullApCredit || "0"}
+                                              </div>
+                                            </div>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <div>
+                                              <span className="font-bold text-slate-400 text-[8px] uppercase">Precio Venta:</span>
+                                              <div className="font-mono font-black text-slate-850 text-xs mt-0.5">
+                                                ${cp.priceFullCredit || cp.priceFullApCredit || "0"}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <span className="font-bold text-slate-400 text-[8px] uppercase">Costo Adquisición:</span>
+                                              <div className="font-mono font-black text-rose-650 text-xs mt-0.5">
+                                                ${cp.costFullCredit || cp.costFullApCredit || "0"}
+                                              </div>
+                                            </div>
+                                          </>
                                         )}
                                       </div>
-                                      <div className="flex items-center space-x-1 font-mono text-[9px]">
-                                        <button
-                                          onClick={() => {
-                                            setCountryForm({
-                                              ...cp,
-                                              country: '', // Clear the country so they can pick a new target tariff country
-                                              startDate: cp.startDate || '',
-                                              endDate: cp.endDate || '',
-                                            });
-                                            setSelectedProductTypeForCountry(type);
-                                            setIsCountryModalOpen(true);
-                                          }}
-                                          className="text-emerald-600 hover:text-emerald-800 font-bold px-1 py-0.5 rounded hover:bg-emerald-50 cursor-pointer"
-                                          title="Duplicar tarifa"
-                                        >
-                                          Duplicar
-                                        </button>
-                                        <span className="text-slate-300">|</span>
-                                        <button
-                                          onClick={() => {
-                                            setCountryForm({
-                                              ...cp,
-                                              startDate: cp.startDate || '',
-                                              endDate: cp.endDate || '',
-                                            });
-                                            setSelectedProductTypeForCountry(type);
-                                            setIsCountryModalOpen(true);
-                                          }}
-                                          className="text-indigo-600 hover:text-indigo-850 font-bold px-1 py-0.5 rounded hover:bg-indigo-50 cursor-pointer"
-                                          title="Editar tarifa"
-                                        >
-                                          Editar
-                                        </button>
-                                        <span className="text-slate-300">|</span>
-                                        <button
-                                          onClick={() => {
-                                            if (confirm(`¿Eliminar las tarifas de ${cp.country} para ${type}?`)) {
-                                              handleDeleteCountryRate(type, cp.country);
-                                            }
-                                          }}
-                                          className="text-rose-500 hover:text-rose-700 font-bold px-1 py-0.5 rounded hover:bg-rose-50 cursor-pointer"
-                                          title="Eliminar tarifa"
-                                        >
-                                          Eliminar
-                                        </button>
-                                      </div>
                                     </div>
-                                    
-                                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-650">
-                                      {['clase', 'clases'].includes(type.toLowerCase()) ? (
-                                        <>
-                                          <div>
-                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Ventas (Comp/Med/AP):</span>
-                                            <div className="font-mono text-slate-800 font-bold mt-0.5">
-                                              ${cp.priceFullCredit || "0"} / ${cp.priceHalfCredit || "0"} / AP: ${cp.priceFullApCredit || "0"}
-                                            </div>
-                                          </div>
-                                          <div>
-                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Costos (Comp/Med/AP):</span>
-                                            <div className="font-mono text-rose-650 font-bold mt-0.5">
-                                              ${cp.costFullCredit || "0"} / ${cp.costHalfCredit || "0"} / AP: ${cp.costFullApCredit || "0"}
-                                            </div>
-                                          </div>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <div>
-                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Precio Venta:</span>
-                                            <div className="font-mono font-black text-slate-850 text-xs mt-0.5">
-                                              ${cp.priceFullCredit || cp.priceFullApCredit || "0"}
-                                            </div>
-                                          </div>
-                                          <div>
-                                            <span className="font-bold text-slate-400 text-[8px] uppercase">Costo Adquisición:</span>
-                                            <div className="font-mono font-black text-rose-650 text-xs mt-0.5">
-                                              ${cp.costFullCredit || cp.costFullApCredit || "0"}
-                                            </div>
-                                          </div>
-                                        </>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-[10px] text-slate-400 italic bg-white border border-dashed border-slate-200 rounded-xl p-4 text-center">
-                                Sin tarifas configuradas para este tipo de producto.
-                              </div>
-                            )}
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-[10px] text-slate-400 italic bg-white border border-dashed border-slate-200 rounded-xl p-4 text-center">
+                                  Sin tarifas configuradas para este tipo de producto.
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="border border-dashed border-slate-300 bg-white rounded-2xl p-10 flex flex-col items-center justify-center text-center">
+                    <div className="h-12 w-12 bg-orange-50 border border-orange-200 rounded-2xl flex items-center justify-center text-[#e47352] mb-3">
+                      <BookOpen className="w-6 h-6 stroke-1.5" />
+                    </div>
+                    <p className="text-slate-800 font-bold text-sm">No hay tipos de productos asociados a este proveedor</p>
+                    <p className="text-slate-500 text-xs mt-1 max-w-md leading-relaxed">
+                      Solo se muestran los productos que están presentes en el catálogo de <b>Tipo de Producto</b> y asignados a este proveedor. Puedes administrarlos en la sección de Catálogos.
+                    </p>
+                    {hasPermission(currentUser?.role, "Catálogos", "edit") && (
+                      <button
+                        onClick={() => navigate('/catalogos')}
+                        className="mt-4 px-4 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-colors cursor-pointer"
+                      >
+                        Ir a Catálogos &rarr;
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Real / Linked Classes Section */}
@@ -1066,7 +1068,7 @@ export function ProveedorDetail() {
                             <td className="px-6 py-4 font-bold text-slate-800">{cl.name}</td>
                             <td className="px-6 py-4">
                               <span className="inline-block px-2.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-100 text-[10px] text-indigo-750 font-black uppercase tracking-wider whitespace-nowrap">
-                                {cl.creditType || 'Crédito completo'}
+                                {formatCreditType(cl.creditType)}
                               </span>
                             </td>
                             <td className="px-6 py-4 font-mono text-slate-500 text-xs">{cl.validity || 'Sin vigencia'}</td>
@@ -1387,19 +1389,19 @@ export function ProveedorDetail() {
             {['clase', 'clases'].includes(selectedProductTypeForCountry?.toLowerCase() || '') ? (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Crédito Completo ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Full Credit ($)</label>
                   <input required type="text" placeholder="Ej. 500" value={countryForm.priceFullCredit} onChange={e => setCountryForm({...countryForm, priceFullCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Medio Crédito ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Half Credit ($)</label>
                   <input required type="text" placeholder="Ej. 250" value={countryForm.priceHalfCredit} onChange={e => setCountryForm({...countryForm, priceHalfCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Crédito AP ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Full Credit AP ($)</label>
                   <input required type="text" placeholder="Ej. 600" value={countryForm.priceFullApCredit} onChange={e => setCountryForm({...countryForm, priceFullApCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Medio Crédito AP ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Precio Half Credit AP ($)</label>
                   <input required type="text" placeholder="Ej. 300" value={countryForm.priceHalfApCredit} onChange={e => setCountryForm({...countryForm, priceHalfApCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
               </div>
@@ -1416,19 +1418,19 @@ export function ProveedorDetail() {
             {['clase', 'clases'].includes(selectedProductTypeForCountry?.toLowerCase() || '') ? (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Crédito Completo ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Full Credit ($)</label>
                   <input required type="text" placeholder="Ej. 300" value={countryForm.costFullCredit} onChange={e => setCountryForm({...countryForm, costFullCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Medio Crédito ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Half Credit ($)</label>
                   <input required type="text" placeholder="Ej. 150" value={countryForm.costHalfCredit} onChange={e => setCountryForm({...countryForm, costHalfCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Crédito AP ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Full Credit AP ($)</label>
                   <input required type="text" placeholder="Ej. 350" value={countryForm.costFullApCredit} onChange={e => setCountryForm({...countryForm, costFullApCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Medio Crédito AP ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Costo Half Credit AP ($)</label>
                   <input required type="text" placeholder="Ej. 175" value={countryForm.costHalfApCredit} onChange={e => setCountryForm({...countryForm, costHalfApCredit: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                 </div>
               </div>

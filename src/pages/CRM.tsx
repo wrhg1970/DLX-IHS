@@ -18,6 +18,8 @@ import {
   Circle,
   Video,
   AlertCircle, 
+  AlertTriangle,
+  ShieldAlert,
   Calendar, 
   Phone, 
   Mail, 
@@ -66,7 +68,9 @@ import {
   Link as LinkIcon,
   ExternalLink,
   FolderOpen,
-  UploadCloud
+  UploadCloud,
+  Share2,
+  SlidersHorizontal
 } from "lucide-react";
 import { useAppContext, TaskType, cleanForFirestore, generateUniqueId } from "../context/AppContext";
 import { hasPermission, PermissionMenu } from "../utils/permissionCheck";
@@ -97,8 +101,11 @@ export interface CRMContactPerson {
   email: string;
 }
 
+export type CRMLeadType = 'Institución Potencial' | 'Persona Potencial' | 'Redes Sociales';
+
 export interface CRMLead {
   id: string;
+  idLead?: string; // e.g. "LD-001" or original ID from spreadsheet/source
   name: string;
   contactName: string;
   email: string;
@@ -108,9 +115,9 @@ export interface CRMLead {
   city?: string;
   state?: string;
   country: string;
-  source: string; // e.g. "Recomendación", "Feria Educativa", "Campaña Digital", "Llamada Fría", "LinkedIn"
+  source: string; // e.g. "Recomendación", "Feria Educativa", "Campaña Digital", "Llamada Fría", "LinkedIn", "Redes Sociales"
   status: string;
-  type: 'Institución Potencial' | 'Persona Potencial';
+  type: CRMLeadType;
   value: number; // Est. value in USD
   assignedTo?: string; // Agent name/ID
   notes: string;
@@ -127,6 +134,67 @@ export interface CRMLead {
   mallaPaymentRef?: string; // Folio o número de referencia del comprobante
   mallaPaymentMethod?: string; // Método de pago utilizado (ej. Transferencia, Tarjeta, Stripe)
   mallaPaymentNotes?: string; // Observaciones de tesorería / finanzas
+  isDuplicate?: boolean;
+  duplicateReason?: string;
+  duplicateMatchedWith?: string;
+}
+
+// Helper to detect if a prospect is duplicate against an existing list
+export function detectLeadDuplicate(
+  candidate: { idLead?: string; name?: string; email?: string; phone?: string },
+  existingList: CRMLead[]
+): { isDuplicate: boolean; reason?: string; matchedWith?: string } {
+  const normStr = (val?: string) => (val || "").trim().toLowerCase();
+  const normDigits = (val?: string) => (val || "").replace(/\D/g, "");
+
+  const candId = normStr(candidate.idLead);
+  const candEmail = normStr(candidate.email);
+  const candName = normStr(candidate.name);
+  const candPhone = normDigits(candidate.phone);
+
+  for (const existing of existingList) {
+    // 1. By idLead if both have it
+    const exId = normStr(existing.idLead);
+    if (candId && exId && candId === exId) {
+      return {
+        isDuplicate: true,
+        reason: `Mismo ID (${existing.idLead})`,
+        matchedWith: existing.name
+      };
+    }
+
+    // 2. By email if both have it
+    const exEmail = normStr(existing.email);
+    if (candEmail && exEmail && candEmail === exEmail) {
+      return {
+        isDuplicate: true,
+        reason: `Mismo correo (${existing.email})`,
+        matchedWith: existing.name
+      };
+    }
+
+    // 3. By name if both have non-empty name
+    const exName = normStr(existing.name);
+    if (candName && exName && candName === exName) {
+      return {
+        isDuplicate: true,
+        reason: `Mismo nombre ("${existing.name}")`,
+        matchedWith: existing.name
+      };
+    }
+
+    // 4. By phone if both have at least 7 numeric digits
+    const exPhone = normDigits(existing.phone);
+    if (candPhone.length >= 7 && exPhone.length >= 7 && candPhone === exPhone) {
+      return {
+        isDuplicate: true,
+        reason: `Mismo teléfono (${existing.phone})`,
+        matchedWith: existing.name
+      };
+    }
+  }
+
+  return { isDuplicate: false };
 }
 
 // Pipeline Stages list for Instituciones
@@ -138,6 +206,7 @@ export const DEFAULT_INSTITUTION_STAGES = [
   "Diagnostico y propuesta",
   "Revisión",
   "Firma",
+  "Cliente",
   "Sin Interes",
   "Futuro",
   "Perdido"
@@ -159,22 +228,41 @@ export const DEFAULT_PARTICULAR_STAGES = [
   "Perdido"
 ];
 
+// Pipeline Stages list for Redes Sociales
+export const DEFAULT_REDES_SOCIALES_STAGES = [
+  "Mensaje 1",
+  "Mensaje 2",
+  "Mensaje 3",
+  "Mensaje 4",
+  "Mensaje 5",
+  "Perdido"
+];
+
 // Backward-compatible default pipeline stages
 export const DEFAULT_PIPELINE_STAGES = DEFAULT_INSTITUTION_STAGES;
 
 // Helper to normalize legacy statuses to the new pipeline stages
-const normalizeLeadStatus = (status: string, type: 'Institución Potencial' | 'Persona Potencial' = 'Institución Potencial'): string => {
-  if (!status) return "Leads";
+const normalizeLeadStatus = (status: string, type: CRMLeadType = 'Institución Potencial'): string => {
+  if (!status) return type === 'Redes Sociales' ? "Mensaje 1" : "Leads";
   const trimmed = status.trim();
   const lower = trimmed.toLowerCase();
   
-  if (lower === "captación" || lower === "captacion" || lower === "nuevo" || lower === "lead" || lower === "leads") return "Leads";
+  if (lower === "mensaje 1" || lower === "mensaje1" || lower === "m1") return "Mensaje 1";
+  if (lower === "mensaje 2" || lower === "mensaje2" || lower === "m2") return "Mensaje 2";
+  if (lower === "mensaje 3" || lower === "mensaje3" || lower === "m3") return "Mensaje 3";
+  if (lower === "mensaje 4" || lower === "mensaje4" || lower === "m4") return "Mensaje 4";
+  if (lower === "mensaje 5" || lower === "mensaje5" || lower === "m5") return "Mensaje 5";
+
+  if (lower === "captación" || lower === "captacion" || lower === "nuevo" || lower === "lead" || lower === "leads") {
+    return type === 'Redes Sociales' ? "Mensaje 1" : "Leads";
+  }
   if (lower === "primer filtro" || lower === "contactado" || lower === "primer contacto") return "Primer contacto";
   if (lower === "demostración" || lower === "demostracion" || lower === "presentación" || lower === "presentacion") return "Presentación";
   if (lower === "propuesta" || lower === "diagnostico y propuesta" || lower === "diagnóstico y propuesta") {
     return type === "Institución Potencial" ? "Diagnostico y propuesta" : "Diagnóstico y propuesta";
   }
   if (lower === "cierre" || lower === "ganado" || lower === "firma") return "Firma";
+  if (lower === "cliente" || lower === "clientes") return "Cliente";
   if (lower === "sin interes" || lower === "sin interés") return "Sin Interes";
   if (lower === "futuro") return "Futuro";
   if (lower === "perdido") return "Perdido";
@@ -189,6 +277,16 @@ const normalizeLeadStatus = (status: string, type: 'Institución Potencial' | 'P
 // Helper to get stage badge colors with high visual contrast and distinction
 export const getStageBadgeColor = (stage: string): string => {
   switch (stage) {
+    case "Mensaje 1":
+      return "bg-sky-50 text-sky-700 border border-sky-200";
+    case "Mensaje 2":
+      return "bg-blue-50 text-blue-700 border border-blue-200";
+    case "Mensaje 3":
+      return "bg-indigo-50 text-indigo-700 border border-indigo-200";
+    case "Mensaje 4":
+      return "bg-purple-50 text-purple-700 border border-purple-200";
+    case "Mensaje 5":
+      return "bg-pink-50 text-pink-700 border border-pink-200";
     case "Leads":
       return "bg-sky-50 text-sky-700 border border-sky-200";
     case "Primer contacto":
@@ -208,7 +306,9 @@ export const getStageBadgeColor = (stage: string): string => {
       return "bg-orange-50 text-orange-700 border border-orange-200";
     case "Firma":
     case "Cierre":
-      return "bg-emerald-50 text-emerald-700 border border-emerald-200";
+      return "bg-teal-50 text-teal-700 border border-teal-200";
+    case "Cliente":
+      return "bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold";
     case "Sin Interes":
     case "Sin Interés":
       return "bg-slate-100 text-slate-600 border border-slate-200";
@@ -246,7 +346,7 @@ const SEED_LEADS: CRMLead[] = [
     phone: "+52 81 2345 6789",
     country: "México",
     source: "Recomendación",
-    status: "Leads",
+    status: "Revisión",
     type: "Institución Potencial",
     value: 12500,
     assignedTo: "Carlos Ruiz",
@@ -330,6 +430,36 @@ const SEED_LEADS: CRMLead[] = [
     assignedTo: "Carlos Ruiz",
     notes: "Decidieron no renovar contrato este ciclo por restricciones presupuestarias internas.",
     createdAt: "2026-03-15"
+  },
+  {
+    id: "lead-rs-1",
+    name: "Colegio Bilingüe San Jerónimo (@sanjeronimo_edu)",
+    contactName: "Coordinación de Admisiones",
+    email: "contacto@sanjeronimo.edu.mx",
+    phone: "+52 55 9876 5432",
+    country: "México",
+    source: "Redes Sociales",
+    status: "Mensaje 1",
+    type: "Redes Sociales",
+    value: 3500,
+    assignedTo: "Sofía Martínez",
+    notes: "Contacto inicial establecido mediante mensaje directo en Instagram. Solicitan información sobre convenios.",
+    createdAt: "2026-10-18"
+  },
+  {
+    id: "lead-rs-2",
+    name: "Academia Moderna Cumbres (@cumbres_edu)",
+    contactName: "Lic. Karla Valenzuela",
+    email: "karla.valenzuela@cumbres.edu.mx",
+    phone: "+52 81 8765 4321",
+    country: "México",
+    source: "Redes Sociales",
+    status: "Mensaje 2",
+    type: "Redes Sociales",
+    value: 4000,
+    assignedTo: "Carlos Ruiz",
+    notes: "Enviado catálogo y folleto institucional en segundo mensaje de seguimiento.",
+    createdAt: "2026-10-15"
   }
 ];
 
@@ -685,25 +815,37 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     notifyTaskDeadline,
     triggerDeadlineScan,
     taskNotificationConfig,
-    teams
+    teams,
+    institutions,
+    addInstitution
   } = useAppContext();
   
+  const isSuperAdmin = React.useMemo(() => {
+    const r = (currentUser?.role || '').trim().toLowerCase();
+    return r === 'superadministrador' || 
+           r === 'admin principal' || 
+           r === 'director' || 
+           r.includes('super') || 
+           r.includes('admin') ||
+           hasPermission(currentUser?.role, 'CRM', 'delete');
+  }, [currentUser]);
+
   const slaCatalog = catalogs['Fases y Alertas de Inactividad (SLA)'];
-  const getLeadSlaLimit = (status: string) => {
-    const item = slaCatalog?.find(s => {
-      const sName = s.name.toLowerCase().trim();
-      const stName = status.toLowerCase().trim();
+  const getLeadSlaRule = (status: string) => {
+    return slaCatalog?.find(s => {
+      const sName = (s.name || '').toLowerCase().trim();
+      const stName = (status || '').toLowerCase().trim();
       return sName === stName || sName.includes(stName) || stName.includes(sName) || (stName === 'captación' && (sName.includes('inicio') || sName.includes('captac') || sName.includes('lead')));
     });
+  };
+
+  const getLeadSlaLimit = (status: string) => {
+    const item = getLeadSlaRule(status);
     return item !== undefined ? item.slaDays : 3;
   };
 
   const getLeadSlaIndicator = (status: string) => {
-    const item = slaCatalog?.find(s => {
-      const sName = s.name.toLowerCase().trim();
-      const stName = status.toLowerCase().trim();
-      return sName === stName || sName.includes(stName) || stName.includes(sName) || (stName === 'captación' && (sName.includes('inicio') || sName.includes('captac') || sName.includes('lead')));
-    });
+    const item = getLeadSlaRule(status);
     if (status === "Captación") {
       return item ? item.name : "Captación (Inicio)";
     }
@@ -716,13 +858,6 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     if (saved && Array.isArray(saved) && saved.length > 0) {
       return saved.map((l: CRMLead) => {
         const normalized = normalizeLeadStatus(l.status, l.type);
-        // Rule: All institutions whose status is NOT "Perdido" are assigned "Leads"
-        if (l.type === "Institución Potencial") {
-          return {
-            ...l,
-            status: (normalized === "Perdido" ? "Perdido" : "Leads") as CRMLead["status"]
-          };
-        }
         return {
           ...l,
           status: normalized as CRMLead["status"]
@@ -731,30 +866,9 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     }
     return SEED_LEADS.map(l => {
       const normalized = normalizeLeadStatus(l.status, l.type);
-      if (l.type === "Institución Potencial") {
-        return {
-          ...l,
-          status: (normalized === "Perdido" ? "Perdido" : "Leads") as CRMLead["status"]
-        };
-      }
       return { ...l, status: normalized as CRMLead["status"] };
     });
   });
-
-  // Ensure any institutions currently loaded with status !== "Perdido" are converted to "Leads"
-  useEffect(() => {
-    setLeads(prev => {
-      let changed = false;
-      const updated = prev.map(l => {
-        if (l.type === "Institución Potencial" && l.status !== "Perdido" && l.status !== "Leads") {
-          changed = true;
-          return { ...l, status: "Leads" as CRMLead["status"] };
-        }
-        return l;
-      });
-      return changed ? updated : prev;
-    });
-  }, []);
 
   // Hide/Show "Perdido" status in Kanban and lists
   const [hideLostStage, setHideLostStage] = useState<boolean>(() => {
@@ -1312,7 +1426,6 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
   };
 
   const handleToggleTaskStatus = (task: any) => {
-    const isSuperAdmin = currentUser?.role === 'Superadministrador' || currentUser?.role === 'Admin Principal';
     const isAssigned = (task.userId !== undefined && task.userId !== null && Number(task.userId) === Number(currentUser?.id)) ||
       (task.userIds && task.userIds.includes(Number(currentUser?.id)));
 
@@ -1720,6 +1833,82 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
         setComposeBody(bdy);
       }
     }
+  };
+
+  const handleTriggerSlaEmailForLead = (lead: CRMLead) => {
+    const rule = getLeadSlaRule(lead.status);
+    setActiveTab("Correos");
+    setEmailActiveSubTab("Redactar");
+    setComposeRecipientType("lead");
+    setComposeLeadId(lead.id);
+
+    const targetTplId = rule?.emailTemplateId || (rule?.hasSecondaryAction && rule?.secondaryAction === "Enviar correo" ? rule.secondaryEmailTemplateId : undefined);
+    const matchedTpl = emailTemplates.find(t => t.id === targetTplId) || emailTemplates[0];
+
+    if (matchedTpl) {
+      setComposeTemplateId(matchedTpl.id);
+      const currentUserName = currentUser?.name || "Equipo Académico";
+      const subj = matchedTpl.subject.replace(/\{\{nombre_colegio\}\}/g, lead.name)
+                                    .replace(/\{\{contacto_principal\}\}/g, lead.contactName || "Directivo")
+                                    .replace(/\{\{monto_estimado\}\}/g, lead.value.toLocaleString("en-US"))
+                                    .replace(/\{\{correo_electronico\}\}/g, lead.email || "")
+                                    .replace(/\{\{telefono\}\}/g, lead.phone || "")
+                                    .replace(/\{\{ciudad\}\}/g, lead.country || "")
+                                    .replace(/\{\{remitente\}\}/g, currentUserName);
+
+      const bdy = matchedTpl.body.replace(/\{\{nombre_colegio\}\}/g, lead.name)
+                                .replace(/\{\{contacto_principal\}\}/g, lead.contactName || "Directivo")
+                                .replace(/\{\{monto_estimado\}\}/g, lead.value.toLocaleString("en-US"))
+                                .replace(/\{\{correo_electronico\}\}/g, lead.email || "")
+                                .replace(/\{\{telefono\}\}/g, lead.phone || "")
+                                .replace(/\{\{ciudad\}\}/g, lead.country || "")
+                                .replace(/\{\{remitente\}\}/g, currentUserName);
+
+      setComposeSubject(subj);
+      setComposeBody(bdy);
+    }
+  };
+
+  const handleExecuteSlaActionForLead = (lead: CRMLead) => {
+    const rule = getLeadSlaRule(lead.status);
+    if (!rule) {
+      dispatchRealtimeNotification({
+        type: "warning",
+        title: "SLA Vencido",
+        message: `El registro en fase "${lead.status}" ha superado el tiempo límite.`
+      });
+      return;
+    }
+
+    const hasEmail = rule.actionOnAlert === "Enviar correo a contacto" || (rule.hasSecondaryAction && rule.secondaryAction === "Enviar correo");
+    const hasMove = rule.actionOnAlert === "Mover a otra etapa" || (rule.hasSecondaryAction && rule.secondaryAction === "Mover a otra etapa");
+    const destStage = (rule.actionOnAlert === "Mover a otra etapa" ? rule.targetStage : rule.secondaryTargetStage) || "";
+
+    if (hasMove && destStage) {
+      const updated = leads.map(l => l.id === lead.id ? { ...l, status: destStage as any } : l);
+      setLeads(updated);
+      safeLocalStorageSet("crm_leads_v1", updated);
+      dispatchRealtimeNotification({
+        type: "success",
+        title: "Etapa Actualizada por SLA",
+        message: `El prospecto "${lead.name}" se movió a la etapa "${destStage}".`
+      });
+      if (hasEmail) {
+        handleTriggerSlaEmailForLead(lead);
+      }
+      return;
+    }
+
+    if (hasEmail) {
+      handleTriggerSlaEmailForLead(lead);
+      return;
+    }
+
+    dispatchRealtimeNotification({
+      type: "warning",
+      title: "Alerta SLA Vencido",
+      message: `Fase "${lead.status}" (${rule.slaDays || 3}d). Acción: ${rule.actionOnAlert || 'Alerta en Dashboard'}${rule.hasSecondaryAction && rule.secondaryAction ? ` + ${rule.secondaryAction}` : ''}.`
+    });
   };
 
   const handleOpenAttachPicker = (target: "compose" | "bulk") => {
@@ -2292,7 +2481,17 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (!parsed.includes("Cliente")) {
+            const firmaIdx = parsed.indexOf("Firma");
+            if (firmaIdx !== -1) {
+              parsed.splice(firmaIdx + 1, 0, "Cliente");
+            } else {
+              parsed.push("Cliente");
+            }
+          }
+          return parsed;
+        }
       } catch (e) {
         console.error("Error parsing crm_stages_instituciones_v2", e);
       }
@@ -2313,32 +2512,55 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     return DEFAULT_PARTICULAR_STAGES;
   });
 
+  const [redesSocialesStages, setRedesSocialesStages] = useState<string[]>(() => {
+    const saved = localStorage.getItem("crm_stages_redes_sociales_v1");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {
+        console.error("Error parsing crm_stages_redes_sociales_v1", e);
+      }
+    }
+    return DEFAULT_REDES_SOCIALES_STAGES;
+  });
+
   // Current active pipeline tab for Kanban view & Config modal
-  const [kanbanPipelineType, setKanbanPipelineType] = useState<'Institución Potencial' | 'Persona Potencial'>('Institución Potencial');
-  const [configPipelineType, setConfigPipelineType] = useState<'Institución Potencial' | 'Persona Potencial'>('Institución Potencial');
+  const [kanbanPipelineType, setKanbanPipelineType] = useState<CRMLeadType>('Institución Potencial');
+  const [configPipelineType, setConfigPipelineType] = useState<CRMLeadType>('Institución Potencial');
 
   // Helpers to get stages for specific type or current active view
-  const getStagesForType = (type: 'Institución Potencial' | 'Persona Potencial') => {
-    return type === 'Persona Potencial' ? particularStages : institutionStages;
+  const getStagesForType = (type: CRMLeadType) => {
+    if (type === 'Persona Potencial') return particularStages;
+    if (type === 'Redes Sociales') return redesSocialesStages;
+    return institutionStages;
   };
 
-  const activePipelineStages = kanbanPipelineType === 'Persona Potencial' ? particularStages : institutionStages;
+  const activePipelineStages = kanbanPipelineType === 'Persona Potencial' 
+    ? particularStages 
+    : kanbanPipelineType === 'Redes Sociales'
+      ? redesSocialesStages
+      : institutionStages;
   const pipelineStages = activePipelineStages; // alias for backward compatibility
 
-  const allPipelineStages = Array.from(new Set([...institutionStages, ...particularStages]));
+  const allPipelineStages = Array.from(new Set([...institutionStages, ...particularStages, ...redesSocialesStages]));
 
   const [newStageName, setNewStageName] = useState("");
 
-  const handleAddStage = (targetType: 'Institución Potencial' | 'Persona Potencial' = configPipelineType) => {
+  const handleAddStage = (targetType: CRMLeadType = configPipelineType) => {
     const trimmed = newStageName.trim();
     if (!trimmed) return;
-    const currentList = targetType === 'Persona Potencial' ? particularStages : institutionStages;
+    const currentList = targetType === 'Persona Potencial' 
+      ? particularStages 
+      : targetType === 'Redes Sociales'
+        ? redesSocialesStages
+        : institutionStages;
     if (currentList.some(s => s.toLowerCase() === trimmed.toLowerCase())) {
       alert("Esta etapa ya existe en este pipeline.");
       return;
     }
     const updated = [...currentList];
-    const insertIndex = updated.indexOf("Firma");
+    const insertIndex = targetType === 'Redes Sociales' ? updated.indexOf("Perdido") : updated.indexOf("Firma");
     if (insertIndex !== -1) {
       updated.splice(insertIndex, 0, trimmed);
     } else {
@@ -2348,6 +2570,9 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     if (targetType === 'Persona Potencial') {
       setParticularStages(updated);
       safeLocalStorageSet("crm_stages_particulares_v2", updated);
+    } else if (targetType === 'Redes Sociales') {
+      setRedesSocialesStages(updated);
+      safeLocalStorageSet("crm_stages_redes_sociales_v1", updated);
     } else {
       setInstitutionStages(updated);
       safeLocalStorageSet("crm_stages_instituciones_v2", updated);
@@ -2355,25 +2580,37 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     setNewStageName("");
   };
 
-  const handleRemoveStage = (stage: string, targetType: 'Institución Potencial' | 'Persona Potencial' = configPipelineType) => {
-    const defaultList = targetType === 'Persona Potencial' ? DEFAULT_PARTICULAR_STAGES : DEFAULT_INSTITUTION_STAGES;
+  const handleRemoveStage = (stage: string, targetType: CRMLeadType = configPipelineType) => {
+    const defaultList = targetType === 'Persona Potencial' 
+      ? DEFAULT_PARTICULAR_STAGES 
+      : targetType === 'Redes Sociales'
+        ? DEFAULT_REDES_SOCIALES_STAGES
+        : DEFAULT_INSTITUTION_STAGES;
     if (defaultList.includes(stage)) {
       alert("No se puede eliminar una etapa esencial predeterminada del sistema.");
       return;
     }
-    if (window.confirm(`¿Estás seguro de que deseas eliminar la etapa personalizada "${stage}"? Todos los prospectos de este estado volverán automáticamente a la etapa "Leads".`)) {
-      const currentList = targetType === 'Persona Potencial' ? particularStages : institutionStages;
+    const fallbackStage = targetType === 'Redes Sociales' ? "Mensaje 1" : "Leads";
+    if (window.confirm(`¿Estás seguro de que deseas eliminar la etapa personalizada "${stage}"? Todos los prospectos de este estado volverán automáticamente a la etapa "${fallbackStage}".`)) {
+      const currentList = targetType === 'Persona Potencial' 
+        ? particularStages 
+        : targetType === 'Redes Sociales'
+          ? redesSocialesStages
+          : institutionStages;
       const updated = currentList.filter(s => s !== stage);
       if (targetType === 'Persona Potencial') {
         setParticularStages(updated);
         safeLocalStorageSet("crm_stages_particulares_v2", updated);
+      } else if (targetType === 'Redes Sociales') {
+        setRedesSocialesStages(updated);
+        safeLocalStorageSet("crm_stages_redes_sociales_v1", updated);
       } else {
         setInstitutionStages(updated);
         safeLocalStorageSet("crm_stages_instituciones_v2", updated);
       }
       
-      // Move any leads of this state back to "Leads"
-      setLeads(prev => prev.map(l => (l.status === stage && l.type === targetType) ? { ...l, status: "Leads" } : l));
+      // Move any leads of this state back to initial stage
+      setLeads(prev => prev.map(l => (l.status === stage && l.type === targetType) ? { ...l, status: fallbackStage } : l));
     }
   };
   
@@ -2867,16 +3104,24 @@ International Homeschool CRM`;
   const [logNotes, setLogNotes] = useState("");
   const [activityFilter, setActivityFilter] = useState<"Todas" | "Pendiente" | "Completada">("Todas");
 
-  // States for bulk selection/updates
+  // States for bulk selection/updates and bulk delete
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const [bulkUpdateForm, setBulkUpdateForm] = useState({
     assignedTo: "",
     status: "",
+    type: "",
     source: "",
+    value: "",
     city: "",
     state: "",
-    country: ""
+    country: "",
+    englishExamScore: "",
+    mallaPaymentStatus: "",
+    appendNote: ""
   });
+  const [showBulkEditModal, setShowBulkEditModal] = useState(false);
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [showBulkConfirmModal, setShowBulkConfirmModal] = useState(false);
   const [showBulkSuccessBanner, setShowBulkSuccessBanner] = useState(false);
   const [bulkAppliedSummary, setBulkAppliedSummary] = useState<{
@@ -2907,19 +3152,24 @@ International Homeschool CRM`;
   const initiateBulkUpdateConfirm = () => {
     if (selectedLeadIds.length === 0) return;
     
-    const { assignedTo, status, source, city, state, country } = bulkUpdateForm;
-    if (!assignedTo && !status && !source && !city && !state && !country) {
-      alert("Por favor selecciona al menos un campo para actualizar de forma masiva.");
+    const { assignedTo, status, type, source, value, city, state, country, englishExamScore, mallaPaymentStatus, appendNote } = bulkUpdateForm;
+    if (!assignedTo && !status && !type && !source && !value.trim() && !city.trim() && !state.trim() && !country.trim() && !englishExamScore.trim() && !mallaPaymentStatus && !appendNote.trim()) {
+      alert("Por favor selecciona o llena al menos un campo para actualizar de forma masiva.");
       return;
     }
 
     const fieldsToChange: { field: string; value: string }[] = [];
-    if (assignedTo) fieldsToChange.push({ field: "Agente Responsable", value: assignedTo });
+    if (assignedTo) fieldsToChange.push({ field: "Agente Responsable", value: assignedTo === "--quitar--" ? "Sin asignar" : assignedTo });
     if (status) fieldsToChange.push({ field: "Estatus de Pipeline", value: status });
+    if (type) fieldsToChange.push({ field: "Tipo de Prospecto", value: type });
     if (source) fieldsToChange.push({ field: "Origen", value: source });
+    if (value.trim() && !isNaN(Number(value))) fieldsToChange.push({ field: "Valor Estimado USD", value: `$${Number(value).toLocaleString("en-US")} USD` });
     if (city.trim()) fieldsToChange.push({ field: "Ciudad", value: city.trim() });
     if (state.trim()) fieldsToChange.push({ field: "Estado", value: state.trim() });
     if (country.trim()) fieldsToChange.push({ field: "País", value: country.trim() });
+    if (englishExamScore.trim()) fieldsToChange.push({ field: "Examen Inglés", value: englishExamScore.trim() });
+    if (mallaPaymentStatus) fieldsToChange.push({ field: "Estatus Malla Curricular", value: mallaPaymentStatus });
+    if (appendNote.trim()) fieldsToChange.push({ field: "Agregar Nota al Historial", value: appendNote.trim() });
 
     const selectedLeadsList = leads.filter(l => selectedLeadIds.includes(l.id));
     const leadNames = selectedLeadsList.map(l => l.name);
@@ -2937,44 +3187,82 @@ International Homeschool CRM`;
   const executeBulkUpdate = () => {
     if (!bulkAppliedSummary) return;
 
-    const { assignedTo, status, source, city, state, country } = bulkUpdateForm;
+    const { assignedTo, status, type, source, value, city, state, country, englishExamScore, mallaPaymentStatus, appendNote } = bulkUpdateForm;
+    const nowStr = new Date().toLocaleDateString("es-ES", { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const authorName = currentUser?.name || 'Superadministrador';
 
     setLeads(prev =>
       prev.map(lead => {
         if (selectedLeadIds.includes(lead.id)) {
           const updated = { ...lead };
-          if (assignedTo) updated.assignedTo = assignedTo;
+          if (assignedTo) updated.assignedTo = assignedTo === "--quitar--" ? "" : assignedTo;
           if (status) updated.status = status;
+          if (type) updated.type = type as CRMLeadType;
           if (source) updated.source = source;
-          if (city !== undefined && city.trim() !== "") updated.city = city.trim();
-          if (state !== undefined && state.trim() !== "") updated.state = state.trim();
-          if (country !== undefined && country.trim() !== "") updated.country = country.trim();
+          if (value.trim() !== "" && !isNaN(Number(value))) updated.value = Number(value);
+          if (city.trim() !== "") updated.city = city.trim();
+          if (state.trim() !== "") updated.state = state.trim();
+          if (country.trim() !== "") updated.country = country.trim();
+          if (englishExamScore.trim() !== "") updated.englishExamScore = englishExamScore.trim();
+          if (mallaPaymentStatus) updated.mallaPaymentStatus = mallaPaymentStatus as 'Pendiente' | 'Pagado' | 'Exento';
+          if (appendNote.trim() !== "") {
+            const newEntry = `[${nowStr} - ${authorName}]: ${appendNote.trim()}`;
+            updated.notes = updated.notes ? `${updated.notes}\n${newEntry}` : newEntry;
+          }
           return updated;
         }
         return lead;
       })
     );
 
-    // Save summary logic flag state
+    dispatchRealtimeNotification({
+      title: "Modificación Masiva de Prospectos",
+      message: `Se actualizaron satisfactoriamente ${selectedLeadIds.length} prospectos en el CRM.`,
+      type: "lead"
+    });
+
     setShowBulkConfirmModal(false);
+    setShowBulkEditModal(false);
     setShowBulkSuccessBanner(true);
 
-    // Keep the core summary details but clear form & selection
     setSelectedLeadIds([]);
     setBulkUpdateForm({
       assignedTo: "",
       status: "",
+      type: "",
       source: "",
+      value: "",
       city: "",
       state: "",
-      country: ""
+      country: "",
+      englishExamScore: "",
+      mallaPaymentStatus: "",
+      appendNote: ""
     });
   };
 
-  // Reset selection when tab or filters change
+  const executeBulkDelete = () => {
+    if (selectedLeadIds.length === 0) return;
+    setIsBulkDeleting(true);
+
+    const count = selectedLeadIds.length;
+    setLeads(prev => prev.filter(l => !selectedLeadIds.includes(l.id)));
+
+    dispatchRealtimeNotification({
+      title: "Eliminación Masiva Exitosa",
+      message: `Se eliminaron permanentemente ${count} prospectos del CRM por ${currentUser?.name || 'Superadministrador'}.`,
+      type: "lead"
+    });
+
+    setSelectedLeadIds([]);
+    setShowBulkDeleteModal(false);
+    setIsBulkDeleting(false);
+  };
+
+  // Reset selection when filters change (preserves selection across tabs)
   useEffect(() => {
     setSelectedLeadIds([]);
-  }, [activeTab, searchTerm, typeFilter, statusFilter, sourceFilter]);
+  }, [searchTerm, typeFilter, statusFilter, sourceFilter]);
 
   const handleLogContact = (e: React.FormEvent) => {
     e.preventDefault();
@@ -3021,9 +3309,13 @@ International Homeschool CRM`;
     alert(`¡Contacto registrado exitosamente y sincronizado en la Agenda central!`);
   };
 
-  const handleMoveStageUp = (index: number, targetType: 'Institución Potencial' | 'Persona Potencial' = configPipelineType) => {
+  const handleMoveStageUp = (index: number, targetType: CRMLeadType = configPipelineType) => {
     if (index === 0) return;
-    const currentList = targetType === 'Persona Potencial' ? particularStages : institutionStages;
+    const currentList = targetType === 'Persona Potencial' 
+      ? particularStages 
+      : targetType === 'Redes Sociales' 
+        ? redesSocialesStages 
+        : institutionStages;
     const updated = [...currentList];
     const temp = updated[index];
     updated[index] = updated[index - 1];
@@ -3031,14 +3323,21 @@ International Homeschool CRM`;
     if (targetType === 'Persona Potencial') {
       setParticularStages(updated);
       safeLocalStorageSet("crm_stages_particulares_v2", updated);
+    } else if (targetType === 'Redes Sociales') {
+      setRedesSocialesStages(updated);
+      safeLocalStorageSet("crm_stages_redes_sociales_v1", updated);
     } else {
       setInstitutionStages(updated);
       safeLocalStorageSet("crm_stages_instituciones_v2", updated);
     }
   };
 
-  const handleMoveStageDown = (index: number, targetType: 'Institución Potencial' | 'Persona Potencial' = configPipelineType) => {
-    const currentList = targetType === 'Persona Potencial' ? particularStages : institutionStages;
+  const handleMoveStageDown = (index: number, targetType: CRMLeadType = configPipelineType) => {
+    const currentList = targetType === 'Persona Potencial' 
+      ? particularStages 
+      : targetType === 'Redes Sociales' 
+        ? redesSocialesStages 
+        : institutionStages;
     if (index === currentList.length - 1) return;
     const updated = [...currentList];
     const temp = updated[index];
@@ -3047,6 +3346,9 @@ International Homeschool CRM`;
     if (targetType === 'Persona Potencial') {
       setParticularStages(updated);
       safeLocalStorageSet("crm_stages_particulares_v2", updated);
+    } else if (targetType === 'Redes Sociales') {
+      setRedesSocialesStages(updated);
+      safeLocalStorageSet("crm_stages_redes_sociales_v1", updated);
     } else {
       setInstitutionStages(updated);
       safeLocalStorageSet("crm_stages_instituciones_v2", updated);
@@ -3062,10 +3364,14 @@ International Homeschool CRM`;
     e.preventDefault();
   };
 
-  const handleStageDrop = (e: React.DragEvent, targetIndex: number, targetType: 'Institución Potencial' | 'Persona Potencial' = configPipelineType) => {
+  const handleStageDrop = (e: React.DragEvent, targetIndex: number, targetType: CRMLeadType = configPipelineType) => {
     e.preventDefault();
     if (draggedStageIndex === null) return;
-    const currentList = targetType === 'Persona Potencial' ? particularStages : institutionStages;
+    const currentList = targetType === 'Persona Potencial' 
+      ? particularStages 
+      : targetType === 'Redes Sociales' 
+        ? redesSocialesStages 
+        : institutionStages;
     const updated = [...currentList];
     const draggedItem = updated[draggedStageIndex];
     updated.splice(draggedStageIndex, 1);
@@ -3073,6 +3379,9 @@ International Homeschool CRM`;
     if (targetType === 'Persona Potencial') {
       setParticularStages(updated);
       safeLocalStorageSet("crm_stages_particulares_v2", updated);
+    } else if (targetType === 'Redes Sociales') {
+      setRedesSocialesStages(updated);
+      safeLocalStorageSet("crm_stages_redes_sociales_v1", updated);
     } else {
       setInstitutionStages(updated);
       safeLocalStorageSet("crm_stages_instituciones_v2", updated);
@@ -3086,6 +3395,110 @@ International Homeschool CRM`;
     success: number;
     errors: { rowNum: number; msg: string; data: string }[];
   } | null>(null);
+
+  // Google Sheets & Advanced Import states
+  const [importSubTab, setImportSubTab] = useState<'sheets-url' | 'sheets-paste' | 'csv-file'>('sheets-url');
+  const [googleSheetsUrl, setGoogleSheetsUrl] = useState<string>("https://docs.google.com/spreadsheets/d/1iiXXWQFiHTfdqPBWtk_RhD_2GTiE3gPTLWOjeszdZgc/edit?usp=sharing");
+  const [sheetsPastedText, setSheetsPastedText] = useState<string>("");
+  const [isFetchingSheets, setIsFetchingSheets] = useState<boolean>(false);
+  const [sheetsFetchError, setSheetsFetchError] = useState<{
+    message: string;
+    isRestricted?: boolean;
+    helpInstructions?: string[];
+  } | null>(null);
+  const [parsedPreviewLeads, setParsedPreviewLeads] = useState<CRMLead[]>([]);
+  const [previewSelectedIndices, setPreviewSelectedIndices] = useState<number[]>([]);
+  const [targetImportType, setTargetImportType] = useState<CRMLeadType>("Institución Potencial");
+  const [targetImportStage, setTargetImportStage] = useState<string>("Leads");
+  const [detectedColumns, setDetectedColumns] = useState<Record<string, string | null> | null>(null);
+  const [importSuccessBanner, setImportSuccessBanner] = useState<string | null>(null);
+  const [sheetHeaders, setSheetHeaders] = useState<string[]>([]);
+  const [rawPreviewRecords, setRawPreviewRecords] = useState<any[]>([]);
+  const [selectedColumnMapping, setSelectedColumnMapping] = useState<{
+    idLead: string;
+    name: string;
+    contactName: string;
+  }>({ idLead: "", name: "", contactName: "" });
+
+  const annotateLeadsWithDuplicates = (incomingList: CRMLead[], existingCrmLeads: CRMLead[]) => {
+    const annotated: CRMLead[] = [];
+    const seenBatch: CRMLead[] = [];
+
+    for (const lead of incomingList) {
+      const dupInCrm = detectLeadDuplicate(lead, existingCrmLeads);
+      const dupInBatch = detectLeadDuplicate(lead, seenBatch);
+
+      if (dupInCrm.isDuplicate) {
+        annotated.push({
+          ...lead,
+          isDuplicate: true,
+          duplicateReason: `Ya existe en el CRM (${dupInCrm.reason})`,
+          duplicateMatchedWith: dupInCrm.matchedWith
+        });
+      } else if (dupInBatch.isDuplicate) {
+        annotated.push({
+          ...lead,
+          isDuplicate: true,
+          duplicateReason: `Repetido en la hoja (${dupInBatch.reason})`,
+          duplicateMatchedWith: dupInBatch.matchedWith
+        });
+      } else {
+        const cleanItem: CRMLead = {
+          ...lead,
+          isDuplicate: false,
+          duplicateReason: undefined,
+          duplicateMatchedWith: undefined
+        };
+        annotated.push(cleanItem);
+        seenBatch.push(cleanItem);
+      }
+    }
+    return annotated;
+  };
+
+  const handleOverrideColumnMapping = (key: 'idLead' | 'name' | 'contactName', newHeaderName: string) => {
+    const updated = { ...selectedColumnMapping, [key]: newHeaderName };
+    setSelectedColumnMapping(updated);
+
+    const headersList = sheetHeaders;
+    const idxNewId = updated.idLead ? headersList.indexOf(updated.idLead) : -1;
+    const idxNewName = updated.name ? headersList.indexOf(updated.name) : -1;
+    const idxNewContact = updated.contactName ? headersList.indexOf(updated.contactName) : -1;
+
+    setParsedPreviewLeads(prev => {
+      const remapped = prev.map((lead, i) => {
+        const rawRec = rawPreviewRecords[i];
+        const rawRow = rawRec?.rawRow || [];
+        const newIdLead = idxNewId !== -1 && rawRow[idxNewId] !== undefined ? rawRow[idxNewId].trim() : (newHeaderName === "" && key === 'idLead' ? undefined : lead.idLead);
+        const newName = idxNewName !== -1 && rawRow[idxNewName] !== undefined ? rawRow[idxNewName].trim() : lead.name;
+        
+        let finalContact = lead.contactName;
+        if (idxNewContact !== -1 && rawRow[idxNewContact] !== undefined) {
+          const val = rawRow[idxNewContact].trim();
+          if (val && val !== newIdLead) {
+            finalContact = val;
+          } else {
+            finalContact = newName || lead.name || "Contacto Principal";
+          }
+        } else if (newHeaderName === "" && key === 'contactName') {
+          finalContact = newName || lead.name || "Contacto Principal";
+        } else if (newName && (!lead.contactName || lead.contactName === "Contacto Principal")) {
+          finalContact = newName;
+        }
+
+        return {
+          ...lead,
+          idLead: newIdLead || undefined,
+          name: newName || lead.name,
+          contactName: finalContact || newName || "Contacto Principal"
+        };
+      });
+
+      const annotated = annotateLeadsWithDuplicates(remapped, leads);
+      setPreviewSelectedIndices(annotated.map((r, i) => (!r.isDuplicate ? i : -1)).filter(i => i !== -1));
+      return annotated;
+    });
+  };
 
   const [crmFirebaseSyncCompleted, setCrmFirebaseSyncCompleted] = useState(false);
   const prevLeadsRef = React.useRef<CRMLead[]>(leads);
@@ -3102,17 +3515,10 @@ International Homeschool CRM`;
           snap.forEach(d => {
             const data = d.data() as CRMLead;
             const normalized = normalizeLeadStatus(data.status, data.type);
-            if (data.type === "Institución Potencial") {
-              remoteLeads.push({
-                ...data,
-                status: (normalized === "Perdido" ? "Perdido" : "Leads") as CRMLead["status"]
-              });
-            } else {
-              remoteLeads.push({
-                ...data,
-                status: normalized as CRMLead["status"]
-              });
-            }
+            remoteLeads.push({
+              ...data,
+              status: normalized as CRMLead["status"]
+            });
           });
           setLeads(remoteLeads);
         } else if (leads.length > 0) {
@@ -3221,6 +3627,8 @@ International Homeschool CRM`;
   const handleOpenNewLead = () => {
     setEditingLead(null);
     setLeadModalTab("info");
+    const defaultInitialStages = getStagesForType(kanbanPipelineType);
+    const defaultInitialStatus = defaultInitialStages[0] || (kanbanPipelineType === "Redes Sociales" ? "Mensaje 1" : "Leads");
     setLeadForm({
       name: "",
       contactName: "",
@@ -3231,8 +3639,8 @@ International Homeschool CRM`;
       city: "",
       state: "",
       country: "México",
-      source: "Recomendación",
-      status: "Leads",
+      source: kanbanPipelineType === "Redes Sociales" ? "Redes Sociales" : "Recomendación",
+      status: defaultInitialStatus,
       type: kanbanPipelineType,
       value: 3000,
       notes: "",
@@ -3285,9 +3693,19 @@ International Homeschool CRM`;
   const handleSaveLeadSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingLead) {
-      // Edit
-      setLeads(prev => prev.map(l => l.id === editingLead.id ? {
-        ...l,
+      // Check if moving from Revisión to Firma for Institución Potencial
+      const isMovingRevisionToFirma = 
+        leadForm.type === "Institución Potencial" &&
+        (editingLead.status === "Revisión" || editingLead.status === "Revision") &&
+        (leadForm.status === "Firma" || leadForm.status === "Cierre");
+
+      const isMovingToCliente =
+        leadForm.type === "Institución Potencial" &&
+        editingLead.status !== "Cliente" &&
+        leadForm.status === "Cliente";
+
+      const updatedLeadObj: CRMLead = {
+        ...editingLead,
         name: leadForm.name,
         contactName: leadForm.contactName,
         email: leadForm.email,
@@ -3297,7 +3715,7 @@ International Homeschool CRM`;
         state: leadForm.state,
         country: leadForm.country,
         source: leadForm.source,
-        status: leadForm.status,
+        status: isMovingRevisionToFirma ? "Firma" : leadForm.status,
         type: leadForm.type,
         value: Number(leadForm.value),
         notes: leadForm.notes,
@@ -3309,7 +3727,24 @@ International Homeschool CRM`;
         gradeToTake: leadForm.type === "Persona Potencial" ? (leadForm.gradeToTake?.trim() || undefined) : undefined,
         creditsToTake: leadForm.type === "Persona Potencial" ? (leadForm.creditsToTake?.trim() || undefined) : undefined,
         website: leadForm.type === "Persona Potencial" ? undefined : (leadForm.website?.trim() || undefined)
-      } : l));
+      };
+
+      if (isMovingRevisionToFirma) {
+        setLeads(prev => prev.map(l => l.id === editingLead.id ? updatedLeadObj : l));
+        setIsLeadModalOpen(false);
+        setPendingFirmaTransition({ lead: updatedLeadObj, isConfirmationFromFirma: false });
+        return;
+      }
+
+      if (isMovingToCliente) {
+        setLeads(prev => prev.map(l => l.id === editingLead.id ? updatedLeadObj : l));
+        setIsLeadModalOpen(false);
+        setPendingFirmaTransition({ lead: updatedLeadObj, isConfirmationFromFirma: true });
+        return;
+      }
+
+      // Edit
+      setLeads(prev => prev.map(l => l.id === editingLead.id ? updatedLeadObj : l));
 
       // Trigger automation if changed to "Pago" from modal
       if (editingLead.status !== "Pago" && leadForm.status === "Pago") {
@@ -3390,11 +3825,99 @@ International Homeschool CRM`;
   // Status order flow for Kanban board columns
   const DEFAULT_STATUS_COLUMNS = DEFAULT_PIPELINE_STAGES;
 
+  // State for pending transition to Firma / Cliente with institution creation prompt
+  const [pendingFirmaTransition, setPendingFirmaTransition] = useState<{
+    lead: CRMLead;
+    isConfirmationFromFirma?: boolean;
+  } | null>(null);
+
+  const handleConfirmCreateInstitution = (lead: CRMLead) => {
+    // Look up assigned user for agentId
+    const assignedUser = users.find(
+      u => u.name.toLowerCase() === (lead.assignedTo || "").toLowerCase() ||
+           u.email.toLowerCase() === (lead.assignedTo || "").toLowerCase()
+    );
+
+    // Create new institution with the data already present in the lead
+    const newInstitutionPayload = {
+      name: lead.name,
+      tradeName: lead.name,
+      institutionCode: `INST-${Math.floor(1000 + Math.random() * 9000)}`,
+      country: lead.country || "México",
+      state: lead.state || "",
+      city: lead.city || "",
+      address: lead.address || "",
+      contact: lead.contactName || "Contacto Principal",
+      contactEmail: lead.email || "",
+      email: lead.email || "",
+      contactPhone: lead.phone || "",
+      phone: lead.phone || "",
+      students: 0,
+      status: "Activo",
+      revenue: lead.value || 0,
+      agentId: assignedUser?.id,
+      createdAt: new Date().toISOString().split("T")[0],
+      active: true,
+      documentsList: [],
+      campusList: []
+    };
+
+    const newInstId = addInstitution(newInstitutionPayload);
+
+    // Lead in CRM advances to stage "Cliente"
+    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, status: "Cliente" } : l));
+    if (viewingLead && viewingLead.id === lead.id) {
+      setViewingLead(prev => prev ? { ...prev, status: "Cliente" } : null);
+    }
+
+    dispatchRealtimeNotification({
+      type: "success",
+      title: "Institución Creada Exitosamente",
+      message: `Se ha registrado la nueva institución "${lead.name}" (ID #${newInstId}) en el sistema y el prospecto avanzó a la etapa "Cliente".`
+    });
+
+    setPendingFirmaTransition(null);
+  };
+
+  const handleRejectFirmaTransition = () => {
+    if (!pendingFirmaTransition) return;
+    const { lead } = pendingFirmaTransition;
+
+    // Set lead status to Firma
+    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, status: "Firma" } : l));
+    if (viewingLead && viewingLead.id === lead.id) {
+      setViewingLead(prev => prev ? { ...prev, status: "Firma" } : null);
+    }
+
+    dispatchRealtimeNotification({
+      type: "info",
+      title: "Prospecto en Etapa Firma",
+      message: `La institución "${lead.name}" queda registrada en la etapa Firma. Podrás confirmarla en cualquier momento para darla de alta oficialmente.`
+    });
+
+    setPendingFirmaTransition(null);
+  };
+
   const handleMoveStatus = (leadId: string, nextStatus: string) => {
     const targetLead = leads.find(l => l.id === leadId);
     if (!targetLead) return;
 
     const oldStatus = targetLead.status;
+
+    // Transition: Revisión -> Firma for Institución Potencial
+    const isOldRevision = oldStatus === "Revisión" || oldStatus === "Revision";
+    const isNextFirma = nextStatus === "Firma" || nextStatus === "Cierre";
+
+    if (targetLead.type === "Institución Potencial" && isOldRevision && isNextFirma) {
+      setPendingFirmaTransition({ lead: targetLead, isConfirmationFromFirma: false });
+      return;
+    }
+
+    // Transition: Firma -> Cliente for Institución Potencial
+    if (targetLead.type === "Institución Potencial" && (oldStatus === "Firma" || oldStatus === "Cierre") && nextStatus === "Cliente") {
+      setPendingFirmaTransition({ lead: targetLead, isConfirmationFromFirma: true });
+      return;
+    }
 
     // Case 1: Moving to "Pago"
     if (nextStatus === "Pago" && oldStatus !== "Pago") {
@@ -3479,28 +4002,74 @@ International Homeschool CRM`;
       }
 
       // Analyze the header row to determine column indexes
-      const headers = lines[0]
-        .split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)
-        .map(h => h.replace(/^"|"$/g, '').trim().toLowerCase());
+      const cleanStr = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
-      const idxTipo = headers.findIndex(h => h.includes("tipo"));
-      const idxNombre = headers.findIndex(h => !h.includes("tipo") && (h === "nombre" || h.includes("nombre del prospecto") || h.includes("institucion") || h.includes("institución") || h.includes("particular")));
-      const idxContacto = headers.findIndex(h => h.includes("contacto")); 
-      const idxEmail = headers.findIndex(h => h === "email" || h === "correo" || h.includes("correo") || h.includes("mail"));
-      const idxTelefono = headers.findIndex(h => h === "telefono" || h.includes("teléfono") || h.includes("tel") || h.includes("móvil"));
-      const idxWebsite = headers.findIndex(h => h.includes("website") || h.includes("web") || h.includes("url") || h.includes("sitio"));
-      const idxDireccion = headers.findIndex(h => h.includes("direccion") || h.includes("dirección") || h.includes("calle"));
-      const idxCiudad = headers.findIndex(h => h === "ciudad" || h.includes("ciudad"));
-      const idxEstado = headers.findIndex(h => h === "estado" || (h.includes("estado") && !h.includes("status") && !h.includes("fase") && !h.includes("etapa")));
-      const idxPais = headers.findIndex(h => h.includes("pais") || h.includes("país"));
-      const idxOrigen = headers.findIndex(h => h.includes("origen") || h.includes("procedencia") || h.includes("source"));
-      const idxStatus = headers.findIndex(h => h.includes("status") || h.includes("etapa") || h.includes("fase") || h === "estado de prospecto");
-      const idxValor = headers.findIndex(h => h.includes("valor") || h.includes("estimado") || h.includes("monto"));
-      const idxAgente = headers.findIndex(h => h.includes("agente") || h.includes("asignado"));
-      const idxEnglishScore = headers.findIndex(h => h.includes("calificacion") || h.includes("calificación") || (h.includes("ingles") && (h.includes("score") || h.includes("examen") || h.includes("nota"))));
-      const idxEnglishDate = headers.findIndex(h => (h.includes("fecha") && h.includes("ingles")) || (h.includes("date") && h.includes("english")));
-      const idxProgramOfInterest = headers.findIndex(h => h.includes("programa") || h.includes("interes") || h.includes("interés") || h.includes("homeschool"));
-      const idxNotas = headers.findIndex(h => h.includes("notas") || h.includes("comentarios") || h.includes("observaciones"));
+      const isIdHeader = (cleanH: string) => {
+        return cleanH === "id" || 
+               cleanH === "id lead" || 
+               cleanH === "lead id" || 
+               cleanH === "id_lead" || 
+               cleanH === "lead_id" || 
+               cleanH === "idlead" || 
+               cleanH === "folio" || 
+               cleanH === "codigo" || 
+               cleanH === "cve" || 
+               cleanH === "no" || 
+               cleanH === "no." || 
+               cleanH === "num" || 
+               cleanH === "numero" ||
+               cleanH.startsWith("id ") || 
+               cleanH.endsWith(" id") || 
+               cleanH.startsWith("id_") ||
+               cleanH.startsWith("id-");
+      };
+
+      const rawHeaders = lines[0]
+        .split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)
+        .map(h => h.replace(/^"|"$/g, '').trim());
+      const headers = rawHeaders.map(h => cleanStr(h));
+
+      const idxId = headers.findIndex(h => isIdHeader(h));
+      const idxTipo = headers.findIndex(h => !isIdHeader(h) && h.includes("tipo"));
+      const idxInstitution = headers.findIndex(h => !isIdHeader(h) && (
+        h.includes("institucion") || h.includes("colegio") || h.includes("escuela") || h.includes("universidad") || h.includes("razon social") || h.includes("empresa")
+      ));
+      const idxContact = headers.findIndex(h => !isIdHeader(h) && (
+        h === "contacto" || h.includes("contacto") || h.includes("responsable") || h.includes("director") || h.includes("coordinador")
+      ));
+      const idxGeneralName = headers.findIndex(h => !isIdHeader(h) && !h.includes("contacto") && !h.includes("tipo") && (
+        h === "nombre" || h === "nombre completo" || h.includes("nombre del prospecto") || h === "prospecto" || h === "particular" || h === "alumno"
+      ));
+
+      let idxNombre = -1;
+      let finalIdxContact = idxContact;
+      if (idxInstitution !== -1) {
+        idxNombre = idxInstitution;
+        if (finalIdxContact === -1 && idxGeneralName !== -1 && idxGeneralName !== idxInstitution) {
+          finalIdxContact = idxGeneralName;
+        }
+      } else if (idxGeneralName !== -1) {
+        idxNombre = idxGeneralName;
+      } else {
+        idxNombre = headers.findIndex((h, idx) => !isIdHeader(h) && idx !== idxContact);
+      }
+      if (idxNombre === -1) idxNombre = 0;
+
+      const idxEmail = headers.findIndex(h => !isIdHeader(h) && (h === "email" || h === "correo" || h.includes("correo") || h.includes("mail")));
+      const idxTelefono = headers.findIndex(h => !isIdHeader(h) && (h === "telefono" || h.includes("tel") || h.includes("movil") || h.includes("celular") || h.includes("whatsapp")));
+      const idxWebsite = headers.findIndex(h => !isIdHeader(h) && (h.includes("website") || h.includes("web") || h.includes("url") || h.includes("sitio")));
+      const idxDireccion = headers.findIndex(h => !isIdHeader(h) && (h.includes("direccion") || h.includes("calle")));
+      const idxCiudad = headers.findIndex(h => !isIdHeader(h) && (h === "ciudad" || h.includes("ciudad") || h.includes("municipio") || h === "city"));
+      const idxEstado = headers.findIndex(h => !isIdHeader(h) && (h === "estado" || (h.includes("estado") && !h.includes("status") && !h.includes("fase") && !h.includes("etapa"))));
+      const idxPais = headers.findIndex(h => !isIdHeader(h) && (h.includes("pais") || h === "country"));
+      const idxOrigen = headers.findIndex(h => !isIdHeader(h) && (h.includes("origen") || h.includes("procedencia") || h.includes("fuente") || h.includes("source")));
+      const idxStatus = headers.findIndex(h => !isIdHeader(h) && (h.includes("status") || h.includes("etapa") || h.includes("fase") || h.includes("estatus")));
+      const idxValor = headers.findIndex(h => !isIdHeader(h) && (h.includes("valor") || h.includes("estimado") || h.includes("monto") || h.includes("presupuesto")));
+      const idxAgente = headers.findIndex(h => !isIdHeader(h) && (h.includes("agente") || h.includes("asignado")));
+      const idxEnglishScore = headers.findIndex(h => !isIdHeader(h) && (h.includes("calificacion") || (h.includes("ingles") && (h.includes("score") || h.includes("examen") || h.includes("nota")))));
+      const idxEnglishDate = headers.findIndex(h => !isIdHeader(h) && ((h.includes("fecha") && h.includes("ingles")) || (h.includes("date") && h.includes("english"))));
+      const idxProgramOfInterest = headers.findIndex(h => !isIdHeader(h) && (h.includes("programa") || h.includes("interes") || h.includes("homeschool")));
+      const idxNotas = headers.findIndex(h => !isIdHeader(h) && (h.includes("notas") || h.includes("comentarios") || h.includes("observaciones")));
 
       let successCount = 0;
       const errors: { rowNum: number; msg: string; data: string }[] = [];
@@ -3513,10 +4082,10 @@ International Homeschool CRM`;
         // Split by comma ignoring commas inside quotes
         const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
 
-        if (cols.length < 3) {
+        if (cols.length < 2) {
           errors.push({
             rowNum,
-            msg: "La fila no cuenta con el mínimo de datos (mínimo de 3 columnas de datos requeridas para nombre/contacto/tipo).",
+            msg: "La fila no cuenta con datos suficientes.",
             data: line
           });
           continue;
@@ -3529,9 +4098,28 @@ International Homeschool CRM`;
           return fallback;
         };
 
+        const rawId = getValue(idxId, "");
+        let name = getValue(idxNombre, "");
+
+        // If name is empty or identical to ID Lead, find another non-ID text cell
+        if (!name || (rawId && name === rawId)) {
+          for (let c = 0; c < cols.length; c++) {
+            if (c !== idxId && c !== idxEmail && c !== idxTelefono && cols[c] && cols[c].trim() !== rawId) {
+              name = cols[c].trim();
+              break;
+            }
+          }
+        }
+
+        let contactName = getValue(finalIdxContact, "");
+        if (contactName === rawId) {
+          contactName = "";
+        }
+        if (!contactName && name) {
+          contactName = name;
+        }
+
         const typeRaw = getValue(idxTipo, "Institución Potencial");
-        const name = getValue(idxNombre, "");
-        const contactName = getValue(idxContacto, "");
         const email = getValue(idxEmail, "comercial@institucion.com");
         const phone = getValue(idxTelefono, "No proporcionado");
         const website = getValue(idxWebsite, "");
@@ -3543,12 +4131,17 @@ International Homeschool CRM`;
         const statusRaw = getValue(idxStatus, "Captación");
         const valueNum = getValue(idxValor, "3000") ? (Number(getValue(idxValor, "3000")) || 3000) : 3000;
         const agent = getValue(idxAgente, users[0]?.name || "Admin Global");
-        const notes = getValue(idxNotas, "Importado mediante planilla CSV.");
+        let notes = getValue(idxNotas, "Importado mediante planilla CSV.");
+        if (rawId) {
+          notes = notes ? `[ID Lead: ${rawId}] ${notes}` : `[ID Lead: ${rawId}] Importado mediante planilla CSV.`;
+        }
 
         // Type matching safety
-        const mappedType: CRMLead["type"] = typeRaw.toLowerCase().includes("persona") || typeRaw.toLowerCase().includes("particular")
-          ? "Persona Potencial" 
-          : "Institución Potencial";
+        const mappedType: CRMLead["type"] = typeRaw.toLowerCase().includes("redes") || typeRaw.toLowerCase().includes("social")
+          ? "Redes Sociales"
+          : typeRaw.toLowerCase().includes("persona") || typeRaw.toLowerCase().includes("particular")
+            ? "Persona Potencial" 
+            : "Institución Potencial";
 
         // Status matching safety - allows dynamic pipeline stages now!
         const normalizedRawStatus = normalizeLeadStatus(statusRaw, mappedType);
@@ -3571,8 +4164,9 @@ International Homeschool CRM`;
         const progOfInterest = getValue(idxProgramOfInterest, "");
         newLeadsFromCsv.push({
           id: `lead-csv-${generateUniqueId()}-${i}`,
+          idLead: rawId || undefined,
           name,
-          contactName: contactName || "Contacto Principal",
+          contactName: contactName || name || "Contacto Principal",
           email: email || "comercial@institucion.com",
           phone: phone || "No proporcionado",
           website,
@@ -3609,6 +4203,141 @@ International Homeschool CRM`;
     reader.readAsText(file, "UTF-8");
   };
 
+  // Google Sheets Fetching & Analysis
+  const handleFetchGoogleSheets = async (mode: 'url' | 'paste') => {
+    setIsFetchingSheets(true);
+    setSheetsFetchError(null);
+    setImportSuccessBanner(null);
+
+    try {
+      const payload = mode === 'url' ? { url: googleSheetsUrl } : { rawText: sheetsPastedText };
+      const response = await fetch('/api/crm/import-google-sheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setSheetsFetchError({
+          message: data.message || data.error || 'No se pudo leer la hoja de cálculo de Google.',
+          isRestricted: data.isRestricted,
+          helpInstructions: data.helpInstructions
+        });
+        setParsedPreviewLeads([]);
+        setPreviewSelectedIndices([]);
+        return;
+      }
+
+      const rawRecords: CRMLead[] = (data.records || []).map((r: any, idx: number) => ({
+        ...r,
+        id: `lead-gs-${generateUniqueId()}-${idx}`,
+        idLead: r.idLead || undefined,
+        name: r.name,
+        contactName: r.contactName || r.name || "Contacto Principal",
+        type: targetImportType,
+        status: (targetImportStage || "Leads") as CRMLead["status"],
+        assignedTo: r.assignedTo || users[0]?.name || "Admin Global",
+        createdAt: new Date().toISOString().split("T")[0]
+      }));
+
+      const records = annotateLeadsWithDuplicates(rawRecords, leads);
+      const onlyNewIndices = records.map((r, i) => (!r.isDuplicate ? i : -1)).filter(i => i !== -1);
+
+      setParsedPreviewLeads(records);
+      setPreviewSelectedIndices(onlyNewIndices);
+      setDetectedColumns(data.detectedMapping || null);
+      setSheetHeaders(data.headers || []);
+      setRawPreviewRecords(data.records || []);
+      setSelectedColumnMapping({
+        idLead: data.detectedMapping?.idLead || "",
+        name: data.detectedMapping?.name || "",
+        contactName: data.detectedMapping?.contactName || data.detectedMapping?.name || ""
+      });
+
+      const duplicateCount = records.length - onlyNewIndices.length;
+      if (onlyNewIndices.length === 0) {
+        dispatchRealtimeNotification({
+          type: "warning",
+          title: "Todos los Prospectos ya Existen",
+          message: `Se detectaron ${records.length} registros en la hoja, pero todos ya se encuentran registrados en el CRM o están duplicados. No hay nuevos prospectos por importar.`
+        });
+      } else {
+        dispatchRealtimeNotification({
+          type: "success",
+          title: "Hoja de Cálculo Procesada",
+          message: `Se detectaron ${records.length} registros: ${onlyNewIndices.length} nuevos listos para importar${duplicateCount > 0 ? ` (${duplicateCount} duplicados omitidos automáticamente)` : ""}.`
+        });
+      }
+    } catch (err: any) {
+      console.error("Error fetching Google Sheets:", err);
+      setSheetsFetchError({
+        message: err.message || "Error de red al consultar el servidor."
+      });
+      setParsedPreviewLeads([]);
+      setPreviewSelectedIndices([]);
+    } finally {
+      setIsFetchingSheets(false);
+    }
+  };
+
+  const handleConfirmImportGoogleSheets = () => {
+    if (parsedPreviewLeads.length === 0 || previewSelectedIndices.length === 0) return;
+
+    // Filter strictly to non-duplicates among the selected indices
+    const selectedLeads = parsedPreviewLeads
+      .filter((lead, idx) => previewSelectedIndices.includes(idx) && !lead.isDuplicate)
+      .map(lead => ({
+        ...lead,
+        type: targetImportType,
+        status: (targetImportStage || lead.status || "Leads") as CRMLead["status"]
+      }));
+
+    if (selectedLeads.length === 0) {
+      alert("No hay prospectos nuevos para importar (todos los seleccionados ya existen en el CRM o están duplicados).");
+      return;
+    }
+
+    // Extra strict check to ensure no duplicates slip through against current leads state
+    const strictlyNewLeads: CRMLead[] = [];
+    const seenNew: CRMLead[] = [];
+    let duplicateSkipped = 0;
+
+    for (const item of selectedLeads) {
+      const dupInCrm = detectLeadDuplicate(item, leads);
+      const dupInBatch = detectLeadDuplicate(item, seenNew);
+      if (!dupInCrm.isDuplicate && !dupInBatch.isDuplicate) {
+        const { isDuplicate, duplicateReason, duplicateMatchedWith, ...cleanLead } = item;
+        strictlyNewLeads.push(cleanLead as CRMLead);
+        seenNew.push(cleanLead as CRMLead);
+      } else {
+        duplicateSkipped++;
+      }
+    }
+
+    if (strictlyNewLeads.length === 0) {
+      alert("Todos los prospectos seleccionados ya existen en el CRM. No se agregaron duplicados.");
+      return;
+    }
+
+    const updated = [...strictlyNewLeads, ...leads];
+    setLeads(updated);
+    safeLocalStorageSet("crm_leads_v1", updated);
+
+    dispatchRealtimeNotification({
+      type: "success",
+      title: "Contactos Importados al CRM",
+      message: `Se agregaron ${strictlyNewLeads.length} nuevos prospectos al CRM exitosamente.${duplicateSkipped > 0 ? ` Se omitieron ${duplicateSkipped} duplicados.` : ""}`
+    });
+
+    const dupMsg = duplicateSkipped > 0 ? ` (Se omitieron ${duplicateSkipped} duplicados automáticamente).` : "";
+    setImportSuccessBanner(`¡Se importaron ${strictlyNewLeads.length} prospectos nuevos exitosamente a la cartera del CRM!${dupMsg}`);
+    setParsedPreviewLeads([]);
+    setPreviewSelectedIndices([]);
+    setSheetsPastedText("");
+  };
+
   // Filtered leads calculation
   const filteredLeads = leads.filter(lead => {
     const matchesSearch = 
@@ -3641,7 +4370,7 @@ International Homeschool CRM`;
               <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-100">
                 Módulo Comercial Integrado
               </span>
-              <h2 className="text-xl font-bold text-slate-800 mt-2 tracking-tight">Instituciones Prospecto</h2>
+              <h2 className="text-xl font-bold text-slate-800 mt-2 tracking-tight">Prospectos</h2>
               <p className="text-xs text-slate-500 mt-1">
                 Gestión comercial de Colegios, Universidades y Clientes Potenciales antes del registro oficial en el sistema.
               </p>
@@ -3762,14 +4491,14 @@ International Homeschool CRM`;
           <div className="flex border-b border-slate-100 px-6 pt-3 shrink-0 overflow-x-auto">
             {[
               { id: "Analytics", label: "Dashboard de CRM", route: "/crm/dashboard", menu: "CRM - Dashboard" as PermissionMenu },
-              { id: "Kanban", label: "Instituciones Prospecto", route: "/crm", menu: "CRM - Prospectos" as PermissionMenu },
+              { id: "Kanban", label: "Prospectos", route: "/crm", menu: "CRM - Prospectos" as PermissionMenu },
               { id: "Tabla", label: "Listado Detallado", route: "/crm", menu: "CRM - Prospectos" as PermissionMenu },
               { id: "Campanas", label: "Campañas", route: "/crm/campanas", menu: "CRM - Campañas" as PermissionMenu },
               { id: "Reportes", label: "Reportes", route: "/crm/reportes", menu: "CRM - Reportes" as PermissionMenu },
               { id: "Correos", label: "Correos", route: "/crm/correos", menu: "CRM - Correos" as PermissionMenu },
               { id: "Repositorio", label: "Repositorio", route: "/crm/repositorio", menu: "CRM - Repositorio" as PermissionMenu },
               { id: "Tareas", label: "Tareas", route: "/crm/tareas", menu: "CRM - Tareas" as PermissionMenu },
-              { id: "Importar", label: "Importación CSV", route: "/crm", menu: "CRM - Prospectos" as PermissionMenu }
+              { id: "Importar", label: "Importar de Google Sheets / CSV", route: "/crm", menu: "CRM - Prospectos" as PermissionMenu }
             ]
             .filter(tab => hasPermission(currentUser?.role, tab.menu, "view"))
             .map((tab) => (
@@ -3818,6 +4547,7 @@ International Homeschool CRM`;
                     <option value="Todos">Todos los Tipos</option>
                     <option value="Institución Potencial">Instituciones Potenciales</option>
                     <option value="Persona Potencial">Contactos Particulares / Prospectos Individuales</option>
+                    <option value="Redes Sociales">Redes Sociales</option>
                   </select>
                 </div>
 
@@ -3915,6 +4645,67 @@ International Homeschool CRM`;
         {/* Content Tabs Area */}
         <div className="flex-1 overflow-auto p-6 bg-slate-50/20">
 
+          {/* STICKY BATCH ACTIONS BAR (VISIBLE ACROSS KANBAN AND TABLA WHEN LEADS ARE SELECTED BY SUPERADMIN) */}
+          {isSuperAdmin && selectedLeadIds.length > 0 && (
+            <div className="sticky top-0 z-30 mb-5 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-xl border border-indigo-500/30 backdrop-blur-md animate-in fade-in slide-in-from-top-3 duration-200">
+              <div className="flex flex-col md:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="bg-indigo-600 text-white font-black text-xs h-7 px-3 rounded-full flex items-center justify-center shadow-inner">
+                    {selectedLeadIds.length} {selectedLeadIds.length === 1 ? 'prospecto seleccionado' : 'prospectos seleccionados'}
+                  </div>
+                  <div>
+                    <h4 className="text-white font-extrabold text-xs tracking-wide flex items-center gap-2">
+                      <span>Operaciones Masivas de Superadministrador</span>
+                      <span className="text-[10px] bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 px-2 py-0.5 rounded-full font-mono font-bold">
+                        Superadmin
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-indigo-200/80 font-medium">
+                      Aplica modificaciones conjuntas o elimina definitivamente los registros seleccionados.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkEditModal(true)}
+                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-200" />
+                    <span>Modificaciones Masivas</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkDeleteModal(true)}
+                    className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer border border-rose-500/50 hover:shadow-rose-600/20"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-200" />
+                    <span>Borrar Masivo ({selectedLeadIds.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleStartBulkFromTableSelection(selectedLeadIds)}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
+                  >
+                    <Mail className="w-3.5 h-3.5 text-slate-300" />
+                    <span className="hidden sm:inline">Correo Masivo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedLeadIds([])}
+                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-slate-200 font-semibold text-xs rounded-xl transition cursor-pointer"
+                  >
+                    Desmarcar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* EMPTY STATE WARNING / RESTORE TRIGGER */}
           {leads.length === 0 && (
             <div className="bg-slate-50/50 border border-dashed border-slate-250 rounded-2xl p-10 text-center flex flex-col items-center justify-center space-y-4 mb-6">
@@ -3988,6 +4779,24 @@ International Homeschool CRM`;
                       {particularStages.length} etapas
                     </span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setKanbanPipelineType("Redes Sociales");
+                      setTypeFilter("Redes Sociales");
+                    }}
+                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      kanbanPipelineType === "Redes Sociales"
+                        ? "bg-white text-indigo-700 shadow-xs font-black border border-slate-200/60"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    <Share2 className="w-3.5 h-3.5 text-pink-600" />
+                    <span>Redes Sociales ({leads.filter(l => l.type === "Redes Sociales").length})</span>
+                    <span className="text-[10px] bg-pink-50 text-pink-700 px-1.5 py-0.2 rounded-full font-mono font-bold">
+                      {redesSocialesStages.length} etapas
+                    </span>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -4011,8 +4820,29 @@ International Homeschool CRM`;
                   </button>
 
                   <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">
-                    Visualizando pipeline de <strong>{kanbanPipelineType === "Institución Potencial" ? "Instituciones" : "Particulares"}</strong>
+                    Visualizando pipeline de <strong>{kanbanPipelineType === "Institución Potencial" ? "Instituciones" : kanbanPipelineType === "Redes Sociales" ? "Redes Sociales" : "Particulares"}</strong>
                   </span>
+
+                  {isSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllLeads}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition border cursor-pointer ${
+                        filteredLeads.length > 0 && filteredLeads.every(l => selectedLeadIds.includes(l.id))
+                          ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-2xs"
+                      }`}
+                      title="Seleccionar o deseleccionar todos los prospectos filtrados para edición o borrado masivo"
+                    >
+                      <CheckSquare className="w-3.5 h-3.5" />
+                      <span>
+                        {filteredLeads.length > 0 && filteredLeads.every(l => selectedLeadIds.includes(l.id))
+                          ? "Deseleccionar Todos"
+                          : `Seleccionar Todos (${filteredLeads.length})`}
+                      </span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => {
@@ -4037,7 +4867,21 @@ International Homeschool CRM`;
                   const isCoreStage = defaultStagesList.includes(column);
 
                   return (
-                    <div key={column} className="w-72 shrink-0 bg-slate-50/80 border border-slate-250 p-3.5 rounded-2xl flex flex-col space-y-3 max-h-[580px]">
+                    <div 
+                      key={column} 
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const draggedId = e.dataTransfer.getData("text/plain") || e.dataTransfer.getData("leadId");
+                        if (draggedId) {
+                          handleMoveStatus(draggedId, column);
+                        }
+                      }}
+                      className="w-72 shrink-0 bg-slate-50/80 border border-slate-250 p-3.5 rounded-2xl flex flex-col space-y-3 max-h-[580px]"
+                    >
                       
                       {/* Column HeaderInfo */}
                       <div className="flex items-center justify-between pb-1 border-b border-slate-150">
@@ -4081,17 +4925,45 @@ International Homeschool CRM`;
                               return (
                                 <div
                                   key={lead.id}
-                                  className={`bg-white border p-2.5 rounded-xl shadow-2xs hover:shadow-sm transition-all space-y-1.5 group ${
-                                    isInactive ? "border-rose-300 border-l-3 border-l-rose-500 bg-rose-50/20" : "border-slate-200 hover:border-indigo-300"
+                                  draggable
+                                  onDragStart={(e) => {
+                                    e.dataTransfer.setData("text/plain", lead.id);
+                                    e.dataTransfer.setData("leadId", lead.id);
+                                  }}
+                                  className={`bg-white border p-2.5 rounded-xl shadow-2xs hover:shadow-sm transition-all space-y-1.5 group cursor-grab active:cursor-grabbing ${
+                                    selectedLeadIds.includes(lead.id)
+                                      ? "ring-2 ring-indigo-500 border-indigo-400 bg-indigo-50/40 shadow-xs"
+                                      : isInactive 
+                                        ? "border-rose-300 border-l-3 border-l-rose-500 bg-rose-50/20" 
+                                        : "border-slate-200 hover:border-indigo-300"
                                   }`}
                                 >
                                   <div className="flex items-center justify-between gap-1.5">
                                     <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                      {isSuperAdmin && (
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedLeadIds.includes(lead.id)}
+                                          onChange={() => toggleSelectLead(lead.id)}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer shrink-0"
+                                          title="Seleccionar prospecto para acción masiva"
+                                        />
+                                      )}
                                       <span className={`inline-flex px-1.5 py-0.2 rounded text-[8.5px] font-extrabold uppercase shrink-0 ${
-                                        lead.type === "Persona Potencial" ? "bg-slate-100 text-slate-600 border border-slate-200" : "bg-indigo-50 text-indigo-700 border border-indigo-100"
+                                        lead.type === "Persona Potencial" 
+                                          ? "bg-slate-100 text-slate-600 border border-slate-200" 
+                                          : lead.type === "Redes Sociales"
+                                            ? "bg-pink-50 text-pink-700 border border-pink-200"
+                                            : "bg-indigo-50 text-indigo-700 border border-indigo-100"
                                       }`}>
-                                        {lead.type === "Persona Potencial" ? "Persona" : "Inst."}
+                                        {lead.type === "Persona Potencial" ? "Persona" : lead.type === "Redes Sociales" ? "Redes" : "Inst."}
                                       </span>
+                                      {lead.idLead && (
+                                        <span className="inline-flex px-1.5 py-0.2 rounded font-mono font-bold text-[8.5px] bg-indigo-50 border border-indigo-200 text-indigo-700 shrink-0">
+                                          {lead.idLead}
+                                        </span>
+                                      )}
                                       <h5 className="font-bold text-slate-800 text-[11.5px] tracking-tight truncate group-hover:text-indigo-700 transition-colors" title={lead.name}>
                                         {lead.name}
                                       </h5>
@@ -4107,9 +4979,17 @@ International Homeschool CRM`;
                                       {lead.contactName || "Sin contacto"}
                                     </span>
                                     {isInactive ? (
-                                      <span className="inline-flex items-center px-1 py-0.2 rounded text-[8px] font-extrabold uppercase bg-rose-50 text-rose-700 border border-rose-200 animate-pulse shrink-0 gap-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleExecuteSlaActionForLead(lead);
+                                        }}
+                                        title={`SLA Vencido (${slaLimit}d): ${getLeadSlaRule(lead.status)?.actionOnAlert || 'Alerta en Dashboard'}${getLeadSlaRule(lead.status)?.emailTemplateTitle ? ` [${getLeadSlaRule(lead.status)?.emailTemplateTitle}]` : ''}${getLeadSlaRule(lead.status)?.hasSecondaryAction && getLeadSlaRule(lead.status)?.secondaryAction ? ` + ${getLeadSlaRule(lead.status)?.secondaryAction}` : ''}. Haz clic para ejecutar.`}
+                                        className="inline-flex items-center px-1 py-0.2 rounded text-[8px] font-extrabold uppercase bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 animate-pulse shrink-0 gap-0.5 cursor-pointer transition shadow-2xs"
+                                      >
                                         <AlertCircle className="w-2.5 h-2.5" /> Sin Act.
-                                      </span>
+                                      </button>
                                     ) : (
                                       <span className="text-[9.5px] text-slate-400 font-medium truncate max-w-[85px]" title={lead.assignedTo ? `Asignado a ${lead.assignedTo}` : "Sin asignar"}>
                                         👤 {lead.assignedTo || "S/A"}
@@ -4176,6 +5056,19 @@ International Homeschool CRM`;
                                       )}
                                     </div>
                                   </div>
+
+                                  {/* Quick action when in Firma stage */}
+                                  {lead.type === "Institución Potencial" && (lead.status === "Firma" || lead.status === "Cierre") && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPendingFirmaTransition({ lead, isConfirmationFromFirma: true })}
+                                      title="Confirmar firma y crear Institución oficial (Avanzar a Cliente)"
+                                      className="w-full mt-1.5 py-1 px-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg text-[9px] font-bold flex items-center justify-center gap-1 shadow-2xs cursor-pointer transition"
+                                    >
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-100" />
+                                      <span>Crear Institución</span>
+                                    </button>
+                                  )}
                                 </div>
                               );
                             }
@@ -4183,30 +5076,68 @@ International Homeschool CRM`;
                             return (
                               <div 
                                 key={lead.id} 
-                                className={`bg-white border p-3.5 rounded-xl shadow-sm hover:shadow-md transition-all space-y-3 group ${
-                                  isInactive ? "border-rose-300 border-l-4 border-l-rose-500 bg-rose-50/10" : "border-slate-200"
+                                draggable
+                                onDragStart={(e) => {
+                                  e.dataTransfer.setData("text/plain", lead.id);
+                                  e.dataTransfer.setData("leadId", lead.id);
+                                }}
+                                className={`bg-white border p-3.5 rounded-xl shadow-sm hover:shadow-md transition-all space-y-3 group cursor-grab active:cursor-grabbing ${
+                                  selectedLeadIds.includes(lead.id)
+                                    ? "ring-2 ring-indigo-500 border-indigo-400 bg-indigo-50/30 shadow-indigo-100/50"
+                                    : isInactive 
+                                      ? "border-rose-300 border-l-4 border-l-rose-500 bg-rose-50/10" 
+                                      : "border-slate-200"
                                 }`}
                               >
                                 <div className="flex justify-between items-start flex-wrap gap-1">
                                   <div className="flex items-center gap-1.5 flex-wrap">
+                                    {isSuperAdmin && (
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedLeadIds.includes(lead.id)}
+                                        onChange={() => toggleSelectLead(lead.id)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer shrink-0"
+                                        title="Seleccionar prospecto para acción masiva"
+                                      />
+                                    )}
                                     <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase ${
-                                      lead.type === "Persona Potencial" ? "bg-[#f8fafc] text-slate-600 border border-slate-200" : "bg-indigo-50/60 text-indigo-700 border border-indigo-100"
+                                      lead.type === "Persona Potencial" 
+                                        ? "bg-[#f8fafc] text-slate-600 border border-slate-200" 
+                                        : lead.type === "Redes Sociales"
+                                          ? "bg-pink-50 text-pink-700 border border-pink-200"
+                                          : "bg-indigo-50/60 text-indigo-700 border border-indigo-100"
                                     }`}>
-                                      {lead.type === "Persona Potencial" ? "Persona" : "Institución"}
+                                      {lead.type === "Persona Potencial" ? "Persona" : lead.type === "Redes Sociales" ? "Redes Sociales" : "Institución"}
                                     </span>
                                     {isInactive && (
-                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase bg-rose-50 text-rose-700 border border-rose-200 gap-1 animate-pulse">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleExecuteSlaActionForLead(lead);
+                                        }}
+                                        title={`SLA Vencido (${slaLimit}d): ${getLeadSlaRule(lead.status)?.actionOnAlert || 'Alerta en Dashboard'}${getLeadSlaRule(lead.status)?.emailTemplateTitle ? ` [${getLeadSlaRule(lead.status)?.emailTemplateTitle}]` : ''}${getLeadSlaRule(lead.status)?.hasSecondaryAction && getLeadSlaRule(lead.status)?.secondaryAction ? ` + ${getLeadSlaRule(lead.status)?.secondaryAction}` : ''}. Haz clic para ejecutar.`}
+                                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 gap-1 animate-pulse cursor-pointer transition shadow-2xs"
+                                      >
                                         <AlertCircle className="w-2.5 h-2.5" /> Sin Actividad
-                                      </span>
+                                      </button>
                                     )}
                                   </div>
                                   <p className="text-xs font-black text-indigo-600 font-mono">${lead.value.toLocaleString("en-US")} USD</p>
                                 </div>
 
                                 <div>
-                                  <h5 className="font-bold text-slate-800 text-xs tracking-tight line-clamp-1 group-hover:text-indigo-700 transition-colors">
-                                    {lead.name}
-                                  </h5>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {lead.idLead && (
+                                      <span className="inline-flex px-1.5 py-0.2 rounded font-mono font-bold text-[8.5px] bg-indigo-50 border border-indigo-200 text-indigo-700 shrink-0">
+                                        {lead.idLead}
+                                      </span>
+                                    )}
+                                    <h5 className="font-bold text-slate-800 text-xs tracking-tight line-clamp-1 group-hover:text-indigo-700 transition-colors">
+                                      {lead.name}
+                                    </h5>
+                                  </div>
                                   <p className="text-[10px] text-slate-500 font-medium mt-0.5 flex items-center">
                                     <Users className="w-3 h-3 mr-1 opacity-60 shrink-0" /> {lead.contactName || "Sin contacto principal"}
                                   </p>
@@ -4316,6 +5247,19 @@ International Homeschool CRM`;
                                   </button>
                                 )}
                               </div>
+
+                              {/* Prominent Action Button for Institutions in Firma stage */}
+                              {lead.type === "Institución Potencial" && (lead.status === "Firma" || lead.status === "Cierre") && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingFirmaTransition({ lead, isConfirmationFromFirma: true })}
+                                  title="Confirmar firma y crear Institución oficial (Avanzar a Cliente)"
+                                  className="w-full mt-2 py-1.5 px-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-all"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-100" />
+                                  <span>Confirmar Firma y Crear Institución</span>
+                                </button>
+                              )}
                             </div>
                           );
                         })
@@ -4337,7 +5281,7 @@ International Homeschool CRM`;
                   </div>
                   <div className="text-center">
                     <h6 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono">Añadir Etapa</h6>
-                    <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">Crea nuevos estados de negociación para {kanbanPipelineType === "Institución Potencial" ? "Instituciones" : "Particulares"}.</p>
+                    <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">Crea nuevos estados de negociación para {kanbanPipelineType === "Institución Potencial" ? "Instituciones" : kanbanPipelineType === "Redes Sociales" ? "Redes Sociales" : "Particulares"}.</p>
                   </div>
                   <div className="w-full space-y-2 pt-1">
                     <input 
@@ -4352,7 +5296,7 @@ International Homeschool CRM`;
                       disabled={!newStageName.trim()}
                       className="w-full bg-indigo-600 hover:bg-indigo-750 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white font-bold h-9 rounded-xl text-xs uppercase tracking-wider transition cursor-pointer flex items-center justify-center shadow-md shadow-indigo-600/10"
                     >
-                      + Agregar a {kanbanPipelineType === "Institución Potencial" ? "Instituciones" : "Particulares"}
+                      + Agregar a {kanbanPipelineType === "Institución Potencial" ? "Instituciones" : kanbanPipelineType === "Redes Sociales" ? "Redes Sociales" : "Particulares"}
                     </button>
                   </div>
                 </div>
@@ -4511,13 +5455,36 @@ International Homeschool CRM`;
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
+                        onClick={() => setShowBulkEditModal(true)}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-lg shadow-xs transition cursor-pointer flex items-center gap-1.5"
+                        title="Abrir modal completo de modificaciones masivas"
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                        <span>Modificaciones Masivas</span>
+                      </button>
+
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setShowBulkDeleteModal(true)}
+                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-lg shadow-xs transition cursor-pointer flex items-center gap-1.5 border border-rose-500/50"
+                          title="Eliminar permanentemente todos los prospectos seleccionados"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Borrar Masivo ({selectedLeadIds.length})</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
                         onClick={() => handleStartBulkFromTableSelection(selectedLeadIds)}
-                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-750 text-white font-extrabold text-xs rounded-lg shadow-xs transition cursor-pointer flex items-center gap-1.5"
-                        title="Redactar y enviar correo masivo a todos los colegios seleccionados"
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs rounded-lg shadow-xs transition cursor-pointer flex items-center gap-1.5"
+                        title="Redactar y enviar correo masivo a todos los prospectos seleccionados"
                       >
                         <Mail className="w-3.5 h-3.5" />
                         <span>Enviar Correo Masivo ({selectedLeadIds.length})</span>
                       </button>
+
                       <button
                         type="button"
                         onClick={() => setSelectedLeadIds([])}
@@ -4659,7 +5626,8 @@ International Homeschool CRM`;
                           if (lead.status === "Malla curricular y boletines") badgeColor = "bg-indigo-50 text-indigo-700 border border-indigo-150";
                           if (lead.status.includes("Diagnostico") || lead.status.includes("Diagnóstico") || lead.status === "Propuesta") badgeColor = "bg-amber-50 text-amber-700 border border-amber-150";
                           if (lead.status === "Revisión") badgeColor = "bg-orange-50 text-orange-700 border border-orange-150";
-                          if (lead.status === "Firma" || lead.status === "Cierre") badgeColor = "bg-emerald-50 text-emerald-700 border border-emerald-150";
+                          if (lead.status === "Firma" || lead.status === "Cierre") badgeColor = "bg-teal-50 text-teal-700 border border-teal-150";
+                          if (lead.status === "Cliente") badgeColor = "bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold";
                           if (lead.status === "Sin Interes") badgeColor = "bg-slate-100 text-slate-600 border border-slate-200";
                           if (lead.status === "Futuro") badgeColor = "bg-teal-50 text-teal-700 border border-teal-150";
                           if (lead.status === "Perdido") badgeColor = "bg-rose-50 text-rose-700 border border-rose-150";
@@ -4684,20 +5652,35 @@ International Homeschool CRM`;
                                   <button
                                     type="button"
                                     onClick={() => setViewingLead(lead)}
-                                    className="font-bold text-indigo-600 hover:text-indigo-800 text-xs flex items-center flex-wrap gap-0.5 cursor-pointer text-left focus:outline-none group/name truncate"
+                                    className="font-bold text-indigo-600 hover:text-indigo-800 text-xs flex items-center flex-wrap gap-1 cursor-pointer text-left focus:outline-none group/name truncate"
                                     title="Ver Ficha Técnica de la Institución"
                                   >
                                     {lead.type === "Institución Potencial" ? (
                                       <Building2 className="w-3 h-3 text-indigo-550 shrink-0 group-hover/name:scale-110 transition-transform" />
+                                    ) : lead.type === "Redes Sociales" ? (
+                                      <Share2 className="w-3 h-3 text-pink-500 shrink-0 group-hover/name:scale-110 transition-transform" />
                                     ) : (
                                       <Users className="w-3 h-3 text-slate-500 shrink-0 group-hover/name:scale-110 transition-transform" />
+                                    )}
+                                    {lead.idLead && (
+                                      <span className="inline-flex items-center px-1.5 py-0.2 rounded font-mono font-bold text-[8.5px] bg-indigo-50 border border-indigo-200 text-indigo-700 shrink-0">
+                                        {lead.idLead}
+                                      </span>
                                     )}
                                     <span className="underline decoration-indigo-200 group-hover/name:decoration-indigo-600 decoration-1.5 underline-offset-1 truncate">{lead.name}</span>
                                   </button>
                                   {isInactive && (
-                                    <span className="inline-flex items-center px-1 py-0.5 rounded text-[7px] font-extrabold uppercase bg-rose-50 text-rose-700 border border-rose-150 gap-0.5 shrink-0 animate-pulse">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleExecuteSlaActionForLead(lead);
+                                      }}
+                                      title={`SLA Vencido (${slaLimit}d): ${getLeadSlaRule(lead.status)?.actionOnAlert || 'Alerta en Dashboard'}${getLeadSlaRule(lead.status)?.emailTemplateTitle ? ` [${getLeadSlaRule(lead.status)?.emailTemplateTitle}]` : ''}${getLeadSlaRule(lead.status)?.hasSecondaryAction && getLeadSlaRule(lead.status)?.secondaryAction ? ` + ${getLeadSlaRule(lead.status)?.secondaryAction}` : ''}. Haz clic para ejecutar.`}
+                                      className="inline-flex items-center px-1 py-0.5 rounded text-[7px] font-extrabold uppercase bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-150 gap-0.5 shrink-0 animate-pulse cursor-pointer transition"
+                                    >
                                       <AlertCircle className="w-1.5 h-1.5" /> Sin Actividad
-                                    </span>
+                                    </button>
                                   )}
                                 </div>
                                 <p className="text-[9px] text-slate-400 font-medium font-mono truncate">
@@ -4807,6 +5790,17 @@ International Homeschool CRM`;
                             </td>
                             <td className="px-2 py-2 text-center">
                               <div className="flex items-center justify-center gap-1 shrink-0">
+                                {lead.type === "Institución Potencial" && (lead.status === "Firma" || lead.status === "Cierre") && (
+                                  <button 
+                                    type="button"
+                                    onClick={() => setPendingFirmaTransition({ lead, isConfirmationFromFirma: true })}
+                                    className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wide transition shrink-0 flex items-center gap-1 cursor-pointer shadow-2xs"
+                                    title="Confirmar firma y crear Institución oficial (Pasar a Cliente)"
+                                  >
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span>Crear Inst.</span>
+                                  </button>
+                                )}
                                 <button 
                                   onClick={() => setViewingLead(lead)}
                                   className="text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-1.5 py-0.5 rounded text-[8.5px] font-extrabold uppercase tracking-wide transition shrink-0 flex items-center gap-1 cursor-pointer"
@@ -4853,112 +5847,695 @@ International Homeschool CRM`;
             </>
           )}
 
-          {/* TAB 3: CSV IMPORT MASIVO */}
+          {/* TAB 3: IMPORTACIÓN GOOGLE SHEETS & CSV */}
           {activeTab === "Importar" && (
-            <div className="max-w-3xl mx-auto space-y-6">
+            <div className="max-w-5xl mx-auto space-y-6">
               
-              {/* Explicación general de importación con descargador de formato */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-                <div className="flex items-start space-x-3.5 pb-4 border-b border-slate-100">
-                  <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shrink-0">
-                    <FileSpreadsheet className="w-6 h-6 animate-pulse" />
+              {/* Success Notification Banner */}
+              {importSuccessBanner && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between text-emerald-800 shadow-sm animate-in fade-in slide-in-from-top-2">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <span className="text-sm font-semibold">{importSuccessBanner}</span>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Subir Prospectos desde Archivo CSV</h3>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Carga masivamente colegios potenciales (instituciones) y contactos privados ingresando los datos en nuestra plantilla estandarizada.
-                    </p>
+                  <button 
+                    onClick={() => setImportSuccessBanner(null)}
+                    className="text-emerald-700 hover:text-emerald-950 p-1 rounded-lg hover:bg-emerald-100 transition"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* Main Import Selector Card */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-5 border-b border-slate-100">
+                  <div className="flex items-start space-x-3.5">
+                    <div className="w-11 h-11 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center shrink-0 shadow-sm">
+                      <FileSpreadsheet className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-800 tracking-tight">Importación de Contactos al CRM</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Importa prospectos e instituciones de forma automática desde Google Sheets o planillas CSV con mapeo inteligente de columnas.
+                      </p>
+                    </div>
                   </div>
-                </div>
 
-                <div className="text-xs text-slate-600 leading-relaxed font-sans space-y-2">
-                  <p className="font-bold text-slate-700">Pasos para importar correctamente:</p>
-                  <ol className="list-decimal pl-4 space-y-1 text-slate-500">
-                    <li>Descarga la plantilla oficial utilizando el botón en la parte superior derecha.</li>
-                    <li>Completa la información requerida (las columnas de "Tipo", "Nombre" y "Contacto" son esenciales).</li>
-                    <li>Haz clic en el cuadro de carga a continuación o arrastra tu archivo guardado en extensión <strong className="font-bold text-indigo-600">.csv</strong>.</li>
-                    <li>Visualiza el reporte de éxitos o errores en tiempo real y guárdalos directamente.</li>
-                  </ol>
-                </div>
-              </div>
-
-              {/* Upload Dropzone */}
-              <div className="bg-white border border-slate-250 rounded-2xl p-8 shadow-sm flex flex-col items-center justify-center text-center border-dashed relative hover:border-indigo-400 hover:bg-indigo-50/5 transition group">
-                <Upload className="w-10 h-10 text-slate-400 group-hover:text-indigo-500 group-hover:scale-110 transition-all mb-3" />
-                <h4 className="text-xs font-black text-slate-700 uppercase tracking-widest">Cargar planilla CSV de Prospectos</h4>
-                <p className="text-[11px] text-slate-400 mt-1 mb-4">Soporta exclusivamente archivos codificados en .csv (Unicode, UTF-8)</p>
-                
-                <label className="bg-indigo-600 hover:bg-indigo-750 text-white px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition shadow-md">
-                  Seleccionar Archivo
-                  <input 
-                    type="file" 
-                    accept=".csv"
-                    onChange={handleCrmTemplateUpload}
-                    className="hidden" 
-                  />
-                </label>
-              </div>
-
-              {/* Import Results Dashboard Report */}
-              {importReport && (
-                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-120 uppercase">
-                      Resultado de última importación
-                    </span>
-                    <button 
-                      onClick={() => setImportReport(null)}
-                      className="text-xs text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 transition"
+                  {/* Sub-tab Navigation */}
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => setImportSubTab('sheets-url')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                        importSubTab === 'sheets-url'
+                          ? 'bg-white text-emerald-700 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
                     >
-                      Cerrar Reporte
+                      <LinkIcon className="w-3.5 h-3.5" />
+                      Google Sheets (Enlace)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImportSubTab('sheets-paste')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                        importSubTab === 'sheets-paste'
+                          ? 'bg-white text-emerald-700 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Pegar Celdas (Ctrl+V)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImportSubTab('csv-file')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                        importSubTab === 'csv-file'
+                          ? 'bg-white text-indigo-700 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <UploadCloud className="w-3.5 h-3.5" />
+                      Archivo CSV / Excel
                     </button>
                   </div>
+                </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-center">
-                      <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Registros Detectados</span>
-                      <span className="text-xl font-mono font-black text-slate-700 mt-1 block">{importReport.total}</span>
+                {/* Sub-tab 1: Google Sheets URL Direct Sync */}
+                {importSubTab === 'sheets-url' && (
+                  <div className="space-y-5 animate-in fade-in duration-200">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Enlace de la Hoja de Google Sheets
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-2.5">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            value={googleSheetsUrl}
+                            onChange={(e) => setGoogleSheetsUrl(e.target.value)}
+                            placeholder="https://docs.google.com/spreadsheets/d/..."
+                            className="w-full pl-3.5 pr-24 py-2.5 bg-slate-50 border border-slate-250 rounded-xl text-xs font-mono text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 focus:bg-white transition"
+                          />
+                          <a
+                            href={googleSheetsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-900 px-2 py-1 rounded hover:bg-emerald-50 transition"
+                            title="Abrir en Google Drive"
+                          >
+                            <span>Abrir</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleFetchGoogleSheets('url')}
+                          disabled={isFetchingSheets || !googleSheetsUrl.trim()}
+                          className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm shrink-0 cursor-pointer"
+                        >
+                          {isFetchingSheets ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>Extrayendo...</span>
+                            </>
+                          ) : (
+                            <>
+                              <FileSpreadsheet className="w-4 h-4" />
+                              <span>Conectar y Extraer Contactos</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-2">
+                        El sistema lee automáticamente los nombres de las columnas ("Nombre", "Contacto", "Correo", "Teléfono", "Ciudad", etc.) para asociar los datos en el CRM.
+                      </p>
                     </div>
-                    <div className="bg-emerald-50/20 p-3.5 rounded-xl border border-emerald-150 text-center">
-                      <span className="text-[9px] font-extrabold text-emerald-600 uppercase tracking-wider block">Prospectos Importados</span>
-                      <span className="text-xl font-mono font-black text-emerald-700 mt-1 block">✓ {importReport.success}</span>
+
+                    {/* Google Sheets Permission Guidance Card (When Restricted or Error) */}
+                    {sheetsFetchError && (
+                      <div className="bg-amber-50/70 border border-amber-250 rounded-2xl p-5 space-y-4 animate-in fade-in slide-in-from-top-1">
+                        <div className="flex items-start gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                            <AlertCircle className="w-5 h-5" />
+                          </div>
+                          <div className="flex-1">
+                            <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                              {sheetsFetchError.isRestricted ? "Acceso Restringido en Google Drive" : "Atención con el Enlace"}
+                            </h4>
+                            <p className="text-xs text-amber-800 mt-1 font-medium leading-relaxed">
+                              {sheetsFetchError.message}
+                            </p>
+                          </div>
+                        </div>
+
+                        {sheetsFetchError.isRestricted && (
+                          <div className="bg-white/90 border border-amber-200 rounded-xl p-4 space-y-3">
+                            <p className="text-xs font-bold text-slate-800">
+                              Pasos para habilitar la sincronización directa en Google Sheets:
+                            </p>
+                            <ol className="text-xs text-slate-600 space-y-1.5 list-decimal pl-4 leading-relaxed">
+                              <li>Abre tu hoja en Google Sheets con el botón <strong>"Abrir"</strong> en la parte superior.</li>
+                              <li>Haz clic en el botón azul <strong className="text-indigo-600">"Compartir"</strong> ubicado en la esquina superior derecha de Google Sheets.</li>
+                              <li>Bajo <strong>"Acceso general"</strong>, cambia la opción de <em>"Restringido"</em> a <strong className="text-emerald-700">"Cualquier persona con el enlace"</strong> (con permiso de <em>Lector</em>).</li>
+                              <li>Presiona <strong>"Listo"</strong> en Google Sheets y regresa aquí a presionar <strong className="text-emerald-700">"Conectar y Extraer Contactos"</strong>.</li>
+                            </ol>
+
+                            <div className="pt-2 border-t border-amber-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+                              <span className="text-[11px] text-slate-500 font-medium">
+                                ¿No tienes permisos de administrador para cambiar el enlace?
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setImportSubTab('sheets-paste');
+                                  setSheetsFetchError(null);
+                                }}
+                                className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                                Usar opción directa: Copiar y Pegar Celdas
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Sub-tab 2: Direct Cell Paste (Ctrl+C from Sheets, Ctrl+V here) */}
+                {importSubTab === 'sheets-paste' && (
+                  <div className="space-y-4 animate-in fade-in duration-200">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600 leading-relaxed space-y-1.5">
+                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-emerald-600" />
+                        Método directo sin cambiar permisos de Google Drive:
+                      </p>
+                      <p className="text-slate-500">
+                        1. Abre tu hoja de Google Sheets en tu navegador.
+                        <br />
+                        2. Selecciona con el cursor las celdas que deseas importar (incluyendo la fila de títulos si la tienes) y presiona <strong className="font-mono text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200">Ctrl + C</strong> (o Cmd+C en Mac).
+                        <br />
+                        3. Haz clic en el área inferior y presiona <strong className="font-mono text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200">Ctrl + V</strong>.
+                      </p>
                     </div>
-                    <div className={`p-3.5 rounded-xl border text-center ${importReport.errors.length > 0 ? "bg-rose-50/20 border-rose-200" : "bg-slate-50/50 border-slate-200"}`}>
-                      <span className={`text-[9px] font-extrabold uppercase tracking-wider block ${importReport.errors.length > 0 ? "text-rose-600" : "text-slate-400"}`}>Errores de Validación</span>
-                      <span className={`text-xl font-mono font-black mt-1 block ${importReport.errors.length > 0 ? "text-rose-700" : "text-slate-500"}`}>{importReport.errors.length}</span>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Pega aquí los datos copiados de Google Sheets:
+                      </label>
+                      <textarea
+                        value={sheetsPastedText}
+                        onChange={(e) => setSheetsPastedText(e.target.value)}
+                        placeholder={`Nombre Institución\tContacto\tEmail\tTelefono\tCiudad\nColegio San Patricio\tLic. Andrea Ruiz\tandrea@sanpatricio.edu.mx\t5512345678\tMonterrey\nInstituto Cumbres\tIng. Roberto Garza\troberto@cumbres.edu.mx\t8123456789\tGuadalajara`}
+                        rows={7}
+                        className="w-full p-3.5 bg-slate-50 border border-slate-250 rounded-xl font-mono text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 focus:bg-white transition whitespace-pre overflow-x-auto"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-400">
+                        Detecta automáticamente columnas separadas por tabuladores de Google Sheets o comas.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleFetchGoogleSheets('paste')}
+                        disabled={isFetchingSheets || !sheetsPastedText.trim()}
+                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm cursor-pointer"
+                      >
+                        {isFetchingSheets ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Procesando...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-4 h-4" />
+                            <span>Procesar Celdas Copiadas</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {sheetsFetchError && (
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 text-xs text-rose-800 font-medium">
+                        {sheetsFetchError.message}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Sub-tab 3: CSV File Upload */}
+                {importSubTab === 'csv-file' && (
+                  <div className="space-y-5 animate-in fade-in duration-200">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs">
+                      <div>
+                        <p className="font-bold text-slate-800">Plantilla CSV oficial del CRM</p>
+                        <p className="text-slate-500 text-[11px] mt-0.5">Descarga nuestra plantilla prediseñada con todas las columnas recomendadas.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={downloadCrmTemplate}
+                        className="px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 self-start sm:self-auto shadow-2xs cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-slate-500" />
+                        Descargar Plantilla CSV
+                      </button>
+                    </div>
+
+                    {/* Upload Dropzone */}
+                    <div className="bg-white border border-slate-250 rounded-2xl p-8 shadow-sm flex flex-col items-center justify-center text-center border-dashed relative hover:border-indigo-400 hover:bg-indigo-50/5 transition group">
+                      <Upload className="w-10 h-10 text-slate-400 group-hover:text-indigo-500 group-hover:scale-110 transition-all mb-3" />
+                      <h4 className="text-xs font-black text-slate-700 uppercase tracking-widest">Cargar planilla CSV de Prospectos</h4>
+                      <p className="text-[11px] text-slate-400 mt-1 mb-4">Soporta archivos codificados en .csv (Unicode, UTF-8)</p>
+                      
+                      <label className="bg-indigo-600 hover:bg-indigo-750 text-white px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition shadow-md">
+                        Seleccionar Archivo
+                        <input 
+                          type="file" 
+                          accept=".csv"
+                          onChange={handleCrmTemplateUpload}
+                          className="hidden" 
+                        />
+                      </label>
+                    </div>
+
+                    {/* CSV Import Results Report */}
+                    {importReport && (
+                      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-120 uppercase">
+                            Resultado de última importación CSV
+                          </span>
+                          <button 
+                            onClick={() => setImportReport(null)}
+                            className="text-xs text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 transition cursor-pointer"
+                          >
+                            Cerrar Reporte
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-center">
+                            <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Registros Detectados</span>
+                            <span className="text-xl font-mono font-black text-slate-700 mt-1 block">{importReport.total}</span>
+                          </div>
+                          <div className="bg-emerald-50/20 p-3.5 rounded-xl border border-emerald-150 text-center">
+                            <span className="text-[9px] font-extrabold text-emerald-600 uppercase tracking-wider block">Prospectos Importados</span>
+                            <span className="text-xl font-mono font-black text-emerald-700 mt-1 block">✓ {importReport.success}</span>
+                          </div>
+                          <div className={`p-3.5 rounded-xl border text-center ${importReport.errors.length > 0 ? "bg-rose-50/20 border-rose-200" : "bg-slate-50/50 border-slate-200"}`}>
+                            <span className={`text-[9px] font-extrabold uppercase tracking-wider block ${importReport.errors.length > 0 ? "text-rose-600" : "text-slate-400"}`}>Errores de Validación</span>
+                            <span className={`text-xl font-mono font-black mt-1 block ${importReport.errors.length > 0 ? "text-rose-700" : "text-slate-500"}`}>{importReport.errors.length}</span>
+                          </div>
+                        </div>
+
+                        {importReport.errors.length > 0 && (
+                          <div className="border border-rose-200 bg-rose-50/5 rounded-xl overflow-hidden mt-3 max-h-56 overflow-y-auto">
+                            <div className="bg-rose-50 border-b border-rose-100 px-4 py-2 text-xs font-extrabold text-rose-800 uppercase tracking-wider">
+                              Detalle de filas rechazadas
+                            </div>
+                            <div className="divide-y divide-rose-100 text-xs text-sans">
+                              {importReport.errors.map((err, idx) => (
+                                <div key={idx} className="p-3 bg-white hover:bg-rose-50/10 transition-all">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="bg-slate-750 text-slate-100 text-[9px] px-1.5 py-0.5 rounded font-mono font-bold">
+                                      Fila #{err.rowNum}
+                                    </span>
+                                    <span className="text-rose-700 font-bold bg-rose-100/65 px-2 py-0.5 rounded text-[10px]">
+                                      {err.msg}
+                                    </span>
+                                  </div>
+                                  <p className="bg-slate-50 p-2 border border-slate-150 rounded font-mono text-[9px] text-slate-500 overflow-x-auto">
+                                    {err.data}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {importReport.success > 0 && (
+                          <div className="bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-150 p-4 rounded-xl text-xs text-emerald-800 leading-relaxed font-semibold">
+                            🎉 ¡Registro Completado! Se han agregado {importReport.success} registros exitosamente a la base local del CRM.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Interactive Preview Table & Confirmation Section */}
+              {parsedPreviewLeads.length > 0 && (
+                <div className="bg-white border border-emerald-200 rounded-2xl p-6 shadow-sm space-y-5 animate-in fade-in slide-in-from-bottom-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 uppercase tracking-wider">
+                          Vista Previa de Contactos
+                        </span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-slate-100 text-slate-700">
+                          Total en Hoja: {parsedPreviewLeads.length}
+                        </span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          Nuevos para Importar: {parsedPreviewLeads.filter(l => !l.isDuplicate).length}
+                        </span>
+                        {parsedPreviewLeads.some(l => l.isDuplicate) && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-amber-50 text-amber-800 border border-amber-250">
+                            Duplicados Omitidos: {parsedPreviewLeads.filter(l => l.isDuplicate).length}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Solo se importarán los contactos <strong>nuevos</strong> al CRM. Los duplicados se descartan automáticamente para evitar registros repetidos.
+                      </p>
+                    </div>
+
+                    {/* Target Pipeline & Stage Settings */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Tipo de Prospecto
+                        </label>
+                        <select
+                          value={targetImportType}
+                          onChange={(e) => setTargetImportType(e.target.value as any)}
+                          className="bg-slate-50 border border-slate-250 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                        >
+                          <option value="Institución Potencial">Institución Potencial (B2B)</option>
+                          <option value="Persona Potencial">Persona Potencial (B2C)</option>
+                          <option value="Redes Sociales">Redes Sociales</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Etapa Inicial
+                        </label>
+                        <select
+                          value={targetImportStage}
+                          onChange={(e) => setTargetImportStage(e.target.value)}
+                          className="bg-slate-50 border border-slate-250 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                        >
+                          {getStagesForType(targetImportType).map(stage => (
+                            <option key={stage} value={stage}>{stage}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   </div>
 
-                  {importReport.errors.length > 0 && (
-                    <div className="border border-rose-200 bg-rose-50/5 rounded-xl overflow-hidden mt-3 max-h-56 overflow-y-auto">
-                      <div className="bg-rose-50 border-b border-rose-100 px-4 py-2 text-xs font-extrabold text-rose-800 uppercase tracking-wider">
-                        Detalle de filas rechazadas
+                  {/* Detected Mappings Indicator */}
+                  {detectedColumns && (
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-150">
+                      <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">Columnas Detectadas:</span>
+                      {detectedColumns.idLead && (
+                        <span className="bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 text-indigo-700 font-mono font-bold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                          ID Lead: <strong>{detectedColumns.idLead}</strong>
+                        </span>
+                      )}
+                      {detectedColumns.name && (
+                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700 font-mono">
+                          Nombre: <strong>{detectedColumns.name}</strong>
+                        </span>
+                      )}
+                      {detectedColumns.contactName && (
+                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700 font-mono">
+                          Contacto: <strong>{detectedColumns.contactName}</strong>
+                        </span>
+                      )}
+                      {detectedColumns.email && (
+                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700 font-mono">
+                          Correo: <strong>{detectedColumns.email}</strong>
+                        </span>
+                      )}
+                      {detectedColumns.phone && (
+                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700 font-mono">
+                          Teléfono: <strong>{detectedColumns.phone}</strong>
+                        </span>
+                      )}
+                      {detectedColumns.city && (
+                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700 font-mono">
+                          Ciudad: <strong>{detectedColumns.city}</strong>
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Optional Column Re-Mapping Selectors */}
+                  {sheetHeaders.length > 0 && (
+                    <div className="bg-indigo-50/30 border border-indigo-150/80 rounded-xl p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <span className="font-black text-[10.5px] text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <Settings className="w-3.5 h-3.5 text-indigo-600" />
+                          Ajustar Mapeo de Columnas (Si tu tabla usa otros títulos)
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          Cambia la columna correspondiente y la vista previa se actualizará en tiempo real
+                        </span>
                       </div>
-                      <div className="divide-y divide-rose-100 text-xs text-sans">
-                        {importReport.errors.map((err, idx) => (
-                          <div key={idx} className="p-3 bg-white hover:bg-rose-50/10 transition-all">
-                            <div className="flex justify-between items-center mb-1">
-                              <span className="bg-slate-750 text-slate-100 text-[9px] px-1.5 py-0.5 rounded font-mono font-bold">
-                                Fila #{err.rowNum}
-                              </span>
-                              <span className="text-rose-700 font-bold bg-rose-100/65 px-2 py-0.5 rounded text-[10px]">
-                                {err.msg}
-                              </span>
-                            </div>
-                            <p className="bg-slate-50 p-2 border border-slate-150 rounded font-mono text-[9px] text-slate-500 overflow-x-auto">
-                              {err.data}
-                            </p>
-                          </div>
-                        ))}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                            Columna ID Lead (Código / Folio):
+                          </label>
+                          <select
+                            value={selectedColumnMapping.idLead}
+                            onChange={(e) => handleOverrideColumnMapping('idLead', e.target.value)}
+                            className="w-full bg-white border border-slate-250 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 cursor-pointer shadow-2xs"
+                          >
+                            <option value="">-- Sin ID Lead --</option>
+                            {sheetHeaders.map(h => (
+                              <option key={h} value={h}>{h}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                            Columna Nombre / Institución:
+                          </label>
+                          <select
+                            value={selectedColumnMapping.name}
+                            onChange={(e) => handleOverrideColumnMapping('name', e.target.value)}
+                            className="w-full bg-white border border-slate-250 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 cursor-pointer shadow-2xs"
+                          >
+                            {sheetHeaders.map(h => (
+                              <option key={h} value={h}>{h}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                            Columna Contacto Principal:
+                          </label>
+                          <select
+                            value={selectedColumnMapping.contactName}
+                            onChange={(e) => handleOverrideColumnMapping('contactName', e.target.value)}
+                            className="w-full bg-white border border-slate-250 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 cursor-pointer shadow-2xs"
+                          >
+                            <option value="">-- Sin Contacto --</option>
+                            {sheetHeaders.map(h => (
+                              <option key={h} value={h}>{h}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {importReport.success > 0 && (
-                    <div className="bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-150 p-4 rounded-xl text-xs text-emerald-800 leading-relaxed font-semibold">
-                      🎉 ¡Registro Completado! Se han agregado {importReport.success} registros exitosamente a la base local del CRM. Puedes verlos y programarles actividades en las pestañas Kanban o Listado.
-                    </div>
-                  )}
+                  {/* Preview Table */}
+                  {(() => {
+                    const newIndices = parsedPreviewLeads.map((l, i) => (!l.isDuplicate ? i : -1)).filter(i => i !== -1);
+                    const allNewSelected = newIndices.length > 0 && newIndices.every(i => previewSelectedIndices.includes(i));
+                    const duplicateCount = parsedPreviewLeads.filter(l => l.isDuplicate).length;
+
+                    return (
+                      <>
+                        <div className="border border-slate-200 rounded-xl overflow-hidden max-h-96 overflow-y-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-100 text-slate-600 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider sticky top-0 z-10">
+                                <th className="p-3 w-10 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={allNewSelected}
+                                    disabled={newIndices.length === 0}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setPreviewSelectedIndices(newIndices);
+                                      } else {
+                                        setPreviewSelectedIndices([]);
+                                      }
+                                    }}
+                                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:opacity-40"
+                                    title={newIndices.length === 0 ? "No hay prospectos nuevos para seleccionar" : "Seleccionar todos los prospectos nuevos"}
+                                  />
+                                </th>
+                                <th className="p-3 w-28">ID Lead</th>
+                                <th className="p-3">Nombre / Institución</th>
+                                <th className="p-3">Contacto</th>
+                                <th className="p-3">Email</th>
+                                <th className="p-3">Teléfono</th>
+                                <th className="p-3">Ciudad / País</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-150">
+                              {parsedPreviewLeads.map((lead, idx) => {
+                                const isSelected = previewSelectedIndices.includes(idx);
+                                const isDup = lead.isDuplicate;
+
+                                if (isDup) {
+                                  return (
+                                    <tr
+                                      key={idx}
+                                      className="bg-amber-50/20 text-slate-500 hover:bg-amber-50/30 transition opacity-80"
+                                      title={lead.duplicateReason || "Prospecto duplicado"}
+                                    >
+                                      <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                        <input
+                                          type="checkbox"
+                                          checked={false}
+                                          disabled={true}
+                                          className="rounded border-slate-300 text-slate-300 opacity-40 cursor-not-allowed"
+                                        />
+                                      </td>
+                                      <td className="p-3 font-mono text-[11px]">
+                                        {lead.idLead ? (
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-md font-bold bg-slate-100 border border-slate-200 text-slate-600">
+                                            {lead.idLead}
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-300 font-sans text-xs">—</span>
+                                        )}
+                                      </td>
+                                      <td className="p-3 font-semibold text-slate-700">
+                                        <div className="flex flex-col gap-0.5">
+                                          <span className="line-through decoration-slate-400 text-slate-600">{lead.name || "Sin Nombre"}</span>
+                                          <span className="inline-flex items-center gap-1 w-fit text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-250">
+                                            <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                                            Duplicado: {lead.duplicateReason}
+                                          </span>
+                                        </div>
+                                      </td>
+                                      <td className="p-3 text-slate-500">
+                                        {lead.contactName || "—"}
+                                      </td>
+                                      <td className="p-3 text-slate-500 font-mono text-[11px]">
+                                        {lead.email || "—"}
+                                      </td>
+                                      <td className="p-3 text-slate-500 font-mono text-[11px]">
+                                        {lead.phone || "—"}
+                                      </td>
+                                      <td className="p-3 text-slate-400">
+                                        {lead.city ? `${lead.city}, ${lead.country}` : lead.country || "—"}
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+
+                                return (
+                                  <tr
+                                    key={idx}
+                                    onClick={() => {
+                                      setPreviewSelectedIndices(prev =>
+                                        prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+                                      );
+                                    }}
+                                    className={`transition cursor-pointer ${
+                                      isSelected ? "bg-emerald-50/30 hover:bg-emerald-50/50" : "bg-white hover:bg-slate-50 opacity-60"
+                                    }`}
+                                  >
+                                    <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={() => {
+                                          setPreviewSelectedIndices(prev =>
+                                            prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+                                          );
+                                        }}
+                                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                      />
+                                    </td>
+                                    <td className="p-3 font-mono text-[11px]">
+                                      {lead.idLead ? (
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-md font-bold bg-indigo-50 border border-indigo-200 text-indigo-700">
+                                          {lead.idLead}
+                                        </span>
+                                      ) : (
+                                        <span className="text-slate-300 font-sans text-xs">—</span>
+                                      )}
+                                    </td>
+                                    <td className="p-3 font-bold text-slate-800">
+                                      <div className="flex items-center gap-1.5">
+                                        <span>{lead.name || "Sin Nombre"}</span>
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                          <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
+                                          Nuevo
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="p-3 text-slate-600">
+                                      {lead.contactName || "—"}
+                                    </td>
+                                    <td className="p-3 text-slate-600 font-mono text-[11px]">
+                                      {lead.email || "—"}
+                                    </td>
+                                    <td className="p-3 text-slate-600 font-mono text-[11px]">
+                                      {lead.phone || "—"}
+                                    </td>
+                                    <td className="p-3 text-slate-500">
+                                      {lead.city ? `${lead.city}, ${lead.country}` : lead.country || "—"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Actions Bar */}
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setParsedPreviewLeads([]);
+                                setPreviewSelectedIndices([]);
+                              }}
+                              className="text-xs text-slate-500 hover:text-slate-800 px-3 py-2 rounded-xl transition cursor-pointer"
+                            >
+                              Cancelar vista previa
+                            </button>
+                            {duplicateCount > 0 && (
+                              <span className="text-[11px] text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-250 flex items-center gap-1.5 font-medium">
+                                <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+                                {duplicateCount} duplicado(s) se omitirán automáticamente.
+                              </span>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleConfirmImportGoogleSheets}
+                            disabled={previewSelectedIndices.length === 0}
+                            className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-md cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>Confirmar e Importar {previewSelectedIndices.length} Prospecto(s) Nuevo(s)</span>
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -8435,7 +10012,11 @@ International Homeschool CRM`;
                     
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        {leadForm.type === "Institución Potencial" ? "Nombre de la Institución Educativa" : "Nombre Completo del Particular"}
+                        {leadForm.type === "Institución Potencial" 
+                          ? "Nombre de la Institución Educativa" 
+                          : leadForm.type === "Redes Sociales"
+                            ? "Nombre / Perfil de Redes Sociales (ej. @colegio_inter)"
+                            : "Nombre Completo del Particular"}
                       </label>
                       <input 
                         type="text"
@@ -8443,7 +10024,13 @@ International Homeschool CRM`;
                         value={leadForm.name}
                         onChange={(e) => setLeadForm({ ...leadForm, name: e.target.value })}
                         className="w-full border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-indigo-500 bg-white"
-                        placeholder={leadForm.type === "Institución Potencial" ? "Colegio Interamericano" : "Juan Alarcón Díaz"}
+                        placeholder={
+                          leadForm.type === "Institución Potencial" 
+                            ? "Colegio Interamericano" 
+                            : leadForm.type === "Redes Sociales"
+                              ? "@colegio_bilingue o Perfil de Redes"
+                              : "Juan Alarcón Díaz"
+                        }
                       />
                     </div>
 
@@ -8905,7 +10492,7 @@ International Homeschool CRM`;
 
                     <div className="relative z-10">
                       <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Tipo de Prospecto</label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         <button
                           type="button"
                           onClick={() => {
@@ -8946,13 +10533,33 @@ International Homeschool CRM`;
                         >
                           👤 Particular / Alumno
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newType = "Redes Sociales";
+                            const newStages = getStagesForType(newType);
+                            const currentStatusValid = newStages.includes(leadForm.status);
+                            setLeadForm({ 
+                              ...leadForm, 
+                              type: newType,
+                              status: currentStatusValid ? leadForm.status : newStages[0]
+                            });
+                          }}
+                          className={`py-2 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                            leadForm.type === "Redes Sociales"
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-sm font-black"
+                              : "bg-white text-slate-600 border-slate-250 hover:bg-slate-50"
+                          }`}
+                        >
+                          📱 Redes Sociales
+                        </button>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 relative z-10">
                       <div>
                         <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                          Estatus del Pipeline ({leadForm.type === "Institución Potencial" ? "Institución" : "Particular"})
+                          Estatus del Pipeline ({leadForm.type === "Institución Potencial" ? "Institución" : leadForm.type === "Redes Sociales" ? "Redes Sociales" : "Particular"})
                         </label>
                         <select 
                           value={leadForm.status}
@@ -9241,7 +10848,6 @@ International Homeschool CRM`;
                             <button
                               type="button"
                               onClick={() => {
-                                const isSuperAdmin = currentUser?.role === 'Superadministrador' || currentUser?.role === 'Admin Principal';
                                 const isAssigned = t.userId !== undefined && t.userId !== null && Number(t.userId) === Number(currentUser?.id);
 
                                 if (!isSuperAdmin && !isAssigned) {
@@ -9540,7 +11146,7 @@ International Homeschool CRM`;
           </div>
 
           {/* Pipeline Type Switcher */}
-          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1">
             <button
               type="button"
               onClick={() => setConfigPipelineType('Institución Potencial')}
@@ -9551,7 +11157,7 @@ International Homeschool CRM`;
               }`}
             >
               <Building2 className="w-3.5 h-3.5" />
-              <span>Instituciones ({institutionStages.length} etapas)</span>
+              <span>Instituciones ({institutionStages.length})</span>
             </button>
             <button
               type="button"
@@ -9563,14 +11169,26 @@ International Homeschool CRM`;
               }`}
             >
               <Users className="w-3.5 h-3.5" />
-              <span>Particulares ({particularStages.length} etapas)</span>
+              <span>Particulares ({particularStages.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfigPipelineType('Redes Sociales')}
+              className={`flex-1 py-2 rounded-lg font-extrabold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                configPipelineType === 'Redes Sociales'
+                  ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/80 font-black'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Share2 className="w-3.5 h-3.5 text-pink-600" />
+              <span>Redes Sociales ({redesSocialesStages.length})</span>
             </button>
           </div>
 
           {/* Quick Stage Creation Form */}
           <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-2">
             <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">
-              Crear Nueva Etapa Personalizada en {configPipelineType === 'Persona Potencial' ? 'Particulares' : 'Instituciones'}
+              Crear Nueva Etapa Personalizada en {configPipelineType === 'Persona Potencial' ? 'Particulares' : configPipelineType === 'Redes Sociales' ? 'Redes Sociales' : 'Instituciones'}
             </span>
             <div className="flex gap-2">
               <input 
@@ -9594,11 +11212,15 @@ International Homeschool CRM`;
           {/* Draggable & Sortable List */}
           <div className="space-y-2">
             <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-widest block font-mono">
-              Orden de Prioridad ({configPipelineType === 'Persona Potencial' ? 'Pipeline Particulares' : 'Pipeline Instituciones'})
+              Orden de Prioridad ({configPipelineType === 'Persona Potencial' ? 'Pipeline Particulares' : configPipelineType === 'Redes Sociales' ? 'Pipeline Redes Sociales' : 'Pipeline Instituciones'})
             </span>
             <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
               {getStagesForType(configPipelineType).map((stage, index) => {
-                const defaultList = configPipelineType === 'Persona Potencial' ? DEFAULT_PARTICULAR_STAGES : DEFAULT_INSTITUTION_STAGES;
+                const defaultList = configPipelineType === 'Persona Potencial' 
+                  ? DEFAULT_PARTICULAR_STAGES 
+                  : configPipelineType === 'Redes Sociales'
+                    ? DEFAULT_REDES_SOCIALES_STAGES
+                    : DEFAULT_INSTITUTION_STAGES;
                 const isCore = defaultList.includes(stage);
                 const currentStageList = getStagesForType(configPipelineType);
                 
@@ -9672,6 +11294,338 @@ International Homeschool CRM`;
             >
               Listo • Aplicar Cambios
             </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* MODAL: MODIFICACIONES MASIVAS (SUPERADMIN) */}
+      <Modal
+        isOpen={showBulkEditModal}
+        onClose={() => setShowBulkEditModal(false)}
+        title={`Modificaciones Masivas (${selectedLeadIds.length} Seleccionados)`}
+        size="3xl"
+      >
+        <div className="space-y-4 font-sans text-xs">
+          <div className="bg-indigo-50/70 border border-indigo-150 p-3.5 rounded-xl flex items-start gap-3">
+            <div className="p-2 bg-indigo-600 text-white rounded-lg shrink-0 mt-0.5">
+              <SlidersHorizontal className="w-4 h-4" />
+            </div>
+            <div>
+              <h5 className="font-extrabold text-indigo-950 text-xs">Panel de Edición en Lote</h5>
+              <p className="text-slate-600 text-[11px] mt-0.5 leading-relaxed">
+                Selecciona únicamente los campos que deseas actualizar para los <strong className="text-indigo-900 font-extrabold">{selectedLeadIds.length} prospectos seleccionados</strong>. Los campos que dejes en blanco o marcados como "Sin cambios" conservarán sus valores originales.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-1">
+            {/* 1. Agente Responsable */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Agente Responsable
+              </label>
+              <select
+                value={bulkUpdateForm.assignedTo}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, assignedTo: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              >
+                <option value="">-- Sin cambios --</option>
+                <option value="--quitar--">Quitar asignación (Sin asignar)</option>
+                <option value="Admin Global">Admin Global</option>
+                {users.map(u => (
+                  <option key={u.id} value={u.name}>{u.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 2. Estatus del Pipeline */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Estatus de Pipeline
+              </label>
+              <select
+                value={bulkUpdateForm.status}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, status: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              >
+                <option value="">-- Sin cambios --</option>
+                {allPipelineStages.map(stage => (
+                  <option key={stage} value={stage}>{stage}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 3. Tipo de Prospecto */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Tipo de Prospecto
+              </label>
+              <select
+                value={bulkUpdateForm.type}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, type: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              >
+                <option value="">-- Sin cambios --</option>
+                <option value="Institución Potencial">Institución Potencial</option>
+                <option value="Persona Potencial">Persona Potencial</option>
+                <option value="Redes Sociales">Redes Sociales</option>
+              </select>
+            </div>
+
+            {/* 4. Origen / Fuente */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Origen / Fuente
+              </label>
+              <select
+                value={bulkUpdateForm.source}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, source: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              >
+                <option value="">-- Sin cambios --</option>
+                <option value="Recomendación">Recomendación</option>
+                <option value="Feria Educativa">Feria Educativa</option>
+                <option value="Campaña Digital">Campaña Digital</option>
+                <option value="Llamada Fría">Llamada Fría</option>
+                <option value="LinkedIn">LinkedIn Sales</option>
+                <option value="Instagram">Instagram</option>
+                <option value="Facebook">Facebook</option>
+                <option value="WhatsApp">WhatsApp</option>
+                <option value="Sitio Web">Sitio Web Oficial</option>
+              </select>
+            </div>
+
+            {/* 5. Valor Estimado USD */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Valor Estimado (USD)
+              </label>
+              <input
+                type="number"
+                placeholder="Ej. 15000"
+                value={bulkUpdateForm.value}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, value: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              />
+            </div>
+
+            {/* 6. Examen de Inglés */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Puntuación Examen Inglés
+              </label>
+              <input
+                type="text"
+                placeholder="Ej. B2, TOEFL 85, Aprobado"
+                value={bulkUpdateForm.englishExamScore}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, englishExamScore: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              />
+            </div>
+
+            {/* 7. Ciudad */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Ciudad
+              </label>
+              <input
+                type="text"
+                placeholder="Ej. Guadalajara"
+                value={bulkUpdateForm.city}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, city: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              />
+            </div>
+
+            {/* 8. Estado */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Estado / Provincia
+              </label>
+              <input
+                type="text"
+                placeholder="Ej. Jalisco"
+                value={bulkUpdateForm.state}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, state: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              />
+            </div>
+
+            {/* 9. País */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                País
+              </label>
+              <input
+                type="text"
+                placeholder="Ej. México"
+                value={bulkUpdateForm.country}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, country: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              />
+            </div>
+
+            {/* 10. Pago Malla Curricular */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Estatus Pago Malla Curricular
+              </label>
+              <select
+                value={bulkUpdateForm.mallaPaymentStatus}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, mallaPaymentStatus: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              >
+                <option value="">-- Sin cambios --</option>
+                <option value="Pendiente">Pendiente</option>
+                <option value="Pagado">Pagado</option>
+                <option value="Exento">Exento / No Aplica</option>
+              </select>
+            </div>
+
+            {/* 11. Agregar Nota / Observación */}
+            <div className="md:col-span-2">
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Agregar Nota al Historial Comercial
+              </label>
+              <input
+                type="text"
+                placeholder="Ej. Contacto de seguimiento masivo realizado por dirección"
+                value={bulkUpdateForm.appendNote}
+                onChange={e => setBulkUpdateForm(prev => ({ ...prev, appendNote: e.target.value }))}
+                className="w-full border border-slate-250 bg-white rounded-xl p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-medium shadow-xs"
+              />
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                Se anexará con fecha y firma a las notas existentes sin borrarlas.
+              </span>
+            </div>
+          </div>
+
+          {/* Selected leads preview list */}
+          <div className="pt-2">
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block font-mono mb-1.5">
+              Prospectos Seleccionados ({selectedLeadIds.length})
+            </span>
+            <div className="max-h-28 overflow-y-auto border border-slate-200 rounded-xl p-2.5 bg-slate-50/60 divide-y divide-slate-150 text-[11px]">
+              {leads.filter(l => selectedLeadIds.includes(l.id)).map(l => (
+                <div key={l.id} className="py-1 flex items-center justify-between text-slate-700">
+                  <span className="font-semibold">{l.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-500">{l.type}</span>
+                    <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-mono font-bold">
+                      {l.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setShowBulkEditModal(false)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={initiateBulkUpdateConfirm}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-750 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider transition flex items-center gap-1.5 shadow-md shadow-indigo-600/10 cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              Revisar y Aplicar Cambios
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* MODAL: CONFIRMACIÓN BORRADO MASIVO (SUPERADMIN) */}
+      <Modal
+        isOpen={showBulkDeleteModal}
+        onClose={() => setShowBulkDeleteModal(false)}
+        title="Eliminación Masiva de Prospectos"
+        size="2xl"
+      >
+        <div className="space-y-4 font-sans text-xs">
+          <div className="flex items-start space-x-3.5 bg-rose-50 border border-rose-200 p-4 rounded-2xl">
+            <div className="p-2 bg-rose-600 text-white rounded-xl shrink-0 mt-0.5 shadow-xs">
+              <Trash2 className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <h6 className="font-black text-rose-900 uppercase tracking-wider text-xs">
+                ⚠️ Acción Irreversible de Superadministrador
+              </h6>
+              <p className="text-rose-700 mt-1 leading-relaxed text-xs">
+                ¿Estás seguro de que deseas eliminar permanentemente a los <strong className="font-extrabold underline text-rose-950">{selectedLeadIds.length} prospectos comerciales</strong> seleccionados?
+              </p>
+              <p className="text-rose-600/90 mt-1.5 text-[11px] leading-relaxed">
+                Esta acción eliminará de forma inmediata y definitiva todos los registros seleccionados, su información de contacto, historial de tareas, propuestas y métricas comerciales tanto de este dispositivo como de la base de datos central en la nube (Firestore).
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-mono">
+                Registros a Eliminar Definitivamente ({selectedLeadIds.length})
+              </span>
+              <span className="text-[10px] font-bold text-rose-600 font-mono">
+                Total: {selectedLeadIds.length} prospectos
+              </span>
+            </div>
+
+            <div className="max-h-56 overflow-y-auto border border-rose-150 rounded-xl p-2.5 bg-rose-50/20 divide-y divide-rose-100/60 text-[11px]">
+              {leads.filter(l => selectedLeadIds.includes(l.id)).map((lead, idx) => (
+                <div key={lead.id} className="py-2 first:pt-1 last:pb-1 flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-400 font-mono text-[10px]">{idx + 1}.</span>
+                      <strong className="text-slate-850 font-bold truncate">{lead.name}</strong>
+                      <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-medium">
+                        {lead.type}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-0.5 truncate pl-4">
+                      {lead.contactName || "Sin contacto"} • {lead.city ? `${lead.city}, ` : ""}{lead.country}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-[10px] font-mono font-bold text-rose-700 block">
+                      ${lead.value?.toLocaleString("en-US") || 0} USD
+                    </span>
+                    <span className="text-[9px] text-slate-500">
+                      {lead.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-3.5 border-t border-slate-100">
+            <span className="text-[11px] text-slate-400 font-medium">
+              Operación autorizada para: <strong>{currentUser?.name || "Superadministrador"}</strong>
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteModal(false)}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={executeBulkDelete}
+                disabled={isBulkDeleting}
+                className="px-4.5 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer shadow-md shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isBulkDeleting ? "Eliminando..." : `Sí, Eliminar ${selectedLeadIds.length} Prospectos`}</span>
+              </button>
+            </div>
           </div>
         </div>
       </Modal>
@@ -9898,12 +11852,19 @@ International Homeschool CRM`;
                   <div className="w-14 h-14 bg-indigo-500/20 border border-indigo-400/30 rounded-2xl flex items-center justify-center shrink-0 shadow-inner">
                     {viewingLead.type === "Institución Potencial" ? (
                       <Building2 className="w-7 h-7 text-indigo-300" />
+                    ) : viewingLead.type === "Redes Sociales" ? (
+                      <Share2 className="w-7 h-7 text-pink-300" />
                     ) : (
                       <Users className="w-7 h-7 text-indigo-300" />
                     )}
                   </div>
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
+                      {viewingLead.idLead && (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-purple-500/30 text-purple-200 border border-purple-400/30 font-mono">
+                          ID: {viewingLead.idLead}
+                        </span>
+                      )}
                       <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
                         {viewingLead.type}
                       </span>
@@ -9932,6 +11893,35 @@ International Homeschool CRM`;
                 </div>
               </div>
             </div>
+
+            {/* Callout if in Firma stage for institution */}
+            {viewingLead.type === "Institución Potencial" && (viewingLead.status === "Firma" || viewingLead.status === "Cierre") && (
+              <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-200/80 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <Building2 className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-black text-slate-800">Institución en Etapa de Firma</p>
+                    <p className="text-[11px] text-slate-600">
+                      ¿Deseas formalizar esta institución y registrarla en el sistema? Pasará a la etapa <strong className="font-bold text-emerald-800">Cliente</strong>.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const current = viewingLead;
+                    setViewingLead(null);
+                    setPendingFirmaTransition({ lead: current, isConfirmationFromFirma: true });
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-md shadow-emerald-600/20 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-100" />
+                  <span>Confirmar Firma y Crear Institución</span>
+                </button>
+              </div>
+            )}
 
             {/* Modal Navigation Tabs Header */}
             <div className="flex border-b border-slate-200 gap-1 pt-1">
@@ -11311,6 +13301,130 @@ International Homeschool CRM`;
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* MODAL: CONFIRMAR CREACIÓN DE INSTITUCIÓN (REVISIÓN -> FIRMA / CLIENTE) */}
+      <Modal
+        isOpen={pendingFirmaTransition !== null}
+        onClose={handleRejectFirmaTransition}
+        title="Formalización de Institución y Cambio de Etapa"
+        size="lg"
+      >
+        {pendingFirmaTransition && (
+          <div className="space-y-5 font-sans text-xs">
+            {/* Header / Question Callout */}
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 rounded-2xl shadow-sm space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
+                  {pendingFirmaTransition.isConfirmationFromFirma ? "Confirmación de Firma" : "De Revisión a Firma"}
+                </span>
+                <span className="text-slate-300 text-[10px] font-mono">
+                  CRM Pipeline
+                </span>
+              </div>
+              <h3 className="text-base font-extrabold text-white tracking-tight">
+                ¿Deseas crear una nueva institución con los datos que ya se tienen?
+              </h3>
+              <p className="text-[11.5px] text-indigo-150 leading-relaxed">
+                La institución <strong className="text-white font-black">{pendingFirmaTransition.lead.name}</strong> está lista para formalizarse. El sistema puede darla de alta automáticamente en el catálogo oficial de Instituciones.
+              </p>
+            </div>
+
+            {/* Summary card with existing lead data */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                <div className="flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-indigo-600" />
+                  <span className="font-extrabold text-slate-800 text-xs">
+                    Datos a registrar como Institución Oficial
+                  </span>
+                </div>
+                <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full">
+                  ID: {pendingFirmaTransition.lead.id}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                <div>
+                  <span className="text-slate-400 font-bold uppercase text-[9px] block">Nombre de la Institución</span>
+                  <p className="font-extrabold text-slate-800">{pendingFirmaTransition.lead.name}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase text-[9px] block">Contacto Titular</span>
+                  <p className="font-bold text-slate-700">{pendingFirmaTransition.lead.contactName || "No especificado"}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase text-[9px] block">Correo Electrónico</span>
+                  <p className="font-mono text-slate-700">{pendingFirmaTransition.lead.email || "Sin correo"}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase text-[9px] block">Teléfono / WhatsApp</span>
+                  <p className="font-mono text-slate-700">{pendingFirmaTransition.lead.phone || "Sin teléfono"}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase text-[9px] block">Ubicación</span>
+                  <p className="text-slate-700">
+                    {pendingFirmaTransition.lead.city ? `${pendingFirmaTransition.lead.city}, ` : ""}
+                    {pendingFirmaTransition.lead.state ? `${pendingFirmaTransition.lead.state}, ` : ""}
+                    {pendingFirmaTransition.lead.country}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase text-[9px] block">Valor Estimado / Agente</span>
+                  <p className="text-slate-700">
+                    <strong className="text-indigo-650 font-mono">${pendingFirmaTransition.lead.value.toLocaleString()} USD</strong>
+                    {" • "}
+                    <span>{pendingFirmaTransition.lead.assignedTo || "Sin asignar"}</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Explanation of both options */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-1">
+                <div className="flex items-center gap-1.5 text-emerald-800 font-black">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Si respondes SÍ:</span>
+                </div>
+                <p className="text-[11px] text-emerald-900 leading-snug">
+                  Se crea la nueva institución oficial en el sistema y este registro en el CRM avanza automáticamente a la etapa <strong className="font-black text-emerald-950 uppercase">Cliente</strong>.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <div className="flex items-center gap-1.5 text-slate-700 font-black">
+                  <Clock className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Si respondes NO:</span>
+                </div>
+                <p className="text-[11px] text-slate-600 leading-snug">
+                  La institución queda en la etapa <strong className="font-bold text-slate-800 uppercase">Firma</strong> en el CRM. Podrás confirmarla en cualquier momento para darla de alta y pasarla a Cliente.
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex flex-col-reverse sm:flex-row items-center justify-end gap-2 pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={handleRejectFirmaTransition}
+                className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>No, mantener en Etapa Firma</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleConfirmCreateInstitution(pendingFirmaTransition.lead)}
+                className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20"
+              >
+                <CheckCircle2 className="w-4 h-4 text-emerald-100" />
+                <span>Sí, crear Institución y pasar a Cliente</span>
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

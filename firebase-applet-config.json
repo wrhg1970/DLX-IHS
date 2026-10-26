@@ -1,10 +1,12 @@
 {
-  "projectId": "velvety-implement-qkm1r",
-  "appId": "1:132631300012:web:c1b680a20e45752d605c09",
-  "apiKey": "AIzaSyDHSnLO7NMq1lAiy6zIq7Nx3yjRoXnwJlc",
-  "authDomain": "velvety-implement-qkm1r.firebaseapp.com",
+  "projectId": "gen-lang-client-0745647717",
+  "appId": "1:634988369612:web:66fd06fa4a2f6e4f3d5469",
+  "apiKey": "AIzaSyCwtxnh9QsAL4Xnq-xMQaRAqaNZXg-U36c",
+  "authDomain": "gen-lang-client-0745647717.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-6f563df9-bdaf-42eb-a0b7-679fa0b03221",
-  "storageBucket": "velvety-implement-qkm1r.firebasestorage.app",
-  "messagingSenderId": "132631300012",
-  "measurementId": ""
+  "storageBucket": "gen-lang-client-0745647717.firebasestorage.app",
+  "messagingSenderId": "634988369612",
+  "measurementId": "",
+  "oAuthClientId": "634988369612-dqipeqil34esel2rj408k7jk8f5j9j92.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

@@ -379,9 +379,9 @@ export function InstitucionesDashboard() {
             <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-1">Materias Activas</p>
             <span className="text-3xl font-light text-blue-600 tracking-tight">{kpis.totalActiveMaterias.toLocaleString()}</span>
             <div className="flex items-center gap-1 text-[10px] font-semibold mt-1">
-              <span className="text-emerald-700 font-bold" title="Materias con Crédito Completo">{kpis.totalActiveFullCredits} Full</span>
+              <span className="text-emerald-700 font-bold" title="Materias con Full Credit">{kpis.totalActiveFullCredits} Full</span>
               <span className="text-slate-300">•</span>
-              <span className="text-amber-700 font-bold" title="Materias con Medio Crédito">{kpis.totalActiveHalfCredits} Half</span>
+              <span className="text-amber-700 font-bold" title="Materias con Half Credit">{kpis.totalActiveHalfCredits} Half</span>
               <span className="text-slate-400 font-normal ml-0.5">({kpis.totalDistinctClasses} distintas)</span>
             </div>
           </div>

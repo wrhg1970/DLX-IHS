@@ -36,6 +36,7 @@ import {
 import React, { useState, useRef } from "react";
 import { useAppContext, resolveCreditPrices, generateUniqueId, CourseGradeOutcome } from "../context/AppContext";
 import { calculateEnrollmentStatus, getEnrollmentStatusBadge, EnrollmentStatus } from "../utils/enrollmentStatus";
+import { formatCreditType } from "../utils/creditType";
 import { Modal } from "../components/ui/Modal";
 import { hasPermission } from "../utils/permissionCheck";
 import { FinancialTransactionForm } from "../components/FinancialTransactionForm";
@@ -689,7 +690,7 @@ export function AlumnoDetail() {
           hour: "2-digit",
           minute: "2-digit",
         }),
-      description: `Datos Generales: Se modificó el ID del estudiante a "${newCustomId.trim()}".`,
+      description: `Datos Generales: Se modificó el ID/Username del estudiante a "${newCustomId.trim()}".`,
     });
     setIsEditingCustomId(false);
   };
@@ -890,18 +891,18 @@ export function AlumnoDetail() {
           const cType = cl.creditType;
           let valStr = "";
           if (institution) {
-            if (cType === 'Medio Crédito') valStr = institution.priceHalfCredit || "";
-            else if (cType === 'Crédito completo AP') valStr = institution.priceFullApCredit || "";
-            else if (cType === 'Medio Crédito AP') valStr = institution.priceHalfApCredit || "";
-            else if (cType === 'Crédito completo') valStr = institution.priceFullCredit || "";
+            if (cType === 'Half Credit' || cType === 'Medio Crédito') valStr = institution.priceHalfCredit || "";
+            else if (cType === 'Full Credit AP' || cType === 'Crédito completo AP') valStr = institution.priceFullApCredit || "";
+            else if (cType === 'Half Credit AP' || cType === 'Medio Crédito AP') valStr = institution.priceHalfApCredit || "";
+            else if (cType === 'Full Credit' || cType === 'Crédito completo') valStr = institution.priceFullCredit || "";
           }
           if (valStr) {
             cp = parseFloat(valStr.replace(/[^0-9.-]+/g, "") || "0");
           } else {
             // Default fallbacks
-            if (cType === 'Medio Crédito') cp = 250;
-            else if (cType === 'Crédito completo AP') cp = 600;
-            else if (cType === 'Medio Crédito AP') cp = 300;
+            if (cType === 'Half Credit' || cType === 'Medio Crédito') cp = 250;
+            else if (cType === 'Full Credit AP' || cType === 'Crédito completo AP') cp = 600;
+            else if (cType === 'Half Credit AP' || cType === 'Medio Crédito AP') cp = 300;
             else cp = 500;
           }
         } else {
@@ -967,11 +968,12 @@ export function AlumnoDetail() {
     );
 
     let priceStr = "";
-    if (cCls.creditType === "Medio Crédito") {
+    const cType = cCls.creditType;
+    if (cType === "Half Credit" || cType === "Medio Crédito") {
       priceStr = resolvedPrices.priceHalfCredit;
-    } else if (cCls.creditType === "Crédito completo AP") {
+    } else if (cType === "Full Credit AP" || cType === "Crédito completo AP") {
       priceStr = resolvedPrices.priceFullApCredit;
-    } else if (cCls.creditType === "Medio Crédito AP") {
+    } else if (cType === "Half Credit AP" || cType === "Medio Crédito AP") {
       priceStr = resolvedPrices.priceHalfApCredit;
     } else {
       priceStr = resolvedPrices.priceFullCredit;
@@ -1661,14 +1663,14 @@ export function AlumnoDetail() {
                         </p>
                       </div>
                     </div>
-                    {/* ID Estudiante */}
+                    {/* ID/Username */}
                     <div className="flex space-x-4">
                       <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0 border border-indigo-200 text-indigo-600">
                         <Hash className="w-5 h-5" />
                       </div>
                       <div className="flex-1">
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
-                          ID Estudiante
+                          ID/Username
                         </p>
                         {isEditingCustomId ? (
                           <div className="flex items-center space-x-2 mt-1">
@@ -1706,7 +1708,7 @@ export function AlumnoDetail() {
                                 );
                               }}
                               className="text-indigo-600 hover:text-indigo-805 p-0.5 transition"
-                              title="Editar ID"
+                              title="Editar ID/Username"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
@@ -1744,14 +1746,14 @@ export function AlumnoDetail() {
                         </div>
                       </div>
                     )}
-                    {/* Año Escolar */}
+                    {/* Grado Escolar */}
                     <div className="flex space-x-4">
                       <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center shrink-0 border border-amber-200 text-amber-600">
                         <GraduationCap className="w-5 h-5" />
                       </div>
                       <div>
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
-                          Año Escolar
+                          Grado Escolar
                         </p>
                         <p className="text-sm font-semibold text-slate-900">
                           {student.schoolYear || "No especificado"}
@@ -3116,7 +3118,7 @@ export function AlumnoDetail() {
                             </td>
                             <td className="px-6 py-4 text-center">
                               <span className="inline-flex bg-indigo-50 text-indigo-700 border border-indigo-100 rounded px-2 py-0.5 text-xs font-bold tracking-widest uppercase">
-                                {c.creditType || `${c.credits} Cr`}
+                                {formatCreditType(c.creditType) || `${c.credits} Cr`}
                               </span>
                             </td>
                             <td className="px-6 py-4 text-right">

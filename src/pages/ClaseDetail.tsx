@@ -7,6 +7,7 @@ import React, { useState, useMemo } from "react";
 import { useAppContext, Enrollment, CourseGradeOutcome } from "../context/AppContext";
 import { Modal } from "../components/ui/Modal";
 import { hasPermission } from "../utils/permissionCheck";
+import { formatCreditType, CreditType } from "../utils/creditType";
 
 export function ClaseDetail() {
   const { id } = useParams();
@@ -46,7 +47,7 @@ export function ClaseDetail() {
   const [formData, setFormData] = useState({
     name: curso?.name || '',
     code: curso?.code || '',
-    creditType: curso?.creditType || 'Crédito completo' as 'Crédito completo' | 'Medio Crédito' | 'Crédito completo AP' | 'Medio Crédito AP',
+    creditType: curso?.creditType ? (formatCreditType(curso.creditType) as CreditType) : 'Full Credit',
     syllabus: curso?.syllabus || '',
     validity: curso?.validity || '',
     providerId: curso?.providerId || '',
@@ -178,7 +179,7 @@ export function ClaseDetail() {
     setFormData({
       name: curso.name || '',
       code: curso.code || '',
-      creditType: curso.creditType || 'Crédito completo',
+      creditType: curso.creditType ? (formatCreditType(curso.creditType) as CreditType) : 'Full Credit',
       syllabus: curso.syllabus || '',
       validity: curso.validity || '',
       providerId: curso.providerId || '',
@@ -214,16 +215,16 @@ export function ClaseDetail() {
       const mappedRates = serviceClass.countryPrices.map(cp => {
         let price = '0';
         let cost = '0';
-        if (formData.creditType === 'Crédito completo') {
+        if (formData.creditType === 'Full Credit' || formData.creditType === 'Crédito completo') {
           price = cp.priceFullCredit;
           cost = cp.costFullCredit;
-        } else if (formData.creditType === 'Medio Crédito') {
+        } else if (formData.creditType === 'Half Credit' || formData.creditType === 'Medio Crédito') {
           price = cp.priceHalfCredit;
           cost = cp.costHalfCredit;
-        } else if (formData.creditType === 'Crédito completo AP') {
+        } else if (formData.creditType === 'Full Credit AP' || formData.creditType === 'Crédito completo AP') {
           price = cp.priceFullApCredit;
           cost = cp.costFullApCredit;
-        } else if (formData.creditType === 'Medio Crédito AP') {
+        } else if (formData.creditType === 'Half Credit AP' || formData.creditType === 'Medio Crédito AP') {
           price = cp.priceHalfApCredit;
           cost = cp.costHalfApCredit;
         }
@@ -454,7 +455,7 @@ export function ClaseDetail() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tipo de Crédito</span>
-                  <p className="text-base font-bold text-slate-900">{curso.creditType}</p>
+                  <p className="text-base font-bold text-slate-900">{formatCreditType(curso.creditType)}</p>
                 </div>
                 <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Clave de Clase</span>
@@ -1091,10 +1092,10 @@ export function ClaseDetail() {
                 onChange={e => setFormData({...formData, creditType: e.target.value as any})}
                 className="w-full border border-slate-200 bg-white rounded p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-semibold text-slate-800"
               >
-                <option value="Crédito completo">Crédito completo</option>
-                <option value="Medio Crédito">Medio Crédito</option>
-                <option value="Crédito completo AP">Crédito completo AP</option>
-                <option value="Medio Crédito AP">Medio Crédito AP</option>
+                <option value="Full Credit">Full Credit</option>
+                <option value="Half Credit">Half Credit</option>
+                <option value="Full Credit AP">Full Credit AP</option>
+                <option value="Half Credit AP">Half Credit AP</option>
               </select>
             </div>
 
