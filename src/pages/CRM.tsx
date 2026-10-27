@@ -1669,7 +1669,7 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
   const handleOpenEditTemplate = (tpl: CRMEmailTemplate) => {
     setEditingTemplate(tpl);
     setFormTplTitle(tpl.title);
-    const standardCategories = ["Primer Contacto", "Propuesta", "Seguimiento", "Agendamiento", "Cierre", "Acreditación", "Convenio", "Inactividad"];
+    const standardCategories = ["Primer Contacto", "Propuesta", "Seguimiento", "Agendamiento", "Cierre", "Acreditación", "Convenio", "Inactividad", "Personalizado"];
     if (standardCategories.includes(tpl.category)) {
       setFormTplCategory(tpl.category);
       setFormTplCustomCategory("");
@@ -11133,6 +11133,168 @@ International Homeschool CRM`;
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={isTemplateModalOpen}
+        onClose={() => setIsTemplateModalOpen(false)}
+        title={editingTemplate ? "Editar plantilla" : "Nueva plantilla de correo o notificación"}
+        size="xl"
+      >
+        <form onSubmit={handleSaveTemplate} className="space-y-4 text-xs font-sans">
+          <div className="space-y-1">
+            <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Nombre de la plantilla *</label>
+            <input
+              type="text"
+              value={formTplTitle}
+              onChange={e => setFormTplTitle(e.target.value)}
+              placeholder="Ej. Recordatorio de seguimiento"
+              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Categoría *</label>
+              <select
+                value={formTplCategory}
+                onChange={e => setFormTplCategory(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+              >
+                <option value="Primer Contacto">Primer Contacto</option>
+                <option value="Propuesta">Propuesta</option>
+                <option value="Seguimiento">Seguimiento</option>
+                <option value="Agendamiento">Agendamiento</option>
+                <option value="Cierre">Cierre</option>
+                <option value="Acreditación">Acreditación</option>
+                <option value="Convenio">Convenio</option>
+                <option value="Inactividad">Inactividad</option>
+                <option value="Personalizado">Personalizado</option>
+                <option value="Otro">Otro</option>
+              </select>
+            </div>
+            {formTplCategory === "Otro" && (
+              <div className="space-y-1">
+                <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Categoría personalizada</label>
+                <input
+                  type="text"
+                  value={formTplCustomCategory}
+                  onChange={e => setFormTplCustomCategory(e.target.value)}
+                  placeholder="Ej. Cobranza, WhatsApp"
+                  className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Asunto *</label>
+              <span className="text-[10px] text-slate-400">También sirve como aviso</span>
+            </div>
+            <input
+              type="text"
+              value={formTplSubject}
+              onChange={e => setFormTplSubject(e.target.value)}
+              placeholder="Ej. Seguimiento para {{nombre_colegio}}"
+              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+              required
+            />
+            <div className="flex flex-wrap gap-1 pt-1">
+              {[
+                ["{{nombre_colegio}}", "Institución"],
+                ["{{contacto_principal}}", "Contacto"],
+                ["{{monto_estimado}}", "Monto"],
+                ["{{remitente}}", "Asesor"]
+              ].map(([tag, label]) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => handleInsertVariableInTemplate(tag, "subject")}
+                  className="px-2 py-0.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg text-[10px] font-bold"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Mensaje</label>
+            <textarea
+              rows={8}
+              value={formTplBody}
+              onChange={e => setFormTplBody(e.target.value)}
+              placeholder="Escribe el correo o la notificación. Puedes usar {{nombre_colegio}}, {{contacto_principal}}, {{correo_electronico}}, {{telefono}}, {{ciudad}} y {{remitente}}."
+              className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none leading-relaxed resize-y"
+            />
+            <div className="flex flex-wrap gap-1">
+              {[
+                ["{{nombre_colegio}}", "Institución"],
+                ["{{contacto_principal}}", "Contacto"],
+                ["{{monto_estimado}}", "Monto"],
+                ["{{correo_electronico}}", "Email"],
+                ["{{telefono}}", "Teléfono"],
+                ["{{ciudad}}", "Ciudad"],
+                ["{{remitente}}", "Asesor"]
+              ].map(([tag, label]) => (
+                <button
+                  key={`body-${tag}`}
+                  type="button"
+                  onClick={() => handleInsertVariableInTemplate(tag, "body")}
+                  className="px-2 py-0.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg text-[10px] font-bold"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsTemplateModalOpen(false)}
+              className="px-4 py-2 bg-slate-100 text-slate-700 font-bold rounded-xl text-xs"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider"
+            >
+              {editingTemplate ? "Guardar cambios" : "Crear plantilla"}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={!!templateToDelete}
+        onClose={() => setTemplateToDelete(null)}
+        title="Eliminar plantilla"
+      >
+        <div className="space-y-4 text-xs">
+          <p className="text-slate-600">
+            ¿Eliminar la plantilla <strong>{templateToDelete?.title}</strong>? Esta acción no se puede deshacer.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setTemplateToDelete(null)}
+              className="px-4 py-2 bg-slate-100 text-slate-700 font-bold rounded-xl text-xs"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={() => templateToDelete && handleDeleteTemplate(templateToDelete)}
+              className="px-4 py-2 bg-rose-600 text-white font-extrabold rounded-xl text-xs"
+            >
+              Eliminar
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* MODAL 3: PIPELINE STAGES REORDERING & SETTINGS */}
