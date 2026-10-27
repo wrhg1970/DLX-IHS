@@ -2560,7 +2560,7 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
       return;
     }
     const updated = [...currentList];
-    const insertIndex = targetType === 'Redes Sociales' ? updated.indexOf("Perdido") : updated.indexOf("Firma");
+    const insertIndex = updated.indexOf("Perdido");
     if (insertIndex !== -1) {
       updated.splice(insertIndex, 0, trimmed);
     } else {
@@ -4360,7 +4360,7 @@ International Homeschool CRM`;
   });
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 space-y-6">
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full space-y-6">
       
       {/* Visual Title Header & Financial KPIs Banner - Only visible on Dashboard de CRM (Analytics) */}
       {activeTab === "Analytics" && (
@@ -4468,7 +4468,7 @@ International Homeschool CRM`;
       )}
 
       {/* Main Tabs Selection */}
-      <div className="border border-slate-200 bg-white rounded-2xl flex flex-col min-h-0 flex-1 overflow-hidden shadow-sm">
+      <div className="border border-slate-200 bg-white rounded-2xl flex flex-col min-h-0 min-w-0 flex-1 overflow-hidden shadow-sm">
         
         {/* Navigation Bar & Filters */}
         <div className="flex flex-col border-b border-slate-150 shrink-0">
@@ -4739,7 +4739,7 @@ International Homeschool CRM`;
 
           {/* TAB 1: KANBAN PIPELINE */}
           {activeTab === "Kanban" && (
-            <div className="space-y-4">
+            <div className="space-y-4 min-w-0 w-full">
               {/* Pipeline Selector Switcher Strip */}
               <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs">
                 <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
@@ -4858,12 +4858,16 @@ International Homeschool CRM`;
               </div>
 
               {/* Kanban Horizontal Columns Scroll Area */}
-              <div className="flex gap-4 pb-4 overflow-x-auto h-full items-start min-w-full">
+              <div className="flex gap-4 pb-4 overflow-x-auto w-full min-w-0 items-start">
                 {activePipelineStages.filter(col => !hideLostStage || col !== "Perdido").map((column) => {
                   const leadsInCol = filteredLeads.filter(l => l.status === column && (typeFilter === "Todos" ? l.type === kanbanPipelineType : l.type === typeFilter));
                   const sumValue = leadsInCol.reduce((s, curr) => s + curr.value, 0);
                   const badgeColor = getStageBadgeColor(column);
-                  const defaultStagesList = kanbanPipelineType === "Persona Potencial" ? DEFAULT_PARTICULAR_STAGES : DEFAULT_INSTITUTION_STAGES;
+                  const defaultStagesList = kanbanPipelineType === "Persona Potencial"
+                    ? DEFAULT_PARTICULAR_STAGES
+                    : kanbanPipelineType === "Redes Sociales"
+                      ? DEFAULT_REDES_SOCIALES_STAGES
+                      : DEFAULT_INSTITUTION_STAGES;
                   const isCoreStage = defaultStagesList.includes(column);
 
                   return (
