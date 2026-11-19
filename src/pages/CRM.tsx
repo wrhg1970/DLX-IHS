@@ -1331,10 +1331,11 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
   const [formTaskUserIds, setFormTaskUserIds] = useState<number[]>([]);
   const [formTaskNotes, setFormTaskNotes] = useState("");
 
-  const handleOpenNewTask = () => {
+  const handleOpenNewTask = (leadId?: string) => {
+    const linkedLeadId = typeof leadId === "string" ? leadId : "";
     setEditingTask(null);
     setFormTaskTitle("");
-    setFormTaskLeadId("");
+    setFormTaskLeadId(linkedLeadId);
     setFormTaskType("Llamada");
     setFormTaskPriority("Media");
     setFormTaskDueDate(new Date().toISOString().split("T")[0]);
@@ -11297,6 +11298,193 @@ International Homeschool CRM`;
         </div>
       </Modal>
 
+      <Modal
+        isOpen={isTaskModalOpen}
+        onClose={() => setIsTaskModalOpen(false)}
+        title={editingTask ? "Editar tarea" : "Nueva tarea"}
+        size="xl"
+      >
+        <form onSubmit={handleSaveTask} className="space-y-4 text-xs font-sans">
+          <div className="space-y-1">
+            <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Título de la tarea *</label>
+            <input
+              type="text"
+              value={formTaskTitle}
+              onChange={e => setFormTaskTitle(e.target.value)}
+              placeholder="Ej. Llamada de seguimiento, videollamada de presentación"
+              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+              required
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Prospecto asociado</label>
+            <select
+              value={formTaskLeadId}
+              onChange={e => setFormTaskLeadId(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+            >
+              <option value="">Sin prospecto</option>
+              {[...leads].sort((a, b) => (a.name || "").localeCompare(b.name || "", "es")).map(lead => (
+                <option key={lead.id} value={lead.id}>{lead.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Tipo</label>
+              <select
+                value={formTaskType}
+                onChange={e => setFormTaskType(e.target.value as TaskType)}
+                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+              >
+                <option value="Llamada">Llamada</option>
+                <option value="Correo">Correo</option>
+                <option value="Visita">Visita presencial</option>
+                <option value="Meet">Videollamada Meet</option>
+                <option value="Otro">Otro</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Fecha *</label>
+              <input
+                type="date"
+                required
+                value={formTaskDueDate}
+                onChange={e => setFormTaskDueDate(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Prioridad</label>
+              <select
+                value={formTaskPriority}
+                onChange={e => setFormTaskPriority(e.target.value as "Alta" | "Media" | "Baja")}
+                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+              >
+                <option value="Alta">Alta</option>
+                <option value="Media">Media</option>
+                <option value="Baja">Baja</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Equipo</label>
+            <select
+              value={formTaskTeamId}
+              onChange={e => handleTeamSelectChangeInCRM(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+            >
+              <option value="">Sin equipo</option>
+              {teams.map(team => (
+                <option key={team.id} value={String(team.id)}>
+                  {team.name} ({users.filter(u => u.teamId === team.id).length} personas)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">
+                Responsables ({formTaskUserIds.length})
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormTaskUserIds([]);
+                  setFormTaskAssignedTo(undefined);
+                }}
+                className="text-[10px] font-bold text-slate-500 hover:text-slate-700"
+              >
+                Limpiar
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+              {users.map(user => {
+                const selected = formTaskUserIds.includes(user.id);
+                return (
+                  <button
+                    key={user.id}
+                    type="button"
+                    onClick={() => handleToggleUserInTaskFormInCRM(user.id)}
+                    className={`flex items-center gap-2 p-2 rounded-lg border text-left ${
+                      selected
+                        ? "bg-indigo-50 border-indigo-300 text-indigo-900 font-bold"
+                        : "bg-white border-slate-200 text-slate-600"
+                    }`}
+                  >
+                    <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 ${
+                      selected ? "bg-indigo-600 border-indigo-600 text-white" : "border-slate-300 bg-white"
+                    }`}>
+                      {selected ? "✓" : ""}
+                    </span>
+                    <span className="truncate">{user.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-slate-700 font-bold uppercase tracking-wider text-[11px]">Notas</label>
+            <textarea
+              value={formTaskNotes}
+              onChange={e => setFormTaskNotes(e.target.value)}
+              placeholder="Qué hay que preparar o acordar"
+              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none resize-none h-20"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsTaskModalOpen(false)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl"
+            >
+              {editingTask ? "Guardar cambios" : "Crear tarea"}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={!!taskToDelete}
+        onClose={() => setTaskToDelete(null)}
+        title="Eliminar tarea"
+        size="sm"
+      >
+        <div className="space-y-4 text-xs">
+          <p className="text-slate-600 leading-relaxed">
+            Se va a eliminar la tarea <strong className="text-slate-800">{taskToDelete?.title}</strong>. Esta acción no se puede deshacer.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setTaskToDelete(null)}
+              className="px-4 py-2 bg-slate-100 text-slate-700 font-bold rounded-xl"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteTaskConfirm}
+              className="px-4 py-2 bg-rose-600 text-white font-extrabold rounded-xl"
+            >
+              Eliminar
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       {/* MODAL 3: PIPELINE STAGES REORDERING & SETTINGS */}
       <Modal
         isOpen={isConfigModalOpen}
@@ -12139,7 +12327,7 @@ International Homeschool CRM`;
                       onClick={() => {
                         const currentLead = viewingLead;
                         setViewingLead(null);
-                        handleOpenNewActivity(currentLead.id);
+                        handleOpenNewTask(currentLead.id);
                       }}
                       className="px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 text-indigo-700 font-bold rounded-xl transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
                     >
@@ -12462,7 +12650,7 @@ International Homeschool CRM`;
                       onClick={() => {
                         const currentLead = viewingLead;
                         setViewingLead(null);
-                        handleOpenNewActivity(currentLead.id);
+                        handleOpenNewTask(currentLead.id);
                       }}
                       className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
                     >
