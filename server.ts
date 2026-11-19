@@ -1,10 +1,72 @@
 import 'dotenv/config';
 import express from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 import path from 'path';
 import * as XLSX from 'xlsx';
 import nodemailer from 'nodemailer';
+
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0745647717';
+const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-6f563df9-bdaf-42eb-a0b7-679fa0b03221';
+
+let firebaseCerts: { keys: Record<string, string>; expires: number } = { keys: {}, expires: 0 };
+
+function decodeBase64Url(value: string) {
+  return Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
+async function getFirebaseCerts() {
+  if (Date.now() < firebaseCerts.expires && Object.keys(firebaseCerts.keys).length > 0) {
+    return firebaseCerts.keys;
+  }
+  const response = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+  if (!response.ok) throw new Error('No se pudieron leer los certificados de Firebase.');
+  const maxAge = Number(/max-age=(\d+)/.exec(response.headers.get('cache-control') || '')?.[1] || 3600);
+  firebaseCerts = { keys: await response.json() as Record<string, string>, expires: Date.now() + maxAge * 1000 };
+  return firebaseCerts.keys;
+}
+
+async function verifyFirebaseIdToken(token: string) {
+  const [headerPart, payloadPart, signaturePart] = token.split('.');
+  if (!headerPart || !payloadPart || !signaturePart) throw new Error('token');
+  const header = JSON.parse(decodeBase64Url(headerPart).toString('utf8'));
+  const payload = JSON.parse(decodeBase64Url(payloadPart).toString('utf8'));
+  const certs = await getFirebaseCerts();
+  const cert = certs[header.kid];
+  if (!cert || header.alg !== 'RS256') throw new Error('firma');
+  const valid = crypto.createVerify('RSA-SHA256')
+    .update(`${headerPart}.${payloadPart}`)
+    .verify(cert, decodeBase64Url(signaturePart));
+  if (!valid) throw new Error('firma');
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.aud !== FIREBASE_PROJECT_ID) throw new Error('audiencia');
+  if (payload.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`) throw new Error('emisor');
+  if (typeof payload.exp !== 'number' || payload.exp < now) throw new Error('expirado');
+  if (!payload.email) throw new Error('correo');
+  return payload as { email: string };
+}
+
+async function requireMember(req: express.Request, res: express.Response, next: express.NextFunction) {
+  try {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Se requiere una sesión válida.' });
+    }
+    const payload = await verifyFirebaseIdToken(token);
+    const email = payload.email.trim().toLowerCase();
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIRESTORE_DATABASE_ID}/documents/usersByEmail/${encodeURIComponent(email)}`;
+    const check = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!check.ok) {
+      return res.status(403).json({ success: false, error: 'Esta cuenta no tiene acceso al sistema.' });
+    }
+    next();
+  } catch (error) {
+    console.error('API auth rejected:', error instanceof Error ? error.message : error);
+    return res.status(401).json({ success: false, error: 'La sesión no es válida.' });
+  }
+}
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -39,6 +101,8 @@ async function startServer() {
     }
     next(err);
   });
+
+  app.use('/api', requireMember);
 
   app.post('/api/send-email', async (req, res) => {
     try {

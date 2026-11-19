@@ -99,7 +99,15 @@ function RoleGuard({ allowedRoles, fallbackTo = "/", permission, action = "view"
 }
 
 export default function App() {
-  const { currentUser, students } = useAppContext();
+  const { currentUser, authReady, students } = useAppContext();
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-200 text-sm">
+        Comprobando la sesión...
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return <Login />;

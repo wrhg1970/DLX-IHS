@@ -1,4 +1,5 @@
 import { Task, User, Institution, Team } from "../context/AppContext";
+import { authFetch } from "../lib/apiAuth";
 
 export interface TaskNotificationConfig {
   notifyAssignmentEmail: boolean;
@@ -213,7 +214,7 @@ export async function sendRealNotificationEmail(
     const smtp = getSmtpCredentials();
     const resolvedSignature = customSenderSignature !== undefined ? customSenderSignature : getActiveUserSignature();
 
-    const res = await fetch("/api/send-email", {
+    const res = await authFetch("/api/send-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -277,7 +278,7 @@ export async function sendRealNotificationWhatsApp(
 ): Promise<{ success: boolean; simulated?: boolean; message?: string; error?: string }> {
   try {
     const wa = getWhatsAppCredentials();
-    const res = await fetch("/api/send-whatsapp", {
+    const res = await authFetch("/api/send-whatsapp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

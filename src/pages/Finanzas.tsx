@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../context/AppContext';
+import { authFetch } from '../lib/apiAuth';
 import { Calendar, Filter, Download, Plus, Search, DollarSign, TrendingUp, TrendingDown, RefreshCcw, Landmark, MapPin, SearchX, X, UploadCloud, FileText, CheckCircle, Trash2, Save, Edit, Eye, User, ShieldAlert, Lock } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import { Modal } from '../components/ui/Modal';
@@ -965,7 +966,7 @@ export function Finanzas() {
         const formData = new FormData();
         formData.append('file', file);
         
-        const response = await fetch('/api/parse-statement', {
+        const response = await authFetch('/api/parse-statement', {
           method: 'POST',
           body: formData,
         });

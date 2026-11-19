@@ -1,4 +1,5 @@
 import { useNavigate, useParams } from "react-router-dom";
+import { authFetch } from "../lib/apiAuth";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
@@ -459,7 +460,7 @@ export function AlumnoDetail() {
   const fetchDsEnvelopes = async () => {
     if (!student?.id) return;
     try {
-      const response = await fetch(`/api/docusign/envelopes/student/${student.id}`);
+      const response = await authFetch(`/api/docusign/envelopes/student/${student.id}`);
       if (response.ok) {
         const data = await response.json();
         setDocusignEnvelopes(data);
@@ -492,7 +493,7 @@ export function AlumnoDetail() {
 
     setDsLoading(true);
     try {
-      const res = await fetch('/api/docusign/send-envelope', {
+      const res = await authFetch('/api/docusign/send-envelope', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -534,7 +535,7 @@ export function AlumnoDetail() {
   // Handle Refresh Envelope Status
   const handleRefreshDsStatus = async (envelopeId: string) => {
     try {
-      const res = await fetch(`/api/docusign/envelope-status/${envelopeId}`);
+      const res = await authFetch(`/api/docusign/envelope-status/${envelopeId}`);
       if (res.ok) {
         await fetchDsEnvelopes();
       }
@@ -546,7 +547,7 @@ export function AlumnoDetail() {
   // Handle Simulate Signing Completion
   const handleSimulateSigningCompletion = async (envelope: any) => {
     try {
-      const res = await fetch(`/api/docusign/simulate-completion/${envelope.envelopeId}`, {
+      const res = await authFetch(`/api/docusign/simulate-completion/${envelope.envelopeId}`, {
         method: 'POST'
       });
       if (res.ok) {

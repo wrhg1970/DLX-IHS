@@ -9,7 +9,26 @@ service cloud.firestore {
 
     // Hardened Global Helpers
     function isSignedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.token.email is string;
+    }
+
+    function callerEmail() {
+      return request.auth.token.email;
+    }
+
+    function isMember() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/usersByEmail/$(callerEmail()));
+    }
+
+    function isAdmin() {
+      return isMember()
+        && get(/databases/$(database)/documents/usersByEmail/$(callerEmail())).data.role in [
+          'Superadministrador',
+          'Admin Principal',
+          'Director',
+          'Director General'
+        ];
     }
 
     // Path Variable Hardening (Id Poisoning Guard)
@@ -140,162 +159,168 @@ service cloud.firestore {
 
     // Match pathways configurations
     match /test/{id} {
-      allow read: if true;
+      allow read: if isMember();
     }
 
     match /system/{id} {
-      allow read: if true;
+      allow read: if isMember();
     }
 
     match /system_roles/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidSystemRole(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isAdmin() && isValidId(id) && isValidSystemRole(incoming());
+      allow delete: if isAdmin() && isValidId(id);
     }
 
     match /institutions/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidInstitution(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidInstitution(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /students/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidStudent(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidStudent(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /classes/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidClass(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidClass(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /enrollments/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidEnrollment(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidEnrollment(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /payments/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidPayment(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidPayment(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /providers/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidProvider(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidProvider(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /bankAccounts/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidBankAccount(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidBankAccount(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /crmLeads/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidCRMLead(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidCRMLead(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /contacts/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidContact(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidContact(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /tasks/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidTask(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidTask(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /activities/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidActivity(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidActivity(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /auditLogs/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidAuditLog(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidAuditLog(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /financialTransactions/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidFinancialTransaction(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidFinancialTransaction(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /users/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidUser(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create: if isAdmin() && isValidId(id) && isValidUser(incoming()) && !('password' in incoming());
+      allow update: if isMember() && isValidId(id) && isValidUser(incoming()) && !('password' in incoming())
+        && (isAdmin() || (incoming().email == callerEmail() && incoming().role == existing().role));
+      allow delete: if isAdmin() && isValidId(id);
+    }
+
+    match /usersByEmail/{email} {
+      allow get: if isSignedIn() && request.auth.token.email == email;
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && incoming().email == email && incoming().role is string;
+      allow delete: if isAdmin();
     }
 
     match /providerProductServices/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidProviderProductService(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidProviderProductService(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /providerSpecificProducts/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidProviderSpecificProduct(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidProviderSpecificProduct(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /temporary_otps/{email} {
-      // Handled via single-document operations, allowing get / create / update / delete for client-side OTP matching
-      allow get: if isValidEmailId(email);
-      allow create, update: if isValidEmailId(email) && isValidOTPRequest(incoming());
-      allow delete: if isValidEmailId(email);
+      allow read, write: if false;
     }
 
     match /companyInfo/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidCompanyInfo(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isAdmin() && isValidId(id) && isValidCompanyInfo(incoming());
+      allow delete: if isAdmin() && isValidId(id);
     }
 
     match /companyDocuments/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidCompanyDocument(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidCompanyDocument(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /financeCategories/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidFinanceCategory(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidFinanceCategory(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /accountStatements/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidAccountStatement(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidAccountStatement(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /statementTransactions/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidStatementTransaction(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidStatementTransaction(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
 
     match /catalogs/{id} {
-      allow read: if true;
-      allow create, update: if isValidCatalogId(id) && isValidCatalog(incoming());
-      allow delete: if isValidCatalogId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidCatalogId(id) && isValidCatalog(incoming());
+      allow delete: if isMember() && isValidCatalogId(id);
     }
 
     match /app_backups/{id} {
-      allow read: if true;
-      allow create, update: if isValidId(id) && isValidBackup(incoming());
-      allow delete: if isValidId(id);
+      allow read: if isMember();
+      allow create, update: if isMember() && isValidId(id) && isValidBackup(incoming());
+      allow delete: if isMember() && isValidId(id);
     }
   }
 }

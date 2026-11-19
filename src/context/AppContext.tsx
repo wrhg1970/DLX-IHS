@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect, useRef, useCallback, useMemo } from "react";
-import { db, handleFirestoreError, OperationType } from "../lib/firebase";
+import { auth, db, handleFirestoreError, OperationType } from "../lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import { Role, DEFAULT_ROLES, getSystemRoles, setInMemorySystemRoles } from "../utils/permissionCheck";
 import { safeLocalStorageSet } from "../utils/storage";
 import {
@@ -802,6 +803,7 @@ interface AppContextType {
   activities: Activity[];
   users: User[];
   currentUser: User | null;
+  authReady: boolean;
   setCurrentUser: (user: User | null) => void;
   teams: Team[];
   addTeam: (team: Omit<Team, "id" | "createdAt">) => Team;
@@ -1590,26 +1592,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
 
   const [users, setUsers] = useState<User[]>(() => loadSaved('users', [
-    { id: 1, name: 'Admin Principal', role: 'Superadministrador', email: 'admin@ihs.com', password: 'admin123', teamId: 1 },
-    { id: 2, name: 'Director Financiero', role: 'Finanzas', email: 'finanzas@ihs.com', password: 'finanzas123', teamId: 3 },
-    { id: 3, name: 'Coordinador Académico', role: 'Academia', email: 'academico@ihs.com', password: 'academico123', teamId: 2 },
-    { id: 4, name: 'Usuario Alumno (Demo)', role: 'Alumno', email: 'alumno@ihs.com', studentId: 1, password: 'alumno123' },
-    { id: 5, name: 'Coordinador Institución (Demo)', role: 'Coordinador', email: 'coordinador@ihs.com', institutionId: 1, password: 'coordinador123', teamId: 2 },
-    { id: 6, name: 'Administrador (Google)', role: 'Superadministrador', email: 'wrhg1970@gmail.com', password: 'google123', teamId: 1 }
+    { id: 1, name: 'Admin Principal', role: 'Superadministrador', email: 'admin@ihs.com', teamId: 1 },
+    { id: 2, name: 'Director Financiero', role: 'Finanzas', email: 'finanzas@ihs.com', teamId: 3 },
+    { id: 3, name: 'Coordinador Académico', role: 'Academia', email: 'academico@ihs.com', teamId: 2 },
+    { id: 4, name: 'Usuario Alumno (Demo)', role: 'Alumno', email: 'alumno@ihs.com', studentId: 1 },
+    { id: 5, name: 'Coordinador Institución (Demo)', role: 'Coordinador', email: 'coordinador@ihs.com', institutionId: 1, teamId: 2 },
+    { id: 6, name: 'Administrador (Google)', role: 'Superadministrador', email: 'wrhg1970@gmail.com', teamId: 1 }
   ]));
   
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('currentUser');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Error parsing currentUser", e);
-      }
+    if (!saved) return null;
+    try {
+      const parsed = JSON.parse(saved);
+      if (!parsed?.email) return null;
+      delete parsed.password;
+      return parsed;
+    } catch (e) {
+      console.error("Error parsing currentUser", e);
+      return null;
     }
-    // Default to Superadministrador (Admin Principal) for seamless access in preview
-    return { id: 1, name: 'Admin Principal', role: 'Superadministrador', email: 'admin@ihs.com', password: 'admin', teamId: 1 };
   });
+  const [authReady, setAuthReady] = useState(false);
+  const [sessionEmail, setSessionEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      const email = fbUser?.email?.trim().toLowerCase() || null;
+      setSessionEmail(email);
+      setCurrentUser((prev) => {
+        if (!email) return null;
+        if (!prev?.email) return prev;
+        if (prev.email.trim().toLowerCase() !== email) return null;
+        const safe = { ...prev };
+        delete safe.password;
+        return safe;
+      });
+      setAuthReady(true);
+    });
+    return unsubscribe;
+  }, []);
 
   const [catalogs, setCatalogs] = useState<Record<CatalogTypes, CatalogItem[]>>(() => {
     const defaultCats = [
@@ -2368,7 +2390,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => { safeSetItem('activities', activities); }, [activities]);
   useEffect(() => { safeSetItem('teams', teams); }, [teams]);
   useEffect(() => { safeSetItem('users', users); }, [users]);
-  useEffect(() => { safeSetItem('currentUser', currentUser); }, [currentUser]);
+  useEffect(() => {
+    if (!currentUser) {
+      try { localStorage.removeItem('currentUser'); } catch { /* ignore */ }
+      return;
+    }
+    const safe = { ...currentUser };
+    delete safe.password;
+    safeSetItem('currentUser', safe);
+  }, [currentUser]);
   useEffect(() => { safeSetItem('catalogs', catalogs); }, [catalogs]);
   useEffect(() => { safeSetItem('companyInfo', companyInfo); }, [companyInfo]);
   useEffect(() => { safeSetItem('companyDocuments', companyDocuments); }, [companyDocuments]);
@@ -2748,8 +2778,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timeoutId);
   }, [firebaseSyncCompleted, backupSchedule]);
 
-  // Initial Sync from Firestore with migration fallback to recover previous simulation data
+  // Initial Sync from Firestore. Waits for a Firebase session so closed rules can be read.
   useEffect(() => {
+    if (!sessionEmail) return;
     async function initFirestoreSync() {
       try {
         const { getDocs, collection, doc, setDoc } = await import('firebase/firestore');
@@ -2809,7 +2840,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (!snap.empty) {
               const remoteList: T[] = [];
               snap.forEach(d => {
-                remoteList.push({ ...d.data() } as T);
+                const data = { ...d.data() } as T & { password?: string };
+                if (collectionName === 'users') delete data.password;
+                remoteList.push(data);
               });
               setter(remoteList);
             } else if (localList.length > 0) {
@@ -2818,7 +2851,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
               let batch = writeBatch(db);
               let batchCount = 0;
               for (const item of localList) {
-                batch.set(doc(db, collectionName, String(item.id)), cleanForFirestore(item));
+                const payload = collectionName === 'users' ? { ...item } : item;
+                if (collectionName === 'users') delete (payload as { password?: string }).password;
+                batch.set(doc(db, collectionName, String(item.id)), cleanForFirestore(payload));
                 batchCount++;
                 if (batchCount === 500) {
                   await batch.commit();
@@ -3089,7 +3124,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     initFirestoreSync();
-  }, []);
+  }, [sessionEmail]);
 
   // Track previous catalogs and companyInfo to prevent redundant/unnecessary cloud writes (optimized sync)
   const prevCatalogsRef = useRef<Record<CatalogTypes, CatalogItem[]>>(catalogs);
@@ -3272,10 +3307,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
             let writeCount = 0;
             let writeBatchesCount = 0;
             while (allItemsToSave.length > 0) {
-              const chunk = allItemsToSave.splice(0, 500);
+              const chunk = allItemsToSave.splice(0, 200);
               const batch = writeBatch(db);
               chunk.forEach(item => {
-                batch.set(doc(db, collectionName, String(item.id)), cleanForFirestore(item));
+                const payload = collectionName === 'users' ? { ...item } : item;
+                if (collectionName === 'users') delete (payload as { password?: string }).password;
+                batch.set(doc(db, collectionName, String(item.id)), cleanForFirestore(payload));
+                const memberEmail = (item as { email?: string }).email?.trim().toLowerCase();
+                const maintainsAllowList = ['superadministrador', 'admin principal', 'director', 'director general'].includes((currentUser?.role || '').trim().toLowerCase());
+                if (maintainsAllowList && collectionName === 'users' && memberEmail) {
+                  batch.set(doc(db, 'usersByEmail', memberEmail), {
+                    email: memberEmail,
+                    role: (item as { role?: string }).role || 'Ventas',
+                    userId: String(item.id)
+                  });
+                }
               });
               await batch.commit();
               writeCount += chunk.length;
@@ -3348,7 +3394,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       prevRef.current = list;
-    }, [list, firebaseSyncCompleted, collectionName]);
+    }, [list, firebaseSyncCompleted, collectionName, currentUser?.role]);
   };
 
   // Instantiate sync hooks for all lists
@@ -5244,7 +5290,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     <AppContext.Provider value={{
       firebaseSyncCompleted,
       syncErrors,
-      institutions, students, classes, providers, bankAccounts, enrollments, payments, auditLogs, addAuditLog, clearAuditLogs, deleteAuditLog, contacts, tasks, activities, catalogs, users, currentUser, setCurrentUser,
+      institutions, students, classes, providers, bankAccounts, enrollments, payments, auditLogs, addAuditLog, clearAuditLogs, deleteAuditLog, contacts, tasks, activities, catalogs, users, currentUser, authReady, setCurrentUser,
       teams, addTeam, updateTeam, deleteTeam,
       providerProductServices, addProviderProductService, updateProviderProductService, deleteProviderProductService,
       providerSpecificProducts, addProviderSpecificProduct, updateProviderSpecificProduct, deleteProviderSpecificProduct,

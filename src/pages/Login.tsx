@@ -279,6 +279,14 @@ export function Login() {
 
   // Helper to complete user login and check constraints
   const completeUserLogin = async (userObj: any) => {
+    const signedInEmail = auth.currentUser?.email?.trim().toLowerCase() || '';
+    const accountEmail = String(userObj?.email || '').trim().toLowerCase();
+    if (!signedInEmail || signedInEmail !== accountEmail) {
+      setError('La sesión tiene que confirmarse con Google usando un correo dado de alta.');
+      setSuccess('');
+      return;
+    }
+    delete userObj.password;
     // Check if email verification is required and user email is not verified yet
     if (userObj.requireEmailVerification && !userObj.emailVerified) {
       setPendingUser(userObj);
@@ -347,7 +355,7 @@ export function Login() {
       return;
     }
 
-    if (emailVerificationCode === correctEmailVerificationCode || (emailVerificationCode === '123456' && !correctEmailVerificationCode)) {
+    if (correctEmailVerificationCode && emailVerificationCode === correctEmailVerificationCode) {
       if (pendingUser) {
         setLoading(true);
         try {
@@ -415,7 +423,7 @@ export function Login() {
         return;
       }
 
-      if (enteredCode === correctCode || (enteredCode === '123456' && !correctCode)) {
+      if (correctCode && enteredCode === correctCode) {
         // Authenticate user successfully
         const userObj = await findSystemUser(email);
         if (userObj) {
@@ -448,50 +456,7 @@ export function Login() {
     setError('');
     setSuccess('');
 
-    const emailTrimmed = email.trim();
-    if (!emailTrimmed || !password) {
-      setError('Por favor ingresa tu correo y contraseña.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const userObj = await findSystemUser(emailTrimmed);
-      if (!userObj) {
-        setError(`El correo "${emailTrimmed}" no está registrado en el sistema. Puedes intentar otro, o solicitar un OTP.`);
-        setLoading(false);
-        return;
-      }
-
-      // Check if user has password set
-      if (!userObj.password) {
-        setError('Este usuario no tiene configurado el acceso por contraseña. Por favor solicita un código OTP.');
-        setLoading(false);
-        return;
-      }
-
-      if (userObj.password !== password) {
-        setError('Contraseña incorrecta. Por favor verifica e intenta nuevamente.');
-        setLoading(false);
-        return;
-      }
-
-      // Check force password change constraint
-      if (userObj.requirePasswordChange) {
-        setSuccess('¡Credenciales correctas! Por favor define tu nueva contraseña para continuar.');
-        setForceChangePasswordMode(true);
-      } else {
-        setSuccess('¡Ingreso exitoso!');
-        setTimeout(() => {
-          completeUserLogin(userObj);
-        }, 500);
-      }
-    } catch (err: any) {
-      console.error("Credentials Auth error:", err);
-      setError('Ocurrió un error inesperado al procesar el ingreso.');
-    } finally {
-      setLoading(false);
-    }
+    setError('El acceso con contraseña quedó cerrado. Entra con Google usando un correo que ya esté dado de alta.');
   };
 
   // Change Password Handler for first-time login enforcement

@@ -1,6 +1,7 @@
 import { Settings, Shield, Users, Bell, FileSpreadsheet, Download, Upload, Edit2, Trash2, X, Building, FileText, Save, Image as ImageIcon, MapPin, Globe, DollarSign, Send, Mail, MessageSquare, Calendar, Sparkles, Clock, AlertTriangle, CheckCircle, Check, Copy, Key, Eye, Database, RotateCcw, CheckCircle2, AlertCircle, Loader2, RefreshCw, CheckSquare, Zap, Plus, Search, Filter, GraduationCap, School, SlidersHorizontal, Info, ArrowRightCircle, Cloud, HardDrive, ExternalLink } from "lucide-react";
 import React, { useState, useEffect, useMemo } from "react";
 import { useAppContext, resolveCreditPrices, generateUniqueId } from "../context/AppContext";
+import { authFetch } from "../lib/apiAuth";
 import { safeLocalStorageGet } from "../utils/storage";
 import { PermissionMenu, DEFAULT_MENUS as menus, DEFAULT_ROLES, getSystemRoles, NO_PERMS, DEFAULT_PERMS, Role } from "../utils/permissionCheck";
 import {
@@ -735,7 +736,7 @@ export function Configuracion() {
 
   const sendRealNotificationEmail = async (toEmail: string, toName: string, subject: string, body: string, allowFallback = true) => {
     try {
-      const res = await fetch("/api/send-email", {
+      const res = await authFetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -815,7 +816,7 @@ export function Configuracion() {
 
   const sendRealNotificationWhatsApp = async (toPhone: string, body: string) => {
     try {
-      const res = await fetch("/api/send-whatsapp", {
+      const res = await authFetch("/api/send-whatsapp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4307,7 +4308,7 @@ export function Configuracion() {
                               }
                               setIsTestingSmtp(true);
                               try {
-                                const res = await fetch("/api/send-email", {
+                                const res = await authFetch("/api/send-email", {
                                   method: "POST",
                                   headers: { "Content-Type": "application/json" },
                                   body: JSON.stringify({

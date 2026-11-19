@@ -73,6 +73,7 @@ import {
   SlidersHorizontal
 } from "lucide-react";
 import { useAppContext, TaskType, cleanForFirestore, generateUniqueId } from "../context/AppContext";
+import { authFetch } from "../lib/apiAuth";
 import { hasPermission, PermissionMenu } from "../utils/permissionCheck";
 import { db } from "../lib/firebase";
 import { Modal } from "../components/ui/Modal";
@@ -2212,7 +2213,7 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
 
       // Attempt API dispatch
       try {
-        await fetch("/api/send-email", {
+        await authFetch("/api/send-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2400,7 +2401,7 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
 
     // Try sending real email via server API
     try {
-      await fetch("/api/send-email", {
+      await authFetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2650,7 +2651,7 @@ export function CRM({ initialTab }: { initialTab?: CRMTab } = {}) {
     
     try {
       const leadActivities = tasks.filter(t => t.leadId === Number(viewingLead.id) || t.leadId === (viewingLead.id as any));
-      const response = await fetch('/api/crm/ai-consultant', {
+      const response = await authFetch('/api/crm/ai-consultant', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -2800,7 +2801,7 @@ International Homeschool`;
     }
 
     try {
-      await fetch("/api/send-email", {
+      await authFetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2913,7 +2914,7 @@ International Homeschool CRM`;
     }
 
     try {
-      await fetch("/api/send-email", {
+      await authFetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4212,7 +4213,7 @@ International Homeschool CRM`;
 
     try {
       const payload = mode === 'url' ? { url: googleSheetsUrl } : { rawText: sheetsPastedText };
-      const response = await fetch('/api/crm/import-google-sheets', {
+      const response = await authFetch('/api/crm/import-google-sheets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
